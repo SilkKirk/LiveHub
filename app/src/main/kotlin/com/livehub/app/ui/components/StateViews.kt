@@ -180,4 +180,3 @@ fun InlineLoader(modifier: Modifier = Modifier, height: androidx.compose.ui.unit
     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
   }
 }
-\n
