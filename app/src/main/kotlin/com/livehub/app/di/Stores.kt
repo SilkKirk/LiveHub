@@ -11,6 +11,8 @@ import com.livehub.core.sync.SyncTargets
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
@@ -23,12 +25,14 @@ import kotlinx.serialization.json.put
  * on one device to win over a stale follow from another.
  */
 class FollowStore(private val preferences: UserPreferences) {
-  private val json = com.livehub.core.sync.SyncCodec.json
-
-  @Volatile private var cachedRecords: List<SyncRecord<JsonObject>> = emptyList()
+  /**
+   * `null` means "not loaded yet". An empty list is a valid cached value, so a sentinel
+   * is required instead of a size check — otherwise every call re-parses DataStore.
+   */
+  @Volatile private var cachedRecords: List<SyncRecord<JsonObject>>? = null
 
   fun records(): List<SyncRecord<JsonObject>> {
-    if (cachedRecords.isNotEmpty()) return cachedRecords
+    cachedRecords?.let { return it }
     val raw = preferences.settings.followRecords
     val decoded = if (raw.isBlank()) emptyList() else runCatching {
       SyncCodec.decodeRecords(raw)
@@ -37,11 +41,53 @@ class FollowStore(private val preferences: UserPreferences) {
     return decoded
   }
 
-  /** Live (non-deleted) followed streamers, newest first. */
+  /**
+   * Live (non-deleted) followed streamers in the user's chosen order.
+   *
+   * The order is persisted inside each record's `order` field, so a manual reorder on
+   * one device reaches the others and survives restarts. Records without an explicit
+   * order sort last, by recency.
+   */
   fun followed(): List<Streamer> = records()
     .filter { !it.deleted }
     .mapNotNull { record -> record.value?.let { toStreamer(it) } }
-    .sortedByDescending { it.updatedAt }
+    .sortedWith(
+      compareBy<Streamer> { orderOfKey(it.key) }
+        .thenByDescending { it.updatedAt },
+    )
+
+  /** Explicit sort index of [key], or [Int.MAX_VALUE] when never reordered. */
+  fun orderOfKey(key: String): Int =
+    records().firstOrNull { it.key == key }
+      ?.value?.get("order")?.jsonPrimitive?.intOrNull
+      ?: Int.MAX_VALUE
+
+  /**
+   * Persists a new manual order for [keys].
+   *
+   * Every reordered record gets the same fresh HLC, which makes the new order win
+   * against a concurrent reorder on another device while keeping the payload to one
+   * clock tick. Tombstones and records outside [keys] are left untouched.
+   */
+  fun reorder(keys: List<String>, hlc: Hlc, deviceId: Long, now: Long) {
+    if (keys.isEmpty()) return
+    val positions = keys.withIndex().associate { it.value to it.index }
+    val updated = records().map { record ->
+      val index = positions[record.key]
+      val value = record.value
+      if (index == null || record.deleted || value == null) {
+        record
+      } else {
+        record.copy(
+          value = JsonObject(value + ("order" to JsonPrimitive(index))),
+          hlc = hlc,
+          deviceId = deviceId,
+          updatedAt = now,
+        )
+      }
+    }
+    persist(updated)
+  }
 
   fun isFollowed(platform: Platform, roomId: String): Boolean {
     val key = Streamer.keyOf(platform, roomId)
@@ -171,10 +217,12 @@ class PreferencesSyncTarget(private val preferences: UserPreferences) : SyncTarg
 class AppSyncTargets(
   private val followStore: FollowStore,
   private val preferences: UserPreferences,
+  private val categoryStore: CategorySubscriptionStore,
 ) : SyncTargets {
   private val targets = listOf(
     FollowSyncTarget(followStore),
     PreferencesSyncTarget(preferences),
+    CategorySyncTarget(categoryStore),
   ).associateBy { it.scope }
 
   override fun targetFor(scope: SyncScope): SyncTarget? = targets[scope]

@@ -17,6 +17,7 @@ data class UiState(
   val screen: Screen = Screen.Home,
   val platform: Platform = Platform.DOUYU,
   val categories: List<Category> = emptyList(),
+  val subscribedCategories: List<Category> = emptyList(),
   val selectedCategory: Category? = null,
   val rooms: List<Streamer> = emptyList(),
   val followed: List<Streamer> = emptyList(),
@@ -53,6 +54,10 @@ sealed interface UiAction {
   data class SelectPlatform(val platform: Platform) : UiAction
 
   data class SelectCategory(val category: Category) : UiAction
+
+  data class ToggleCategorySubscription(val category: Category) : UiAction
+
+  data class MoveFollow(val streamer: Streamer, val toIndex: Int) : UiAction
 
   data object LoadMore : UiAction
 

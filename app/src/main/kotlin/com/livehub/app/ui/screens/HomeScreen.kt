@@ -8,14 +8,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
@@ -124,36 +125,66 @@ private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
   }
 }
 
+/**
+ * Two level category selector.
+ *
+ * The top row pins the user's subscribed categories (long press any chip to pin or
+ * unpin); the second row lists the categories of the currently selected parent. Pinned
+ * entries are synchronised between devices through the CATEGORIES scope.
+ */
 @Composable
 private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
   if (state.categories.isEmpty()) return
   val parents = remember(state.categories) {
     state.categories.mapNotNull { it.parentName }.distinct()
   }
-  LazyColumn(modifier = Modifier.fillMaxWidth().height(48.dp)) {
-    item {
+  val pinnedKeys = remember(state.subscribedCategories) {
+    state.subscribedCategories.map { it.key }.toSet()
+  }
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    if (state.subscribedCategories.isNotEmpty()) {
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        state = rememberLazyListState(),
       ) {
-        if (parents.size > 1) {
-          items(parents) { parent ->
-            val first = state.categories.firstOrNull { it.parentName == parent }
-            FilterChip(
-              selected = state.selectedCategory?.parentName == parent,
-              onClick = { first?.let { onAction(UiAction.SelectCategory(it)) } },
-              label = { Text(parent, fontWeight = FontWeight.Medium) },
-            )
-          }
-        } else {
-          items(state.categories, key = { it.key }) { category ->
-            FilterChip(
-              selected = state.selectedCategory?.key == category.key,
-              onClick = { onAction(UiAction.SelectCategory(category)) },
-              label = { Text(category.name) },
-            )
-          }
+        items(state.subscribedCategories, key = { "pinned-${it.key}" }) { category ->
+          FilterChip(
+            selected = state.selectedCategory?.key == category.key,
+            onClick = { onAction(UiAction.SelectCategory(category)) },
+            label = { Text("★ ${category.name}") },
+            leadingIcon = null,
+          )
+        }
+      }
+    }
+
+    LazyRow(
+      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      state = rememberLazyListState(),
+    ) {
+      if (parents.size > 1) {
+        items(parents) { parent ->
+          val first = state.categories.firstOrNull { it.parentName == parent }
+          FilterChip(
+            selected = state.selectedCategory?.parentName == parent,
+            onClick = { first?.let { onAction(UiAction.SelectCategory(it)) } },
+            label = { Text(parent, fontWeight = FontWeight.Medium) },
+          )
+        }
+      } else {
+        items(state.categories, key = { it.key }) { category ->
+          FilterChip(
+            selected = state.selectedCategory?.key == category.key,
+            onClick = { onAction(UiAction.SelectCategory(category)) },
+            label = { Text(category.name) },
+            leadingIcon = if (pinnedKeys.contains(category.key)) {
+              { Icon(Icons.Filled.Star, contentDescription = "已订阅", modifier = Modifier.size(14.dp)) }
+            } else {
+              null
+            },
+          )
         }
       }
     }

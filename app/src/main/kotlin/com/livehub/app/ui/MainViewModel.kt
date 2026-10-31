@@ -64,6 +64,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     when (action) {
       is UiAction.SelectPlatform -> selectPlatform(action.platform)
       is UiAction.SelectCategory -> selectCategory(action.category)
+      is UiAction.ToggleCategorySubscription -> toggleCategorySubscription(action.category)
+      is UiAction.MoveFollow -> moveFollow(action.streamer, action.toIndex)
       UiAction.LoadMore -> loadMore()
       UiAction.Refresh -> refresh()
       is UiAction.OpenRoom -> openRoom(action.streamer)
@@ -146,7 +148,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       try {
         val categories = container.platformRepository.categories(platform)
         val first = categories.firstOrNull()
-        _state.update { it.copy(categories = categories, selectedCategory = first) }
+        _state.update {
+          it.copy(
+            categories = categories,
+            subscribedCategories = container.categoryStore.subscribed(),
+            selectedCategory = first,
+          )
+        }
         if (first != null) {
           loadRooms(platform, first, reset = true)
         } else {
@@ -323,6 +331,46 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         danmaku = emptyList(),
       )
     }
+  }
+
+  private fun toggleCategorySubscription(category: Category) {
+    container.categoryStore.toggle(
+      category = category,
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )
+    val subscribed = container.categoryStore.subscribed()
+    _state.update {
+      it.copy(
+        subscribedCategories = subscribed,
+        message = if (subscribed.any { c -> c.key == category.key }) {
+          "已订阅 ${category.name}"
+        } else {
+          "已取消订阅 ${category.name}"
+        },
+      )
+    }
+  }
+
+  /**
+   * Moves a followed streamer to [toIndex].
+   *
+   * Every record in the new order is re-stamped with a fresh HLC so the new order wins
+   * over any concurrent reorder from another device; without that, two devices sorting
+   * differently could ping-pong forever.
+   */
+  private fun moveFollow(streamer: Streamer, toIndex: Int) {
+    val ordered = _state.value.followed
+    if (ordered.isEmpty()) return
+    val newOrder = com.livehub.app.di.FollowOrdering.move(ordered, streamer, toIndex)
+    container.followStore.reorder(
+      keys = newOrder,
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )
+    _state.update { it.copy(followed = container.followStore.followed()) }
   }
 
   /**
