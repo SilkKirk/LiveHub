@@ -78,32 +78,38 @@ object DouyuQuality {
     ).first()
   }
 
-  /** Builds the variant list offered by the quality selector. */
+  /**
+   * Builds the variant list offered by the quality selector.
+   *
+   * A `getH5Play` response carries one playable path (`rtmp_url` + `rtmp_live`) that is
+   * valid for the rate it was requested with; the `cdnsWithName` list only advertises
+   * *which* CDN hostnames exist. Emitting one variant per CDN would therefore produce
+   * duplicates pointing at the same URL, so the list contains exactly one playable
+   * variant and the CDN name is recorded as the line label for the UI.
+   */
   fun variants(response: DyPlayResponse, selection: Selection): List<StreamVariant> {
-    val cdn = selection.cdn
-    val primary = StreamVariant(
-      qualityLabel = selection.rateLabel,
-      url = response.urlFor(cdn),
-      lineName = cdn,
-      isHls = false,
-      qualityRank = rankOf(selection.rate),
-      qualityCode = selection.rate,
+    val url = response.urlFor(selection.cdn)
+    if (url.isBlank() || response.rtmpLive.isBlank()) return emptyList()
+    return listOf(
+      StreamVariant(
+        qualityLabel = selection.rateLabel,
+        url = url,
+        lineName = selection.cdn,
+        isHls = response.rtmpLive.contains(".m3u8", ignoreCase = true),
+        qualityRank = rankOf(selection.rate),
+        qualityCode = selection.rate,
+      ),
     )
-    val alternates = response.cdns
-      .filterNot { it.equals(cdn, ignoreCase = true) }
-      .sortedWith(compareBy({ it.startsWith("scdn") }, { it }))
-      .map { alternateCdn ->
-        StreamVariant(
-          qualityLabel = selection.rateLabel,
-          url = response.urlFor(alternateCdn),
-          lineName = alternateCdn,
-          isHls = false,
-          qualityRank = rankOf(selection.rate),
-          qualityCode = selection.rate,
-        )
-      }
-    return (listOf(primary) + alternates).distinctBy { it.url }
   }
+
+  /**
+   * Every rate the response advertises, ordered for a quality menu.
+   *
+   * The UI shows these labels so the user can pick a different rate; selecting one
+   * triggers a fresh signed request for that rate.
+   */
+  fun rateOptions(response: DyPlayResponse): List<DouyuRate> =
+    response.rates.sortedBy { rankOf(it.rate) }
 
   /** Douyu `rate == 0` is source quality, so it must sort first. */
   fun rankOf(rate: Int): Int = if (rate <= 0) 0 else rate

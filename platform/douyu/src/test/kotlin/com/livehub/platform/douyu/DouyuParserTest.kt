@@ -211,10 +211,14 @@ class DouyuQualityTest {
 
   @Test
   fun `cdn selection avoids scdn and prefers alphabetical order`() {
-    assertEquals("ws-h5", DouyuQuality.selectCdn(listOf("scdn", "ws-h5", "ali"), null))
+    // "ali" sorts before "ws-h5", and both outrank the scdn fallback.
+    assertEquals("ali", DouyuQuality.selectCdn(listOf("scdn", "ws-h5", "ali"), null))
+    assertEquals("ws-h5", DouyuQuality.selectCdn(listOf("scdn", "ws-h5"), null))
     assertEquals("scdn", DouyuQuality.selectCdn(listOf("scdn"), null))
     assertEquals(DouyuParser.DEFAULT_DOUYU_CDN, DouyuQuality.selectCdn(emptyList(), null))
     assertEquals("ali", DouyuQuality.selectCdn(listOf("scdn", "ali"), "ali"))
+    // An explicitly requested CDN wins even when it is the scdn fallback.
+    assertEquals("scdn", DouyuQuality.selectCdn(listOf("ali", "scdn"), "scdn"))
   }
 
   @Test
@@ -235,15 +239,30 @@ class DouyuQualityTest {
   }
 
   @Test
-  fun `variants include every cdn with the chosen quality`() {
+  fun `variants yield exactly one playable url per rate`() {
     val selection = DouyuQuality.Selection(rate = 0, rateLabel = "原画", cdn = "ws-h5")
     val variants = DouyuQuality.variants(response(rates), selection)
 
-    assertEquals(2, variants.size)
+    // One getH5Play response is valid for one rate, so the selector must not pretend
+    // other CDNs are separate playable streams pointing at the same URL.
+    assertEquals(1, variants.size)
     assertEquals("ws-h5", variants.first().lineName)
-    assertEquals("scdn", variants[1].lineName)
-    assertTrue(variants.all { it.qualityCode == 0 })
-    assertEquals(2, variants.map { it.url }.distinct().size)
+    assertEquals("原画", variants.first().qualityLabel)
+    assertEquals(0, variants.first().qualityCode)
+    assertTrue(variants.first().url.isNotBlank())
+  }
+
+  @Test
+  fun `variants are empty when the response carries no stream path`() {
+    val empty = DyPlayResponse(rtmpUrl = "", rtmpLive = "", cdns = listOf("ws-h5"), rates = rates)
+    val selection = DouyuQuality.Selection(rate = 0, rateLabel = "原画", cdn = "ws-h5")
+    assertTrue(DouyuQuality.variants(empty, selection).isEmpty())
+  }
+
+  @Test
+  fun `rate options are ordered with source quality first`() {
+    val options = DouyuQuality.rateOptions(response(rates))
+    assertEquals(listOf(0, 1, 2, 3, 4), options.map { it.rate })
   }
 
   @Test

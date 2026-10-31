@@ -113,20 +113,60 @@ class DouyuApi(private val http: HttpClient) {
     if (!info.isLive) throw PlatformOfflineException("主播未开播", Platform.DOUYU)
 
     val signData = sign(roomId)
-    val probe = requestPlay(roomId = roomId, signData = signData, cdn = "", rate = -1)
+    val realRoomId = info.realRoomId
+
+    // The probe response advertises every selectable rate. Each rate needs its own
+    // signed request, so only the rates we actually offer are resolved — asking for a
+    // dozen rates up front would triple the latency of opening a stream.
+    val probe = requestPlay(realRoomId = realRoomId, roomId = roomId, signData = signData, cdn = "", rate = -1)
     val selection = DouyuQuality.select(probe, preferredQuality)
-
-    val final = if (selection.rate != -1) {
-      requestPlay(roomId = roomId, signData = signData, cdn = selection.cdn, rate = selection.rate)
-    } else {
-      probe
-    }
-
-    val variants = DouyuQuality.variants(final, selection)
-    if (variants.isEmpty()) {
+    val resolved = resolveVariants(
+      realRoomId = realRoomId,
+      roomId = roomId,
+      signData = signData,
+      probe = probe,
+      selection = selection,
+    )
+    if (resolved.isEmpty()) {
       throw PlatformProtocolException("斗鱼未解析到播放地址", Platform.DOUYU)
     }
-    return PlaybackSource(room = info.toStreamer(), variants = variants, defaultVariant = variants.first())
+
+    val ordered = resolved.sortedBy { it.qualityRank }
+    val default = ordered.firstOrNull { it.qualityCode == selection.rate } ?: ordered.first()
+    return PlaybackSource(room = info.toStreamer(), variants = ordered, defaultVariant = default)
+  }
+
+  /**
+   * Resolves one URL per CDN rate, falling back to the probed rate when a follow-up
+   * request fails.
+   *
+   * Douyu occasionally answers a specific `rate` with an error even though the probe
+   * succeeded, and a failed quality must never take the whole player down.
+   */
+  private suspend fun resolveVariants(
+    realRoomId: String,
+    roomId: String,
+    signData: String,
+    probe: DyPlayResponse,
+    selection: DouyuQuality.Selection,
+  ): List<StreamVariant> {
+    val primary = if (selection.rate == -1) {
+      probe
+    } else {
+      runCatching {
+        requestPlay(
+          realRoomId = realRoomId,
+          roomId = roomId,
+          signData = signData,
+          cdn = selection.cdn,
+          rate = selection.rate,
+        )
+      }.getOrDefault(probe)
+    }
+
+    return DouyuQuality.variants(primary, selection).ifEmpty {
+      DouyuQuality.variants(probe, DouyuQuality.select(probe, null))
+    }
   }
 
   /** Computes the `signData` blob (`key=value&...`) for a room. */
@@ -136,6 +176,7 @@ class DouyuApi(private val http: HttpClient) {
   }
 
   private suspend fun requestPlay(
+    realRoomId: String,
     roomId: String,
     signData: String,
     cdn: String,
@@ -143,7 +184,7 @@ class DouyuApi(private val http: HttpClient) {
   ): DyPlayResponse {
     val body = "$signData&cdn=${encode(cdn)}&rate=$rate"
     val response: HttpResponse = http.postForm(
-      "$URL_GET_H5_PLAY/${betard(roomId).realRoomId}",
+      "$URL_GET_H5_PLAY/$realRoomId",
       body = body,
       headers = mapOf(
         "Referer" to "https://www.douyu.com/$roomId",
