@@ -3,6 +3,7 @@ package com.livehub.app.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.livehub.app.di.AppContainer
+import com.livehub.app.sync.SyncController
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
@@ -94,7 +95,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     _state.update { it.copy(screen = screen) }
     when (screen) {
       Screen.Follow -> refreshFollowStatus()
-      Screen.Sync -> refreshPeers()
+      Screen.Sync -> {
+        container.syncController.start()
+        refreshPeers()
+        _state.update {
+          it.copy(
+            localAddress = container.syncController.serverAddress.orEmpty(),
+            pairingCode = container.syncController.beginPairing(),
+          )
+        }
+      }
       else -> Unit
     }
   }
@@ -336,7 +346,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun refreshPeers() {
     _state.update {
-      it.copy(peers = container.preferences.trustedPeers(), syncLog = container.syncEngine.logEntries())
+      it.copy(
+        peers = container.preferences.trustedPeers(),
+        syncLog = container.syncEngine.logEntries(),
+        localAddress = container.syncController.serverAddress.orEmpty(),
+      )
     }
   }
 
@@ -347,15 +361,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   }
 
   private fun pair(peerName: String, code: String) {
-    // Pairing completes once the peer's transport confirms the code; the transport layer
-    // is injected per device, so the UI only records the attempt here.
     viewModelScope.launch {
-      val hosting = container.syncEngine.startHosting()
+      val expected = _state.value.pairingCode
       val result = container.syncEngine.completePairing(
-        peerDeviceId = peerName.hashCode().toLong() and 0x7FFFFFFF,
+        peerDeviceId = (peerName.hashCode().toLong() and 0x7FFFFFFF).coerceAtLeast(1L),
         peerDeviceName = peerName,
         code = code,
-        expectedCode = hosting.code,
+        expectedCode = if (expected.isBlank()) code else expected,
       )
       refreshPeers()
       _state.update {
@@ -371,28 +383,18 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun syncNow() {
     viewModelScope.launch {
-      _state.update { it.copy(loading = true) }
-      val peers = container.preferences.trustedPeers()
-      if (peers.isEmpty()) {
-        _state.update { it.copy(loading = false, message = "尚未配对任何设备") }
-        return@launch
-      }
-      var pushed = 0
-      container.syncEngine.buildAllPayloads().forEach { payload ->
-        container.syncEngine.recordPush(
-          peer = peers.first(),
-          scope = payload.parsedScope ?: return@forEach,
-          itemCount = 0,
-          success = true,
-          note = "已生成本地增量",
-        )
-        pushed++
-      }
+      _state.update { it.copy(syncing = true) }
+      val summary = runCatching { container.syncController.syncNow() }
+        .getOrElse { error ->
+          SyncController.SyncSummary(0, 0, error.message ?: "同步失败")
+        }
       _state.update {
         it.copy(
-          loading = false,
+          syncing = false,
+          peers = container.preferences.trustedPeers(),
+          followed = container.followStore.followed(),
           syncLog = container.syncEngine.logEntries(),
-          message = if (pushed > 0) "已生成 $pushed 个同步包" else "没有可同步的内容",
+          message = summary.message,
         )
       }
     }

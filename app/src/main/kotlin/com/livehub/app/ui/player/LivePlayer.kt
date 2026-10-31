@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -25,6 +26,7 @@ import androidx.media3.ui.PlayerView
  * `PlayerView` is hosted in an [AndroidView] so the controls and renderer stay the
  * battle-tested platform implementations while the rest of the screen stays Compose.
  */
+@OptIn(UnstableApi::class)
 @Composable
 fun LivePlayer(
   url: String,
@@ -79,6 +81,7 @@ fun LivePlayer(
   }
 }
 
+@OptIn(UnstableApi::class)
 private fun buildMediaSource(
   context: android.content.Context,
   url: String,
