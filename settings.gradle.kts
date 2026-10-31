@@ -30,16 +30,20 @@ rootProject.name = "LiveHub"
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
+// UI shell
 include(":app")
 
+// Shared, platform agnostic building blocks (plain JVM: fast to unit test)
 include(":core:common")
 include(":core:model")
 include(":core:network")
-include(":core:database")
 include(":core:data")
-include(":core:designsystem")
 include(":core:sync")
 
+// Android only building blocks
+include(":core:designsystem")
+
+// Streaming platform integrations
 include(":platform-api")
 include(":platform:douyu")
 include(":platform:huya")
