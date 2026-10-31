@@ -51,7 +51,7 @@ class FollowStore(private val preferences: UserPreferences) {
   fun toggle(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long) {
     val key = streamer.key
     val existing = records().firstOrNull { it.key == key }
-    val next = when {
+    val next: SyncRecord<JsonObject> = when {
       existing == null || existing.deleted ->
         SyncRecord(
           key = key,

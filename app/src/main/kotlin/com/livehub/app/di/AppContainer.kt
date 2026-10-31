@@ -1,6 +1,8 @@
 package com.livehub.app.di
 
 import android.content.Context
+import com.livehub.app.sync.NsdPeerDiscovery
+import com.livehub.app.sync.SyncController
 import com.livehub.core.data.MapPlatformRegistry
 import com.livehub.core.data.PlatformGateway
 import com.livehub.core.data.PlatformRegistry
@@ -9,11 +11,9 @@ import com.livehub.core.network.HttpClient
 import com.livehub.core.network.HttpClients
 import com.livehub.core.network.OkHttpHttpClient
 import com.livehub.core.sync.SyncEngine
-import com.livehub.core.sync.SyncTargets
 import com.livehub.platform.api.LivePlatformAdapter
 import com.livehub.platform.bilibili.BilibiliAdapter
 import com.livehub.platform.bilibili.BilibiliCookieStore
-import com.livehub.platform.bilibili.DataStoreBilibiliCookies
 import com.livehub.platform.douyin.DouyinAdapter
 import com.livehub.platform.douyu.DouyuAdapter
 import com.livehub.platform.huya.HuyaAdapter
@@ -84,7 +84,7 @@ class AppContainer(
 
   val followStore: FollowStore by lazy { FollowStore(preferences) }
 
-  val syncTargets: SyncTargets by lazy { AppSyncTargets(followStore, preferences) }
+  val syncTargets: AppSyncTargets by lazy { AppSyncTargets(followStore, preferences) }
 
   val syncEngine: SyncEngine by lazy {
     SyncEngine(
@@ -93,6 +93,24 @@ class AppContainer(
       deviceNameProvider = { preferences.deviceName },
       peersProvider = { preferences.trustedPeers() },
       peersWriter = { preferences.saveTrustedPeers(it) },
+    )
+  }
+
+  val peerDiscovery: NsdPeerDiscovery by lazy {
+    NsdPeerDiscovery(
+      context = applicationContext,
+      deviceId = preferences.deviceId,
+      deviceName = preferences.deviceName,
+      portProvider = { SyncController.DEFAULT_PORT },
+    )
+  }
+
+  val syncController: SyncController by lazy {
+    SyncController(
+      preferences = preferences,
+      followStore = followStore,
+      engine = syncEngine,
+      discovery = peerDiscovery,
     )
   }
 }

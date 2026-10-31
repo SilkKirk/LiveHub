@@ -27,7 +27,10 @@ import com.livehub.app.ui.components.StreamerCard
 @Composable
 fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val sorted = remember(state.followed) {
-    state.followed.sortedWith(compareByDescending { it.isLive }.thenByDescending { it.updatedAt })
+    state.followed.sortedWith(
+      compareByDescending<com.livehub.core.model.Streamer> { it.isLive }
+        .thenByDescending { it.updatedAt },
+    )
   }
   val keys = remember(sorted) { sorted.map { it.key }.toSet() }
 
