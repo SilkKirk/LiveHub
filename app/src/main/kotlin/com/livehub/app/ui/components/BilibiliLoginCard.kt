@@ -1,4 +1,4 @@
-package com.livehub.app.ui.screens
+package com.livehub.app.ui.components
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,18 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.livehub.platform.bilibili.BilibiliAuth
-
-/** UI state of the Bilibili login card. */
-data class BiliLoginUi(
-  val loggedIn: Boolean = false,
-  val loading: Boolean = false,
-  val qr: ImageBitmap? = null,
-  val status: String = "",
-)
 
 /**
  * Bilibili QR login card.
