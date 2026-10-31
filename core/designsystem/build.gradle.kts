@@ -24,7 +24,6 @@ kotlin {
 }
 
 dependencies {
-    api(platform(libs.compose.bom))
     api(libs.compose.ui)
     api(libs.compose.ui.graphics)
     api(libs.compose.ui.tooling.preview)
