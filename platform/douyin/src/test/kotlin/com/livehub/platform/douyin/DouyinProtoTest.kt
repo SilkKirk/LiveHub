@@ -1,5 +1,6 @@
 package com.livehub.platform.douyin
 
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -10,12 +11,14 @@ import java.io.ByteArrayOutputStream
 class DouyinProtoTest {
 
   @Test
-  fun `varint round trips through encode and parse`() {
+  fun `writeVarint emits little endian base 128 groups`() {
     val out = ByteArrayOutputStream()
     DouyinProto.writeVarint(300, out)
-    val field = DouyinProto.parse(out.toByteArray() + byteArrayOf())
-    // The raw varint alone has no field key, so decode the bytes directly.
-    assertEquals(byteArrayOf(0xAC.toByte(), 0x02), out.toByteArray())
+    assertArrayEquals(byteArrayOf(0xAC.toByte(), 0x02), out.toByteArray())
+
+    val single = ByteArrayOutputStream()
+    DouyinProto.writeVarint(1, single)
+    assertArrayEquals(byteArrayOf(0x01), single.toByteArray())
   }
 
   @Test
@@ -134,7 +137,9 @@ class DouyinDanmakuProtocolTest {
   @Test
   fun `logId is read from the push frame`() {
     assertEquals(7L, DouyinDanmakuProtocol.logId(frame(emptyList(), logId = 7)))
+    // 123456 encodes as a multi byte varint; the decoder must not treat it as raw bytes.
     assertEquals(123_456L, DouyinDanmakuProtocol.logId(frame(emptyList(), logId = 123_456)))
+    assertEquals(300L, DouyinDanmakuProtocol.logId(frame(emptyList(), logId = 300)))
   }
 
   @Test
@@ -189,11 +194,20 @@ class DouyinSignerTest {
 
   @Test
   fun `a-bogus is url safe`() {
-    val value = DouyinSigner.aBogus("a=1", "ua", 1_700_000_000, 7)
+    val value = DouyinSigner.aBogus("aid=6383&count=20", "ua", 1_700_000_000, 7)
     assertTrue(value.isNotEmpty())
-    assertTrue(!value.contains('+'))
-    assertTrue(!value.contains('/'))
-    assertTrue(!value.contains('='))
+    assertTrue(value.none { it == '+' || it == '/' || it == '=' }, "value was $value")
+    assertTrue(value.all { it.isLetterOrDigit() || it == '-' || it == '_' }, "value was $value")
+  }
+
+  @Test
+  fun `a-bogus does not overflow on any hex digest prefix`() {
+    // Regression: parsing an 8 char md5 prefix with toInt(16) overflowed for any value
+    // above 0x7FFFFFFF. Every seed must now be accepted.
+    repeat(64) { seed ->
+      val value = DouyinSigner.aBogus("q=$seed", "ua", 1_700_000_000L + seed, seed)
+      assertTrue(value.isNotEmpty(), "seed $seed produced an empty signature")
+    }
   }
 
   @Test

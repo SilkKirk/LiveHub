@@ -68,8 +68,15 @@ class BilibiliSignerTest {
   @Test
   fun `mixinKey pads with NUL when the source is too short`() {
     val key = BilibiliSigner.mixinKey("ab", "cd")
+    val combined = "abcd"
+    val table = BilibiliSigner.mixinKeyTable()
+
     assertEquals(32, key.length)
-    assertTrue(key.drop(4).all { it == '\u0000' })
+    // Every slot either points at a real character of the combined key or is NUL.
+    table.forEachIndexed { index, source ->
+      val expected = if (source < combined.length) combined[source] else '\u0000'
+      assertEquals(expected, key[index], "slot $index")
+    }
   }
 
   @Test
@@ -95,11 +102,22 @@ class BilibiliSignerTest {
   }
 
   @Test
-  fun `wbiEncode keeps unreserved characters and drops the documented ones`() {
+  fun `wbiEncode keeps unreserved characters`() {
     assertEquals("abcXYZ019-_.~", Crypto.wbiEncode("abcXYZ019-_.~"))
-    assertEquals("ab", Crypto.wbiEncode("a!b'c(d)e*f").replace("c", "").let { "ab" })
+  }
+
+  @Test
+  fun `wbiEncode drops the exclamation quote paren and star characters`() {
+    assertEquals("abcdef", Crypto.wbiEncode("a!b'c(d)e*f"))
+  }
+
+  @Test
+  fun `wbiEncode percent encodes with uppercase hex`() {
+    // Uppercase hex is required: the mixin hash is compared byte for byte by the server.
     assertEquals("%E4%B8%AD", Crypto.wbiEncode("中"))
     assertEquals("%20", Crypto.wbiEncode(" "))
+    assertEquals("%2F", Crypto.wbiEncode("/"))
+    assertEquals("%3D", Crypto.wbiEncode("="))
   }
 }
 

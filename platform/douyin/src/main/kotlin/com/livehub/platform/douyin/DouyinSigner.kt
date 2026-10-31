@@ -60,7 +60,7 @@ object DouyinSigner {
   ): String {
     val uaDigest = Crypto.md5Hex("$UA_KEY$userAgent")
     val salt = Crypto.md5Hex("$timestamp$randomSeed")
-    val seed = foldWords(queryString, uaDigest.take(16), salt.take(8).toInt(16))
+    val seed = foldWords(queryString, uaDigest.take(16), salt.take(8).toLong(16).toInt())
     return Crypto.base64Encode(seed).replace('+', '-').replace('/', '_').replace("=", "")
   }
 

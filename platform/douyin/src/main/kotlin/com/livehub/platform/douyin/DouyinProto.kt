@@ -13,9 +13,24 @@ object DouyinProto {
 
   /** One decoded protobuf field: tag number, wire type and raw payload. */
   data class Field(val number: Int, val wireType: Int, val raw: ByteArray) {
+    /** Value of a varint (wire type 0) field. */
+    val varint: Long
+      get() {
+        var result = 0L
+        var shift = 0
+        raw.forEach { byte ->
+          val b = byte.toInt() and 0xFF
+          result = result or ((b and 0x7F).toLong() shl shift)
+          shift += 7
+        }
+        return result
+      }
+
     fun asString(): String = String(raw, Charsets.UTF_8)
 
-    fun asLong(): Long = raw.fold(0L) { acc, byte -> (acc shl 8) or (byte.toLong() and 0xFF) }
+    fun asLong(): Long = if (wireType == 0) varint else raw.fold(0L) { acc, byte ->
+      (acc shl 8) or (byte.toLong() and 0xFF)
+    }
 
     fun asBool(): Boolean = asLong() != 0L
 

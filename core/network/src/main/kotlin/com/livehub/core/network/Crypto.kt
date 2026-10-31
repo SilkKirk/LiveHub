@@ -49,14 +49,18 @@ object Crypto {
   fun wbiEncode(value: String): String {
     val sb = StringBuilder(value.length)
     value.toByteArray(Charsets.UTF_8).forEach { b ->
-      val c = (b.toInt() and 0xFF).toChar()
+      val v = b.toInt() and 0xFF
+      val c = v.toChar()
       when {
         c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '-' || c == '_' || c == '.' || c == '~' ->
           sb.append(c)
         c == '!' || c == '\'' || c == '(' || c == ')' || c == '*' -> Unit
-        else -> sb.append('%').append(HEX[(b.toInt() and 0xFF) ushr 4]).append(HEX[b.toInt() and 0x0F])
+        else -> sb.append('%').append(UPPER_HEX[v ushr 4]).append(UPPER_HEX[v and 0x0F])
       }
     }
     return sb.toString()
   }
+
+  /** Percent-encoding must be uppercase; `md5Hex` output stays lowercase. */
+  private const val UPPER_HEX = "0123456789ABCDEF"
 }
