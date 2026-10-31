@@ -124,15 +124,37 @@ GitHub Actions 运行 `41240663433` 全部通过：
 
 ---
 
+## 第三轮迭代
+
+补上配对流程的完整握手（commit `0428168`，CI 全绿）：
+
+`SyncController.pair(peerName, address, code)` 会真的向对端发一个 `pair` 请求，
+对端用自己正在托管的配对码校验，成功后返回 per-peer 共享密钥；两端各自落库。
+在此之前 `PairPeer` 只在本地登记了一个哈希出来的设备 ID，跨设备同步实际上无法建立。
+
+配对对话框新增"对方局域网地址"输入框，默认填入本机地址，方便用户照抄到另一台设备。
+
+---
+
 ## 当前状态
 
-- 编译、Lint、全模块单元测试、debug/release 打包、API 34 模拟器仪器测试：全绿
-- 产物：`livehub-debug-apk`（约 27 MB）
+最终验证（commit `0428168`，GitHub Actions 运行 `41245435064`）：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **196 个用例，22 个套件，0 失败** |
+| `:app:assembleDebug` | ✅ |
+| `:app:assembleRelease`（混淆 + 资源压缩） | ✅ |
+| 仪器测试（API 34 模拟器） | ✅ **4/4 通过** |
+| 产物 | `livehub-debug-apk` ≈ 26 MB |
+
+代码规模：13 个 Gradle 模块，76 个生产源码文件，15 个测试文件，约 12 000 行 Kotlin。
 
 ## 后续可做
 
 - [ ] 同步页实时展示 mDNS 扫描到的设备（`SyncController.rememberPeer` 已就绪，UI 未接）
-- [ ] 配对流程走完整的 HTTP 握手（当前 `PairPeer` 只在本地登记）
 - [ ] 弹幕字号/透明度设置项接入设置页滑块
 - [ ] 播放器全屏/横屏手势
+- [ ] 关注列表增量同步的分页（当前一次传全量）
 
