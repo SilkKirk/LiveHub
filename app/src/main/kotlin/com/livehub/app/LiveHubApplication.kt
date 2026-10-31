@@ -12,5 +12,7 @@ class LiveHubApplication : Application() {
   override fun onCreate() {
     super.onCreate()
     container = AppContainer(context = this, debugLogging = BuildConfig.DEBUG)
+    // Periodic follow refresh; WorkManager keeps it alive across reboots and Doze.
+    com.livehub.app.sync.FollowRefreshWorker.schedule(this)
   }
 }

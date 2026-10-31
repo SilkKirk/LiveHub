@@ -45,6 +45,7 @@ data class UiState(
   val error: String? = null,
   val message: String? = null,
   val darkTheme: Boolean = false,
+  val bilibiliLogin: com.livehub.app.ui.components.BiliLoginUi = com.livehub.app.ui.components.BiliLoginUi(),
 ) {
   val hasMore: Boolean get() = !loading && rooms.isNotEmpty()
 }
@@ -96,6 +97,12 @@ sealed interface UiAction {
   data object SyncNow : UiAction
 
   data object ToggleTheme : UiAction
+
+  data object StartBilibiliLogin : UiAction
+
+  data object CancelBilibiliLogin : UiAction
+
+  data object LogoutBilibili : UiAction
 
   data object DismissMessage : UiAction
 }

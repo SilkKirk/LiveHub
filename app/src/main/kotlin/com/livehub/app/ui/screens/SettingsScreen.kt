@@ -129,6 +129,16 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item {
+      SectionTitle("账号")
+      com.livehub.app.ui.components.BilibiliLoginCard(
+        state = state.bilibiliLogin,
+        onStartLogin = { onAction(UiAction.StartBilibiliLogin) },
+        onCancel = { onAction(UiAction.CancelBilibiliLogin) },
+        onLogout = { onAction(UiAction.LogoutBilibili) },
+      )
+    }
+
+    item {
       SectionTitle("关于")
       Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

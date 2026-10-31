@@ -70,6 +70,10 @@ class AppContainer(
     )
   }
 
+  val bilibiliAuth: com.livehub.platform.bilibili.BilibiliAuth by lazy {
+    com.livehub.platform.bilibili.BilibiliAuth(http = httpClient, cookieStore = bilibiliCookieStore)
+  }
+
   val platformRegistry: PlatformRegistry by lazy { MapPlatformRegistry(adapters) }
 
   val platformGateway: PlatformGateway by lazy { PlatformGateway(platformRegistry) }

@@ -55,6 +55,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         followed = container.followStore.followed(),
         peers = preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
+        bilibiliLogin = com.livehub.app.ui.components.BiliLoginUi(
+          loggedIn = container.bilibiliAuth.isLoggedIn(),
+        ),
       )
     }
     loadCategories(platform)
@@ -88,6 +91,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.PairPeer -> pair(action.peerName, action.code)
       UiAction.SyncNow -> syncNow()
       UiAction.ToggleTheme -> _state.update { it.copy(darkTheme = !it.darkTheme) }
+      UiAction.StartBilibiliLogin -> startBilibiliLogin()
+      UiAction.CancelBilibiliLogin -> cancelBilibiliLogin()
+      UiAction.LogoutBilibili -> logoutBilibili()
       UiAction.DismissMessage -> _state.update { it.copy(message = null, error = null) }
     }
   }
@@ -417,6 +423,102 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     _state.update { it.copy(blockedKeywords = normalized) }
   }
 
+  // ------------------------------------------------------------- bilibili login
+
+  private var loginJob: Job? = null
+
+  private fun startBilibiliLogin() {
+    loginJob?.cancel()
+    loginJob = viewModelScope.launch {
+      _state.update {
+        it.copy(
+          bilibiliLogin = it.bilibiliLogin.copy(
+            loading = true,
+            qr = null,
+            status = "正在获取二维码…",
+          ),
+        )
+      }
+      try {
+        val qr = container.bilibiliAuth.requestQrCode()
+        val bitmap = com.livehub.app.ui.qr.QrCodeRenderer.render(qr.url, sizePx = 512)
+        _state.update {
+          it.copy(
+            bilibiliLogin = it.bilibiliLogin.copy(
+              loading = false,
+              qr = bitmap,
+              status = "请使用哔哩哔哩客户端扫码",
+            ),
+          )
+        }
+        pollUntilConfirmed(qr.key)
+      } catch (error: Exception) {
+        _state.update {
+          it.copy(
+            bilibiliLogin = it.bilibiliLogin.copy(
+              loading = false,
+              qr = null,
+              status = error.message ?: "获取二维码失败",
+            ),
+          )
+        }
+      }
+    }
+  }
+
+  private suspend fun pollUntilConfirmed(key: String) {
+    repeat(LOGIN_POLL_ATTEMPTS) {
+      kotlinx.coroutines.delay(LOGIN_POLL_INTERVAL_MILLIS)
+      when (val result = runCatching { container.bilibiliAuth.poll(key) }.getOrNull()) {
+        null -> Unit
+        com.livehub.platform.bilibili.BilibiliAuth.PollResult.Waiting -> Unit
+        com.livehub.platform.bilibili.BilibiliAuth.PollResult.Scanned -> _state.update {
+          it.copy(bilibiliLogin = it.bilibiliLogin.copy(status = "已扫码，请在手机上确认"))
+        }
+        com.livehub.platform.bilibili.BilibiliAuth.PollResult.Expired -> {
+          _state.update {
+            it.copy(bilibiliLogin = it.bilibiliLogin.copy(qr = null, status = "二维码已过期，请重新获取"))
+          }
+          return
+        }
+        is com.livehub.platform.bilibili.BilibiliAuth.PollResult.Confirmed -> {
+          _state.update {
+            it.copy(
+              bilibiliLogin = it.bilibiliLogin.copy(loggedIn = true, qr = null, status = "登录成功"),
+            )
+          }
+          return
+        }
+        is com.livehub.platform.bilibili.BilibiliAuth.PollResult.Failed -> {
+          _state.update {
+            it.copy(bilibiliLogin = it.bilibiliLogin.copy(qr = null, status = result.message))
+          }
+          return
+        }
+      }
+    }
+    _state.update {
+      it.copy(bilibiliLogin = it.bilibiliLogin.copy(qr = null, status = "登录超时，请重试"))
+    }
+  }
+
+  private fun cancelBilibiliLogin() {
+    loginJob?.cancel()
+    _state.update {
+      it.copy(bilibiliLogin = it.bilibiliLogin.copy(loading = false, qr = null, status = ""))
+    }
+  }
+
+  private fun logoutBilibili() {
+    cancelBilibiliLogin()
+    container.bilibiliAuth.logout()
+    _state.update {
+      it.copy(
+        bilibiliLogin = it.bilibiliLogin.copy(loggedIn = false, status = "已退出登录"),
+        message = "已退出哔哩哔哩账号",
+      )
+    }
+  }
   // ----------------------------------------------------------------------- sync
 
   private fun setSyncScopes(scopes: Set<SyncScope>) {
@@ -491,5 +593,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private companion object {
     const val MAX_DANMAKU_BUFFER = 200
+    const val LOGIN_POLL_ATTEMPTS = 100
+    const val LOGIN_POLL_INTERVAL_MILLIS = 2_000L
   }
 }

@@ -119,6 +119,30 @@ class FollowStore(private val preferences: UserPreferences) {
     persist(records().filterNot { it.key == key } + next)
   }
 
+  /**
+   * Refreshes the cached metadata of an already-followed streamer.
+   *
+   * Used by the background refresh worker: it must not *add* a follow (the user may
+   * have unfollowed on another device since the worker started), only update one that
+   * is still alive.
+   */
+  fun updateSnapshot(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long) {
+    val existing = records().firstOrNull { it.key == streamer.key }
+    if (existing == null || existing.deleted) return
+    val order = existing.value?.get("order")
+    val value = fromStreamer(streamer, now).let { base ->
+      if (order == null) base else JsonObject(base + ("order" to order))
+    }
+    val updated = SyncRecord(
+      key = streamer.key,
+      value = value,
+      deleted = false,
+      hlc = hlc,
+      deviceId = deviceId,
+      updatedAt = now,
+    )
+    persist(records().filterNot { it.key == streamer.key } + updated)
+  }
   fun upsertAll(streamers: List<Streamer>, hlc: Hlc, deviceId: Long, now: Long) {
     if (streamers.isEmpty()) return
     val byKey = records().associateBy { it.key }.toMutableMap()
