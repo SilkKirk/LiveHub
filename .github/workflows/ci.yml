@@ -116,6 +116,27 @@ jobs:
           disable-animations: true
           script: ./gradlew connectedDebugAndroidTest --stacktrace
 
+      # The ScreenshotTest writes one PNG per screen into the app's external files dir.
+      # Pulling them out of the emulator is what lets a reviewer actually *see* the UI.
+      - name: Collect UI screenshots
+        if: always()
+        run: |
+          set -euo pipefail
+          DEST="$GITHUB_WORKSPACE/ui-screenshots"
+          mkdir -p "$DEST"
+          adb shell run-as com.livehub.app.debug ls /sdcard/Android/data/com.livehub.app.debug/files/screenshots 2>/dev/null || true
+          adb pull /sdcard/Android/data/com.livehub.app.debug/files/screenshots "$DEST" || true
+          ls -la "$DEST" || true
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: ui-screenshots/**
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Upload instrumentation reports
         if: always()
         uses: actions/upload-artifact@v4
