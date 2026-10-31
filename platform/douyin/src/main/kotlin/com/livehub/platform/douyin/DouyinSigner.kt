@@ -107,7 +107,7 @@ object DouyinSigner {
     userAgent: String,
     timestamp: Long = System.currentTimeMillis(),
   ): Signed {
-    val query = orderedParams.joinToString("&") { "${it.key}=${it.value}" }
+    val query = orderedParams.joinToString("&") { (key, value) -> "$key=$value" }
     val params = LinkedHashMap<String, String>()
     orderedParams.forEach { (k, v) -> params[k] = v }
     params["X-Bogus"] = xBogus(query, userAgent, timestamp / 1000)

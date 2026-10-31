@@ -2,6 +2,7 @@ package com.livehub.platform.bilibili
 
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
+import com.livehub.core.model.PlaybackSource
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.core.network.HttpClient

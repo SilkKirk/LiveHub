@@ -22,7 +22,7 @@ class ResilientPlatformRepository(
   private val gateway: PlatformGateway,
   private val retryPolicy: BackoffPolicy = BackoffPolicy(300.milliseconds, 2_000.milliseconds),
   private val categoryCache: TtlCache<String, List<Category>> = TtlCache(ttlMillis = CATEGORY_TTL_MILLIS),
-  private val roomDetailCache: TtlCache<String, Streamer> = TtlCache(ttlMillis = ROOM_DETAIL_TTL_MILLIS),
+  private val roomDetailCache: TtlCache<String, StreamerSnapshot> = TtlCache(ttlMillis = ROOM_DETAIL_TTL_MILLIS),
 ) {
   suspend fun categories(platform: Platform, forceRefresh: Boolean = false): List<Category> {
     val key = platform.id
@@ -39,7 +39,7 @@ class ResilientPlatformRepository(
   suspend fun roomDetail(platform: Platform, roomId: String, forceRefresh: Boolean = false): Streamer? {
     val key = Streamer.keyOf(platform, roomId)
     if (forceRefresh) roomDetailCache.invalidate(key)
-    return roomDetailCache.getOrPut(key) { gateway.roomDetail(platform, roomId) }
+    return roomDetailCache.getOrPut(key) { StreamerSnapshot(gateway.roomDetail(platform, roomId)) }.value
   }
 
   suspend fun liveStatus(platform: Platform, roomId: String): LiveStatus? =
@@ -86,6 +86,9 @@ class ResilientPlatformRepository(
 
   /** Test seam: lets tests control how many attempts are made. */
   var maxAttempts: Int = MAX_ATTEMPTS
+
+  /** Wrapper so a null result can be cached as well. */
+  data class StreamerSnapshot(val value: Streamer?)
 
   companion object {
     const val MAX_ATTEMPTS = 3

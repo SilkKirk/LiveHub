@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -89,7 +90,7 @@ class DouyuAdapter(
     api.playback(roomId, preferredQuality)
 
   override fun danmaku(roomId: String): Flow<DanmakuEvent> = callbackFlow {
-    val backoff = BackoffPolicy(initialDelay = 1_000.toDurationMillis(), maxDelay = 30_000.toDurationMillis())
+    val backoff = BackoffPolicy(initialDelay = 1_000.milliseconds, maxDelay = 30_000.milliseconds)
     var socket: WebSocket? = null
     var closedByUs = false
 

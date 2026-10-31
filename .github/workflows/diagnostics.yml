@@ -48,7 +48,7 @@ jobs:
         id: compile
         continue-on-error: true
         run: |
-          ./gradlew compileDebugKotlin compileReleaseKotlin --continue --stacktrace 2>&1 | tee compile.log
+          ./gradlew compileDebugKotlin compileReleaseKotlin compileDebugUnitTestKotlin --continue --stacktrace 2>&1 | tee compile.log
 
       - name: Collect diagnostics
         if: always()

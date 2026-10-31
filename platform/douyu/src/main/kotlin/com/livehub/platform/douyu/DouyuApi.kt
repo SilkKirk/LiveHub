@@ -43,8 +43,8 @@ class DouyuApi(private val http: HttpClient) {
   suspend fun categories(): List<Category> {
     val response = http.get(URL_CATEGORIES)
     val root = response.requireSuccess().parseObject("cate/list")
-    val cate1 = root["data"]?.jsonObject?.get("cate1Info")?.jsonArray.orEmpty()
-    val cate2 = root["data"]?.jsonObject?.get("cate2Info")?.jsonArray.orEmpty()
+    val cate1 = root["data"]?.jsonObject?.get("cate1Info")?.jsonArray ?: JsonArray(emptyList())
+    val cate2 = root["data"]?.jsonObject?.get("cate2Info")?.jsonArray ?: JsonArray(emptyList())
     return DouyuParser.categories(cate1, cate2)
   }
 
