@@ -48,8 +48,11 @@ class SyncCoordinatorTest {
   )
 
   private class Target(override val scope: SyncScope) : SyncTarget {
-    var records: List<SyncRecord<Any>> = emptyList()
+    var records: List<SyncRecord<out Any>> = emptyList()
+      private set
+
     override fun snapshot(): List<SyncRecord<out Any>> = records
+
     override fun apply(records: List<SyncRecord<out Any>>): Int {
       this.records = records.toList()
       return records.size
@@ -167,7 +170,7 @@ class SyncCodecTest {
 
   @Test
   fun `records round trip through JSON`() {
-    val records = listOf(
+    val records: List<SyncRecord<kotlinx.serialization.json.JsonObject>> = listOf(
       SyncRecord(
         key = "douyu:1",
         value = SyncCodec.stringValue("主播"),
