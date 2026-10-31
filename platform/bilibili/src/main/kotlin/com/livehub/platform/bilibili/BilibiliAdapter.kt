@@ -14,14 +14,22 @@ import kotlinx.coroutines.flow.emptyFlow
 
 /** Placeholder adapter; the real implementation lands in the next commit. */
 internal class BilibiliAdapter : LivePlatformAdapter {
-  override val platform: Platform = Platform.
+  override val platform: Platform = Platform.BILIBILI
+
   override suspend fun categories(): List<Category> = unsupported()
+
   override suspend fun rooms(categoryId: String, cursor: String?): RoomPage = unsupported()
+
   override suspend fun search(keyword: String, cursor: String?): RoomPage = unsupported()
+
   override suspend fun roomDetail(roomId: String): Streamer? = unsupported()
+
   override suspend fun liveStatus(roomId: String): LiveStatus? = unsupported()
+
   override suspend fun playback(roomId: String, preferredQuality: Int?): PlaybackSource = unsupported()
+
   override fun danmaku(roomId: String): Flow<DanmakuEvent> = emptyFlow()
+
   private fun unsupported(): Nothing =
-    throw PlatformProtocolException("$(System.Collections.Hashtable.c) 适配器尚未实现", Platform.)
+    throw PlatformProtocolException("Bilibili 适配器尚未实现", Platform.BILIBILI)
 }
