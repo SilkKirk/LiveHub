@@ -89,7 +89,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SetSyncScopes -> setSyncScopes(action.scopes)
       UiAction.RefreshPeers -> refreshPeers()
       is UiAction.UnpairPeer -> unpair(action.deviceId)
-      is UiAction.PairPeer -> pair(action.peerName, action.code)
+      is UiAction.PairPeer -> pair(action.peerName, action.address, action.code)
       UiAction.SyncNow -> syncNow()
       UiAction.ToggleTheme -> _state.update { it.copy(darkTheme = !it.darkTheme) }
       UiAction.StartBilibiliLogin -> startBilibiliLogin()
@@ -543,20 +543,23 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     _state.update { it.copy(message = "已解除配对") }
   }
 
-  private fun pair(peerName: String, code: String) {
+  /**
+   * Performs the real pairing handshake with the device at [address].
+   *
+   * The peer validates [code] against the code it is hosting and answers with the
+   * shared secret used by every later sync request.
+   */
+  private fun pair(peerName: String, address: String, code: String) {
     viewModelScope.launch {
-      val expected = _state.value.pairingCode
-      val result = container.syncEngine.completePairing(
-        peerDeviceId = (peerName.hashCode().toLong() and 0x7FFFFFFF).coerceAtLeast(1L),
-        peerDeviceName = peerName,
-        code = code,
-        expectedCode = if (expected.isBlank()) code else expected,
-      )
-      refreshPeers()
+      _state.update { it.copy(syncing = true) }
+      val result = runCatching { container.syncController.pair(peerName, address, code) }
+        .getOrElse { Result.failure(it) }
       _state.update {
         it.copy(
+          syncing = false,
+          peers = container.preferences.trustedPeers(),
           message = result.fold(
-            onSuccess = { peer -> "已与 ${peer.deviceName} 配对" },
+            onSuccess = { name -> "已与 $name 配对" },
             onFailure = { error -> error.message ?: "配对失败" },
           ),
         )

@@ -92,7 +92,7 @@ sealed interface UiAction {
 
   data class UnpairPeer(val deviceId: Long) : UiAction
 
-  data class PairPeer(val peerName: String, val code: String) : UiAction
+  data class PairPeer(val peerName: String, val address: String, val code: String) : UiAction
 
   data object SyncNow : UiAction
 

@@ -140,7 +140,74 @@ class SyncController(
     addressBook.remember(peer)
   }
 
-  /** Adds a peer the user typed manually (`host[:port]`). */
+  /**
+   * Pairs with a peer that is showing [code].
+   *
+   * Performs the real handshake rather than only recording the attempt locally:
+   * a `pair` request is sent to the peer with the code as the payload, the peer
+   * validates it against the code it is currently hosting and answers with the
+   * per-peer shared secret that both sides then use for every sync request.
+   *
+   * @return the paired device name on success, or a failure describing why.
+   */
+  fun pair(peerName: String, address: String, code: String): Result<String> {
+    val parsed = com.livehub.core.sync.transport.parseManualAddress(address, DEFAULT_PORT)
+      ?: return Result.failure(IllegalArgumentException("地址格式应为 192.168.1.10 或 192.168.1.10:$DEFAULT_PORT"))
+
+    val currentTransport = transport
+      ?: return Result.failure(IllegalStateException("同步服务未启动，请重新打开同步页"))
+
+    val envelope = SyncEnvelope(
+      deviceId = preferences.deviceId,
+      deviceName = preferences.deviceName,
+      secret = "",
+      payload = SyncPayload(
+        scope = "pair",
+        sourceDeviceId = preferences.deviceId,
+        sequence = System.currentTimeMillis(),
+        createdAt = System.currentTimeMillis(),
+        entries = code,
+      ),
+    )
+
+    val response = runCatching {
+      currentTransport.call(
+        peer = TrustedPeer(
+          deviceId = 0,
+          deviceName = peerName,
+          sharedSecret = "",
+          pairedAt = 0,
+        ),
+        host = parsed.first,
+        port = parsed.second,
+        path = SyncEnvelope.PATH_PAIR,
+        envelope = envelope,
+      )
+    }.getOrElse { error ->
+      return Result.failure(IllegalStateException(error.message ?: "无法连接到该设备"))
+    }
+
+    response.error?.let { return Result.failure(IllegalStateException(it)) }
+    if (response.secret.isBlank()) {
+      return Result.failure(IllegalStateException("对方未返回配对密钥"))
+    }
+
+    val peerId = if (response.serverDeviceId != 0L) response.serverDeviceId else response.deviceId
+    val peer = TrustedPeer(
+      deviceId = peerId,
+      deviceName = response.serverDeviceName.ifBlank { peerName },
+      sharedSecret = response.secret,
+      pairedAt = System.currentTimeMillis(),
+      lastSeenAt = System.currentTimeMillis(),
+    )
+    preferences.saveTrustedPeers(
+      preferences.trustedPeers().filterNot { it.deviceId == peerId } + peer,
+    )
+    addressBook.addManual(peerId, peer.deviceName, parsed.first, parsed.second)
+    return Result.success(peer.deviceName)
+  }
+
+  /** Adds a peer the user typed manually (`host[:port]`) without a handshake. */
   fun addManualPeer(peerName: String, address: String): Boolean {
     val parsed = com.livehub.core.sync.transport.parseManualAddress(address, DEFAULT_PORT) ?: return false
     val deviceId = peerName.hashCode().toLong() and 0x7FFFFFFF

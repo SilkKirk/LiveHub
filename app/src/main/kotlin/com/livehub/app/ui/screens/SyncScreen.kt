@@ -144,8 +144,8 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
     PairDialog(
       state = state,
       onDismiss = { showPairDialog = false },
-      onConfirm = { name, code ->
-        onAction(UiAction.PairPeer(name, code))
+      onConfirm = { name, address, code ->
+        onAction(UiAction.PairPeer(name, address, code))
         showPairDialog = false
       },
     )
@@ -240,9 +240,10 @@ private fun SyncLogRow(entry: SyncLogEntry, timeFormat: SimpleDateFormat) {
 private fun PairDialog(
   state: UiState,
   onDismiss: () -> Unit,
-  onConfirm: (String, String) -> Unit,
+  onConfirm: (String, String, String) -> Unit,
 ) {
   var name by remember { mutableStateOf("") }
+  var address by remember { mutableStateOf(state.localAddress) }
   var code by remember { mutableStateOf("") }
 
   AlertDialog(
@@ -270,6 +271,14 @@ private fun PairDialog(
           singleLine = true,
         )
         OutlinedTextField(
+          value = address,
+          onValueChange = { address = it },
+          label = { Text("对方局域网地址 (IP:端口)") },
+          placeholder = { Text("192.168.1.10:47653") },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        )
+        OutlinedTextField(
           value = code,
           onValueChange = { code = it.filter(Char::isDigit).take(6) },
           label = { Text("六位配对码") },
@@ -280,8 +289,8 @@ private fun PairDialog(
     },
     confirmButton = {
       TextButton(
-        onClick = { onConfirm(name.ifBlank { "新设备" }, code) },
-        enabled = code.length == 6,
+        onClick = { onConfirm(name.ifBlank { "新设备" }, address, code) },
+        enabled = code.length == 6 && address.isNotBlank(),
       ) { Text("配对") }
     },
     dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
