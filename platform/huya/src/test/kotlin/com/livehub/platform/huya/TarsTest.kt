@@ -107,9 +107,33 @@ class TarsTest {
   }
 
   @Test
-  fun `heartbeat frame is the fixed 111 byte blob`() {
-    assertEquals(111, Tars.heartbeatFrame().size)
-    assertTrue(Tars.heartbeatFrame().contentEquals(Tars.heartbeatFrame()))
+  fun `heartbeat frame carries the documented inner payload`() {
+    val frame = Tars.heartbeatFrame()
+
+    val reader = Tars.Reader(frame)
+    assertEquals(Tars.HEARTBEAT_OUTER_TYPE, reader.readInt32(0))
+    val inner = reader.readBytes(1)
+
+    val body = Tars.Reader(inner)
+    assertEquals(Tars.HEARTBEAT_INNER_TYPE, body.readInt32(0))
+    assertEquals("OnUserHeartBeat", body.readString(1))
+    assertEquals("tReq", body.readString(2))
+    assertEquals("adr_wap", body.readString(3))
+    assertEquals("onlineui", body.readString(4))
+  }
+
+  @Test
+  fun `heartbeat frame is stable and self consistent`() {
+    val a = Tars.heartbeatFrame()
+    val b = Tars.heartbeatFrame()
+    assertTrue(a.contentEquals(b), "heartbeat must be reproducible")
+    // The declared payload length must equal the real body length, otherwise the CDN
+    // drops the frame.
+    val declared = ((a[19].toInt() and 0xFF) shl 24) or
+      ((a[20].toInt() and 0xFF) shl 16) or
+      ((a[21].toInt() and 0xFF) shl 8) or
+      (a[22].toInt() and 0xFF)
+    assertEquals(a.size - 23, declared)
   }
 
   @Test

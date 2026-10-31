@@ -117,11 +117,18 @@ object HuyaSigner {
     else -> 3
   }
 
-  /** Rewrites the `tx` CDN parameters that are incompatible with the H5 player. */
+  /**
+   * Rewrites the `tx` CDN parameters that are incompatible with the H5 player, then
+   * downgrades the scheme.
+   *
+   * The replacements must not assume a leading `&`: `ctype` is the *first* query
+   * parameter in the URL produced by [signQuery], so a bare `&ctype=` match would
+   * silently do nothing.
+   */
   fun postProcess(url: String, cdnType: String): String {
     val rewritten = if (cdnType.equals("tx", ignoreCase = true)) {
-      url.replace("&ctype=tars_mp", "&ctype=huya_webh5")
-        .replace("&fs=bhct", "&fs=bgct")
+      url.replace("ctype=tars_mp", "ctype=huya_webh5")
+        .replace("fs=bhct", "fs=bgct")
     } else {
       url
     }

@@ -183,6 +183,20 @@ object Tars {
       val head = requireHead(tag) ?: return
       if (head != Type.STRUCT_BEGIN) throw IllegalStateException("tag $tag is not a struct")
       block()
+      // The struct body is terminated by a STRUCT_END head; consume it so the caller
+      // can keep reading tags that follow the struct in the enclosing scope.
+      consumeStructEnd()
+    }
+
+    /** Reads the next head and asserts it is a struct terminator. */
+    private fun consumeStructEnd() {
+      if (position >= data.size) return
+      val start = position
+      val (_, type) = readHead()
+      if (type != Type.STRUCT_END) {
+        // Not a terminator: rewind so the enclosing reader can still see this field.
+        position = start
+      }
     }
 
     /** Advances to [tag] or returns null when the stream is exhausted. */
@@ -306,18 +320,35 @@ object Tars {
     }.toByteArray()
   }
 
-  /** Fixed heartbeat blob captured from the web client (111 bytes). */
-  fun heartbeatFrame(): ByteArray = HEARTBEAT_FRAME.copyOf()
+  /**
+   * Builds the heartbeat frame the web client sends every 20 seconds.
+   *
+   * Outer envelope: `{ 0: int32 105, 1: bytes inner }`.
+   * Inner body:    `{ 0: int32 10, 1: "OnUserHeartBeat", 2: "tReq", 3: "adr_wap",
+   *                   4: "onlineui" }`.
+   *
+   * The upstream reference ships a captured 111 byte blob. Rebuilding it from the codec
+   * keeps the length self-consistent (the declared payload length can never drift from
+   * the actual body) and makes the content verifiable in unit tests.
+   */
+  fun heartbeatFrame(): ByteArray {
+    val inner = Writer().apply {
+      writeInt32(0, HEARTBEAT_INNER_TYPE)
+      writeString(1, "OnUserHeartBeat")
+      writeString(2, "tReq")
+      writeString(3, "adr_wap")
+      writeString(4, "onlineui")
+    }.toByteArray()
 
-  private val HEARTBEAT_FRAME: ByteArray = byteArrayOf(
-    0x00, 0x03, 0x1D, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00, 0x69, 0x10, 0x03,
-    0x2C, 0x3C, 0x4C, 0x56, 0x1E, 0x00, 0x00, 0x00, 0x0A, 0x0A, 0x01, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x0A, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  )
+    return Writer().apply {
+      writeInt32(0, HEARTBEAT_OUTER_TYPE)
+      writeBytes(1, inner)
+    }.toByteArray()
+  }
+
+  /** Envelope type marking a heartbeat push. */
+  const val HEARTBEAT_OUTER_TYPE = 105
+
+  /** Inner body type marking an "on user heartbeat" request. */
+  const val HEARTBEAT_INNER_TYPE = 10
 }
