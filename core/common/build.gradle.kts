@@ -10,7 +10,7 @@ kotlin {
         jvmTarget.set(JvmTarget.JVM_17)
         // Keep the public surface explicit: no implicit API leakage between modules.
         freeCompilerArgs.addAll(
-            "-Xjvm-default=all",
+            "-jvm-default=all",
             "-opt-in=kotlin.RequiresOptIn",
         )
     }
