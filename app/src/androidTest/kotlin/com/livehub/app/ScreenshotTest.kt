@@ -1,15 +1,13 @@
 package com.livehub.app
 
-import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.Screen
-import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.BiliLoginUi
 import com.livehub.core.model.Category
@@ -17,9 +15,7 @@ import com.livehub.core.model.DanmakuMessage
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
-import com.livehub.core.sync.Hlc
 import com.livehub.core.sync.SyncLogEntry
-import com.livehub.core.sync.SyncScope
 import com.livehub.core.sync.TrustedPeer
 import org.junit.Rule
 import org.junit.Test
@@ -33,7 +29,10 @@ import java.io.FileOutputStream
  * The APK cannot be launched interactively in CI, so these renders are the visual
  * regression harness: each run produces a folder of screenshots that a reviewer opens
  * and compares. They also fail the build if a screen throws while composing, which
- * catches layout crashes a unit test cannot see.
+ * catches layout crashes a plain unit test cannot see.
+ *
+ * One test per screen is required because a Compose test rule may only call
+ * `setContent` once.
  */
 @RunWith(AndroidJUnit4::class)
 class ScreenshotTest {
@@ -103,144 +102,148 @@ class ScreenshotTest {
   // ------------------------------------------------------------------- renders ---
 
   @Test
-  fun captureAllScreens() {
-    capture("01-home") { baseState() }
+  fun home() = capture("01-home", baseState())
 
-    capture("02-home-followed") {
-      baseState().copy(followed = douyuRooms.take(3))
-    }
+  @Test
+  fun homeFollowed() = capture("02-home-followed", baseState().copy(followed = douyuRooms.take(3)))
 
-    capture("03-home-pinned-categories") {
-      baseState().copy(subscribedCategories = douyuCategories.take(3))
-    }
+  @Test
+  fun homePinnedCategories() =
+    capture("03-home-pinned", baseState().copy(subscribedCategories = douyuCategories.take(3)))
 
-    capture("04-home-loading") {
-      baseState().copy(rooms = emptyList(), loading = true)
-    }
+  @Test
+  fun homeLoading() = capture("04-home-loading", baseState().copy(rooms = emptyList(), loading = true))
 
-    capture("05-home-empty") {
-      baseState().copy(rooms = emptyList(), loading = false, error = null)
-    }
+  @Test
+  fun homeEmpty() = capture("05-home-empty", baseState().copy(rooms = emptyList(), loading = false))
 
-    capture("06-home-error") {
-      baseState().copy(rooms = emptyList(), loading = false, error = "无法连接到服务器，请检查网络")
-    }
+  @Test
+  fun homeError() = capture(
+    "06-home-error",
+    baseState().copy(rooms = emptyList(), loading = false, error = "无法连接到服务器，请检查网络后重试"),
+  )
 
-    capture("07-follow-list") {
-      baseState().copy(
-        screen = Screen.Follow,
-        followed = listOf(
-          douyuRooms[0], douyuRooms[1], douyuRooms[2],
-          streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
-          streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档", 45_000, live = false),
-        ),
-      )
-    }
+  @Test
+  fun followList() = capture(
+    "07-follow-list",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = listOf(
+        douyuRooms[0], douyuRooms[1], douyuRooms[2],
+        streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
+        streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档", 45_000, live = false),
+      ),
+    ),
+  )
 
-    capture("08-follow-empty") {
-      baseState().copy(screen = Screen.Follow, followed = emptyList())
-    }
+  @Test
+  fun followEmpty() = capture("08-follow-empty", baseState().copy(screen = Screen.Follow))
 
-    capture("09-search-empty") {
-      baseState().copy(screen = Screen.Search, searchQuery = "")
-    }
+  @Test
+  fun searchIdle() = capture("09-search-idle", baseState().copy(screen = Screen.Search, searchQuery = ""))
 
-    capture("10-search-history") {
-      baseState().copy(
-        screen = Screen.Search,
-        searchHistory = listOf("英雄联盟", "户外", "DNF", "王者荣耀", "深夜电台", "美食探店"),
-      )
-    }
+  @Test
+  fun searchHistory() = capture(
+    "10-search-history",
+    baseState().copy(
+      screen = Screen.Search,
+      searchHistory = listOf("英雄联盟", "户外", "DNF", "王者荣耀", "深夜电台", "美食探店"),
+    ),
+  )
 
-    capture("11-search-results") {
-      baseState().copy(
-        screen = Screen.Search,
-        searchQuery = "英雄联盟",
-        searchResults = douyuRooms.take(4),
-        searchHistory = listOf("英雄联盟", "户外"),
-      )
-    }
+  @Test
+  fun searchResults() = capture(
+    "11-search-results",
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "英雄联盟",
+      searchResults = douyuRooms.take(4),
+      searchHistory = listOf("英雄联盟", "户外"),
+    ),
+  )
 
-    capture("12-search-no-result") {
-      baseState().copy(
-        screen = Screen.Search,
-        searchQuery = "不存在的直播间",
-        searchResults = emptyList(),
-      )
-    }
+  @Test
+  fun searchNoResult() = capture(
+    "12-search-no-result",
+    baseState().copy(screen = Screen.Search, searchQuery = "不存在的直播间"),
+  )
 
-    capture("13-sync") {
-      baseState().copy(
-        screen = Screen.Sync,
-        pairingCode = "482913",
-        peers = listOf(
-          TrustedPeer(2, "小米平板 6", "secret", 1_700_000_000_000, lastSeenAt = 1_700_000_100_000),
-        ),
-        syncLog = listOf(
-          SyncLogEntry(1_700_000_100_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 3, true, "更新 3 条"),
-          SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "分区订阅", 2, true, null),
-          SyncLogEntry(1_700_000_080_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "播放设置", 0, false, "对方拒绝连接"),
-        ),
-      )
-    }
+  @Test
+  fun syncPaired() = capture(
+    "13-sync",
+    baseState().copy(
+      screen = Screen.Sync,
+      pairingCode = "482913",
+      peers = listOf(
+        TrustedPeer(2, "小米平板 6", "secret", 1_700_000_000_000, lastSeenAt = 1_700_000_100_000),
+      ),
+      syncLog = listOf(
+        SyncLogEntry(1_700_000_100_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 3, true, "更新 3 条"),
+        SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "分区订阅", 2, true, null),
+        SyncLogEntry(1_700_000_080_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "播放设置", 0, false, "对方拒绝连接"),
+      ),
+    ),
+  )
 
-    capture("14-sync-empty") {
-      baseState().copy(screen = Screen.Sync)
-    }
+  @Test
+  fun syncEmpty() = capture("14-sync-empty", baseState().copy(screen = Screen.Sync))
 
-    capture("15-settings") {
-      baseState().copy(
-        screen = Screen.Settings,
-        blockedKeywords = listOf("广告", "刷屏", "666"),
-        bilibiliLogin = BiliLoginUi(loggedIn = false),
-      )
-    }
+  @Test
+  fun settings() = capture(
+    "15-settings",
+    baseState().copy(
+      screen = Screen.Settings,
+      blockedKeywords = listOf("广告", "刷屏", "666"),
+      bilibiliLogin = BiliLoginUi(loggedIn = false),
+    ),
+  )
 
-    capture("16-settings-logged-in") {
-      baseState().copy(
-        screen = Screen.Settings,
-        bilibiliLogin = BiliLoginUi(loggedIn = true),
-      )
-    }
+  @Test
+  fun settingsLoggedIn() = capture(
+    "16-settings-logged-in",
+    baseState().copy(screen = Screen.Settings, bilibiliLogin = BiliLoginUi(loggedIn = true)),
+  )
 
-    capture("17-player") {
-      baseState().copy(
-        screen = Screen.Player,
-        room = douyuRooms[0],
-        variants = listOf(
-          StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0, qualityCode = 0),
-          StreamVariant("高清", "https://example.com/b.flv", "ws-h5", qualityRank = 2, qualityCode = 2),
-          StreamVariant("标清", "https://example.com/c.flv", "ali", qualityRank = 1, qualityCode = 1),
-        ),
-        selectedVariant = StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0),
-        danmaku = listOf(
-          DanmakuMessage("douyu:1", "观众A", "这波操作太秀了"),
-          DanmakuMessage("douyu:1", "观众B", "666666"),
-          DanmakuMessage("douyu:1", "观众C", "主播声音好听"),
-        ),
-      )
-    }
+  @Test
+  fun player() = capture(
+    "17-player",
+    baseState().copy(
+      screen = Screen.Player,
+      room = douyuRooms[0],
+      variants = listOf(
+        StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0, qualityCode = 0),
+        StreamVariant("高清", "https://example.com/b.flv", "ws-h5", qualityRank = 2, qualityCode = 2),
+        StreamVariant("标清", "https://example.com/c.flv", "ali", qualityRank = 1, qualityCode = 1),
+      ),
+      selectedVariant = StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0),
+      danmaku = listOf(
+        DanmakuMessage("douyu:1", "观众A", "这波操作太秀了"),
+        DanmakuMessage("douyu:1", "观众B", "666666"),
+        DanmakuMessage("douyu:1", "观众C", "主播声音好听"),
+      ),
+    ),
+  )
 
-    capture("18-player-loading") {
-      baseState().copy(screen = Screen.Player, loading = true)
-    }
+  @Test
+  fun playerLoading() = capture("18-player-loading", baseState().copy(screen = Screen.Player, loading = true))
 
-    capture("19-player-error") {
-      baseState().copy(screen = Screen.Player, loading = false, error = "主播未开播")
-    }
+  @Test
+  fun playerError() =
+    capture("19-player-error", baseState().copy(screen = Screen.Player, error = "主播未开播"))
 
-    capture("20-huya-home") {
-      baseState().copy(
-        platform = Platform.HUYA,
-        rooms = huyaRooms,
-        categories = listOf(Category(Platform.HUYA, "1", "网游", "热门", "热门", sortOrder = 0)),
-      )
-    }
-  }
+  @Test
+  fun huyaHome() = capture(
+    "20-huya-home",
+    baseState().copy(
+      platform = Platform.HUYA,
+      rooms = huyaRooms,
+      categories = listOf(Category(Platform.HUYA, "1", "网游", "热门", "热门", sortOrder = 0)),
+    ),
+  )
 
-  private fun capture(name: String, stateProvider: () -> UiState) {
+  private fun capture(name: String, state: UiState) {
     composeRule.setContent {
-      LiveHubRoot(state = stateProvider(), onAction = { _: UiAction -> })
+      LiveHubRoot(state = state, onAction = { })
     }
     composeRule.waitForIdle()
 

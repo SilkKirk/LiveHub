@@ -38,7 +38,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.app.ui.components.EmptyState
+import com.livehub.app.ui.components.ErrorState
+import com.livehub.app.ui.components.InlineLoader
 import com.livehub.app.ui.components.StreamerCard
+import com.livehub.app.ui.components.StreamerGridSkeleton
 import com.livehub.core.model.Platform
 
 /** Home screen: platform switcher, category pills and the room grid. */
@@ -63,13 +67,15 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize()) {
       if (state.rooms.isEmpty() && state.loading) {
-        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+        StreamerGridSkeleton()
+      } else if (state.rooms.isEmpty() && state.error != null) {
+        ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
       } else if (state.rooms.isEmpty()) {
-        Text(
-          text = state.error ?: "暂无直播",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.align(Alignment.Center),
+        EmptyState(
+          title = "这个分区暂时没有直播",
+          description = "${state.selectedCategory?.name.orEmpty()} 还没有人在播，换个分区看看？",
+          actionLabel = "刷新",
+          onAction = { onAction(UiAction.Refresh) },
         )
       } else {
         LazyVerticalGrid(
@@ -90,9 +96,7 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
           }
           if (state.loadingMore) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-              Box(modifier = Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(modifier = Modifier.height(24.dp))
-              }
+              InlineLoader()
             }
           }
         }
