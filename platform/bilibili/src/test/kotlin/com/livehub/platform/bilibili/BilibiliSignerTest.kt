@@ -71,12 +71,16 @@ class BilibiliSignerTest {
     val combined = "abcd"
     val table = BilibiliSigner.mixinKeyTable()
 
+    // The permutation table indexes into a 64 character key; with only 4 characters
+    // available every slot above that is padded with NUL. `key` is always 32 chars.
     assertEquals(32, key.length)
-    // Every slot either points at a real character of the combined key or is NUL.
-    table.forEachIndexed { index, source ->
+    assertEquals(32, table.size)
+    key.forEachIndexed { index, char ->
+      val source = table[index]
       val expected = if (source < combined.length) combined[source] else '\u0000'
-      assertEquals(expected, key[index], "slot $index")
+      assertEquals(expected, char, "slot $index (table value $source)")
     }
+    assertTrue(key.any { it == '\u0000' }) { "short sources must be padded" }
   }
 
   @Test

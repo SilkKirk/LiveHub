@@ -80,7 +80,7 @@ class HuyaSignerTest {
   fun `wsSecret is the md5 of the documented plain string`() {
     val t13 = 1_700_000_000_000L
     val uid = 1_400_000_000_001L
-    val parsed = HuyaSigner.parseAntiCode(antiCode(prefix = "prefix"))!!
+    val parsed = HuyaSigner.parseAntiCode(antiCode(fm = fm(prefix = "prefix")))!!
     val query = HuyaSigner.signQuery(
       antiCode = parsed,
       streamName = "stream1",

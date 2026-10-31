@@ -208,7 +208,8 @@ class SyncEngineTest {
     assertTrue(result.isSuccess)
     assertEquals(1, peers.size)
     assertEquals(42L, peers.first().deviceId)
-    assertEquals("secret-token", peers.first().sharedSecret)
+    // The engine strips the dashes so the secret is URL/QR friendly.
+    assertEquals("secrettoken", peers.first().sharedSecret)
   }
 
   @Test
