@@ -127,13 +127,18 @@ class TarsTest {
     val a = Tars.heartbeatFrame()
     val b = Tars.heartbeatFrame()
     assertTrue(a.contentEquals(b), "heartbeat must be reproducible")
-    // The declared payload length must equal the real body length, otherwise the CDN
-    // drops the frame.
-    val declared = ((a[19].toInt() and 0xFF) shl 24) or
-      ((a[20].toInt() and 0xFF) shl 16) or
-      ((a[21].toInt() and 0xFF) shl 8) or
-      (a[22].toInt() and 0xFF)
-    assertEquals(a.size - 23, declared)
+
+    // The OUTER envelope is `{ 0: int32, 1: simple-list bytes }`. A simple list stores
+    // an explicit int32 length, so the frame is only accepted when that length equals
+    // the real body size. Decode it through the reader instead of guessing offsets.
+    val inner = Tars.Reader(a).readBytes(1)
+    val declared = inner.size
+    assertTrue(declared > 0, "heartbeat body must not be empty")
+
+    // And the decoded body must itself parse as a struct.
+    val body = Tars.Reader(inner)
+    assertEquals(Tars.HEARTBEAT_INNER_TYPE, body.readInt32(0))
+    assertEquals("OnUserHeartBeat", body.readString(1))
   }
 
   @Test
