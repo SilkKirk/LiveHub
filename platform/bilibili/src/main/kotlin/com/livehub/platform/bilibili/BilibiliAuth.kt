@@ -98,7 +98,7 @@ class BilibiliAuth(
     .joinToString("; ")
 
   private fun parse(body: String, label: String): JsonObject = runCatching {
-    BilibiliApi.jsonStatic.parseToJsonElement(body).jsonObject
+    jsonStatic.parseToJsonElement(body).jsonObject
   }.getOrElse { error ->
     throw PlatformProtocolException("B站 $label 返回无法解析的 JSON", Platform.BILIBILI, error)
   }
@@ -107,9 +107,6 @@ class BilibiliAuth(
     const val URL_QR_GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
     const val URL_QR_POLL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
     private const val UA = "Mozilla/5.0"
-    private val jsonStatic = kotlinx.serialization.json.Json {
-      ignoreUnknownKeys = true
-      isLenient = true
-    }
+    private val jsonStatic = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
   }
 }
