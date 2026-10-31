@@ -102,10 +102,37 @@ GitHub Actions 运行 `41240663433` 全部通过：
 
 ---
 
-## 下一步
+## 第二轮迭代
 
-- [ ] B 站 QR 登录接入设置页 UI（`BilibiliAuth` 已完成，界面未接）
-- [ ] 关注列表拖拽排序
-- [ ] 分区订阅（快速入口）UI
-- [ ] 关注列表后台定时刷新（WorkManager 依赖已引入，未接）
-- [ ] 同步页的设备发现结果实时展示
+在上述绿灯基础上补齐了四项原先只有后端、没有界面的能力（commit `14c668e` 再次全绿）：
+
+| 功能 | 实现位置 | 说明 |
+| --- | --- | --- |
+| 分区订阅 | `CategorySubscriptionStore` + `HomeScreen` | 顶行固定显示已订阅分区；同样是带墓碑的同步记录，会随 `CATEGORIES` scope 同步 |
+| 关注拖拽排序 | `ReorderableFollowList` + `FollowStore.reorder` | 长按拖动；顺序写进每条记录的 `order` 字段并整体重新盖 HLC，所以排序本身也会同步 |
+| B 站扫码登录 | `BilibiliAuth` + `BilibiliLoginCard` + `QrCodeRenderer` | 轮询 `qrcode/poll`，登录成功后 `Set-Cookie` 并入共享 Cookie 存储 |
+| 关注后台刷新 | `FollowRefreshWorker` | WorkManager 每 30 分钟刷新开播状态；只在主播仍被关注时更新，不会把已取消的关注"复活" |
+
+顺带修掉一个缓存 bug：`FollowStore.records()` 原先用 `isNotEmpty()` 判断是否已缓存，
+导致空关注列表每次调用都重新解析 DataStore；改成可空哨兵。
+
+补记一个真实缺陷：
+
+9. **`FollowStore` 空列表缓存失效**
+   `if (cachedRecords.isNotEmpty()) return cachedRecords` 无法区分"未加载"和"已加载但为空"，
+   关注列表为空时每次读取都会重新解析 JSON。
+
+---
+
+## 当前状态
+
+- 编译、Lint、全模块单元测试、debug/release 打包、API 34 模拟器仪器测试：全绿
+- 产物：`livehub-debug-apk`（约 27 MB）
+
+## 后续可做
+
+- [ ] 同步页实时展示 mDNS 扫描到的设备（`SyncController.rememberPeer` 已就绪，UI 未接）
+- [ ] 配对流程走完整的 HTTP 握手（当前 `PairPeer` 只在本地登记）
+- [ ] 弹幕字号/透明度设置项接入设置页滑块
+- [ ] 播放器全屏/横屏手势
+
