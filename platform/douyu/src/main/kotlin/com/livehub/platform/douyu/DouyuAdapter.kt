@@ -27,7 +27,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
-import okio.ByteString.Companion.toByteString
+import okio.ByteString.Companion.encodeUtf8
 
 /**
  * Douyu integration.
@@ -105,8 +105,8 @@ class DouyuAdapter(
         request,
         object : WebSocketListener() {
           override fun onOpen(webSocket: WebSocket, response: Response) {
-            webSocket.send(DouyuDanmakuProtocol.loginRequest(roomId).toByteString())
-            webSocket.send(DouyuDanmakuProtocol.joinGroup(roomId).toByteString())
+            webSocket.send(DouyuDanmakuProtocol.loginRequest(roomId).encodeUtf8())
+            webSocket.send(DouyuDanmakuProtocol.joinGroup(roomId).encodeUtf8())
             trySend(DanmakuEvent.Connected)
             backoff.reset()
           }
@@ -153,7 +153,7 @@ class DouyuAdapter(
     val heartbeatJob = launch {
       while (true) {
         delay(DouyuDanmakuProtocol.HEARTBEAT_INTERVAL_MILLIS)
-        socket?.send(DouyuDanmakuProtocol.heartbeat().toByteString())
+        socket?.send(DouyuDanmakuProtocol.heartbeat().encodeUtf8())
       }
     }
 
@@ -165,7 +165,6 @@ class DouyuAdapter(
     }
   }.flowOn(Dispatchers.IO)
 
-  private fun Long.toDurationMillis() = kotlin.time.Duration.Companion.milliseconds(this)
 
   companion object {
     const val DANMAKU_URL = "wss://danmuproxy.douyu.com:8506/"
