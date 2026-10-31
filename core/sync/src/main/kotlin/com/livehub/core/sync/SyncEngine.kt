@@ -165,8 +165,7 @@ class SyncEngine(
   }
 
   /** Records a push to [peer] in the history shown in the sync screen. */
-  fun recordPush(peer: TrustedPeer, scope: SyncScope, itemCount: Int, success: Boolean, note: String? = null) {
-    record(
+  fun recordPush(peer: TrustedPeer, scope: SyncScope, itemCount: Int, success: Boolean, note: String? = null) {    record(
       SyncLogEntry(
         at = clock(),
         direction = SyncLogEntry.Direction.PUSH,
@@ -219,6 +218,9 @@ class SyncEngine(
   }
 
   fun peers(): List<TrustedPeer> = peersProvider()
+
+  /** Scopes this device is currently willing to exchange. */
+  fun enabledScopes(): Set<SyncScope> = targets.enabledScopes()
 
   private fun record(entry: SyncLogEntry) {
     synchronized(log) {

@@ -1,0 +1,74 @@
+name: Diagnostics
+
+# Fast feedback loop: compiles every module and uploads the full Gradle/Kotlin
+# diagnostics so failures can be inspected without waiting on the full CI pipeline.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: diag-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure Android SDK 37.2
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$SDK_ROOT" ANDROID_HOME="$SDK_ROOT"
+          SDKM="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 2 -name sdkmanager -type f 2>/dev/null | sort | tail -n1 || true)"
+          if [ -n "$SDKM" ]; then
+            yes 2>/dev/null | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-37.2" "build-tools;37.0.0" "platform-tools" >/dev/null || true
+          fi
+          ls "$SDK_ROOT/platforms" || true
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      - name: Compile all Kotlin
+        id: compile
+        continue-on-error: true
+        run: |
+          ./gradlew compileDebugKotlin compileReleaseKotlin --continue --stacktrace 2>&1 | tee compile.log
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          {
+            echo "## Compile diagnostics"
+            echo '```'
+            grep -E "^e: |^w: .*: (error|warning)|error:" compile.log | head -n 200 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload compile log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-log
+          path: compile.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Fail if compilation failed
+        if: steps.compile.outcome == 'failure'
+        run: exit 1

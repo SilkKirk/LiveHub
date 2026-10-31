@@ -8,11 +8,6 @@ kotlin {
     jvmToolchain(17)
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
-        // Keep the public surface explicit: no implicit API leakage between modules.
-        freeCompilerArgs.addAll(
-            "-jvm-default=all",
-            "-opt-in=kotlin.RequiresOptIn",
-        )
     }
 }
 
