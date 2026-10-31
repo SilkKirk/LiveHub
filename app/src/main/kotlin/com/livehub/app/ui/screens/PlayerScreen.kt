@@ -25,10 +25,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.app.ui.player.DanmakuOverlay
 import com.livehub.app.ui.player.LivePlayer
+import com.livehub.core.common.ViewerCountFormatter
 import com.livehub.core.model.StreamVariant
 
-/** Full screen player with a quality / line selector. */
+/** Full screen player with the danmaku overlay and a quality / line selector. */
 @Composable
 fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val variant: StreamVariant? = state.selectedVariant
@@ -42,10 +44,16 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
       LivePlayer(
         url = variant.url,
         isHls = variant.isHls,
-        danmakuEnabled = state.danmakuEnabled,
-        blockedKeywords = state.blockedKeywords,
-        roomKey = state.room?.key.orEmpty(),
         modifier = Modifier.fillMaxSize(),
+      )
+      DanmakuOverlay(
+        messages = state.danmaku,
+        enabled = state.danmakuEnabled,
+        blockedKeywords = state.blockedKeywords,
+        opacity = state.danmakuOpacity,
+        fontScale = state.danmakuFontScale,
+        areaFraction = state.danmakuAreaFraction,
+        modifier = Modifier.fillMaxSize().padding(top = 56.dp),
       )
     } else if (state.loading) {
       CircularProgressIndicator(
@@ -53,17 +61,12 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
         modifier = Modifier.align(Alignment.Center),
       )
     } else {
-      Column(
+      Text(
+        text = state.error ?: "无法播放该直播间",
+        color = Color.White,
+        style = MaterialTheme.typography.bodyLarge,
         modifier = Modifier.align(Alignment.Center).padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Text(
-          text = state.error ?: "无法播放该直播间",
-          color = Color.White,
-          style = MaterialTheme.typography.bodyLarge,
-        )
-      }
+      )
     }
 
     Row(
@@ -84,12 +87,22 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
           style = MaterialTheme.typography.titleMedium,
           maxLines = 1,
         )
-        Text(
-          text = state.room?.title.orEmpty(),
-          color = Color.White.copy(alpha = 0.75f),
-          style = MaterialTheme.typography.labelMedium,
-          maxLines = 1,
-        )
+        val subtitle = buildString {
+          append(state.room?.title.orEmpty())
+          if ((state.room?.viewerCount ?: 0) > 0) {
+            if (isNotEmpty()) append(" · ")
+            append(ViewerCountFormatter.format(state.room?.viewerCount ?: 0))
+            append("人观看")
+          }
+        }
+        if (subtitle.isNotBlank()) {
+          Text(
+            text = subtitle,
+            color = Color.White.copy(alpha = 0.75f),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+          )
+        }
       }
     }
 
@@ -103,9 +116,7 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
             selected = item.identity == variant?.identity,
             onClick = { onAction(UiAction.SelectVariant(item)) },
             label = {
-              Text(
-                text = listOfNotNull(item.qualityLabel, item.lineName).distinct().joinToString(" · "),
-              )
+              Text(listOfNotNull(item.qualityLabel, item.lineName).distinct().joinToString(" · "))
             },
           )
         }

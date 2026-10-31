@@ -33,6 +33,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private var roomsJob: Job? = null
   private var searchJob: Job? = null
   private var playbackJob: Job? = null
+  private var danmakuJob: Job? = null
   private var nextCursor: String? = null
   private var searchCursor: String? = null
 
@@ -301,6 +302,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             loading = false,
           )
         }
+        startDanmaku(streamer)
       } catch (error: Exception) {
         _state.update {
           it.copy(loading = false, error = error.message ?: "无法播放该直播间")
@@ -311,8 +313,38 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun closePlayer() {
     playbackJob?.cancel()
+    danmakuJob?.cancel()
     _state.update {
-      it.copy(screen = Screen.Home, room = null, variants = emptyList(), selectedVariant = null)
+      it.copy(
+        screen = Screen.Home,
+        room = null,
+        variants = emptyList(),
+        selectedVariant = null,
+        danmaku = emptyList(),
+      )
+    }
+  }
+
+  /**
+   * Subscribes to the platform danmaku stream for [streamer].
+   *
+   * Messages are capped so a very busy room cannot grow the state without bound; the
+   * overlay only needs the most recent window to animate.
+   */
+  private fun startDanmaku(streamer: Streamer) {
+    danmakuJob?.cancel()
+    danmakuJob = viewModelScope.launch {
+      runCatching {
+        container.platformGateway.danmaku(streamer.platform, streamer.roomId).collect { event ->
+          when (event) {
+            is com.livehub.platform.api.DanmakuEvent.Message -> _state.update { current ->
+              val next = (current.danmaku + event.message).takeLast(MAX_DANMAKU_BUFFER)
+              current.copy(danmaku = next)
+            }
+            else -> Unit
+          }
+        }
+      }
     }
   }
 
@@ -402,4 +434,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   /** Convenience for the UI: the currently selected category's display name. */
   fun categoryTitle(category: Category?): String = category?.name.orEmpty()
+
+  override fun onCleared() {
+    super.onCleared()
+    danmakuJob?.cancel()
+    container.syncController.stop()
+  }
+
+  private companion object {
+    const val MAX_DANMAKU_BUFFER = 200
+  }
 }
