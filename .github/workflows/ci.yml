@@ -46,7 +46,8 @@ jobs:
           fi
           ls "$SDK_ROOT/platforms" || true
           ls "$SDK_ROOT/build-tools" || true
-          echo "$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
       - name: Show toolchain versions
         run: |
