@@ -153,20 +153,34 @@ class BilibiliApi(
 
   // --------------------------------------------------------------------- search
 
+  /**
+   * Searches live rooms.
+   *
+   * A blank keyword short-circuits without a request, and any failure — unparseable JSON, a
+   * non-2xx status, a non-zero `code` — surfaces as "no results" rather than an exception.
+   * Search is the one place where an error message is less useful than an empty list: the
+   * reference client behaves the same way, and a transient failure would otherwise replace
+   * the result grid with a retry button the user did not ask for.
+   */
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
-    val cookie = ensureBuvidCookie()
+    val trimmed = keyword.trim()
+    if (trimmed.isEmpty()) return emptyList<Streamer>() to false
+    val cookie = runCatching { ensureBuvidCookie() }.getOrDefault("")
     val url = "$URL_SEARCH?context=&search_type=live&cover_type=user_cover&order=" +
-      "&keyword=${encode(keyword)}&category_id=&__refresh__=&_extra=&highlight=0" +
+      "&keyword=${encode(trimmed)}&category_id=&__refresh__=&_extra=&highlight=0" +
       "&single_column=0&page=$page"
-    val response = http.get(
-      url,
-      headers = buildMap {
-        put("User-Agent", UA_CHROME138)
-        put("Referer", "https://live.bilibili.com/")
-        if (cookie.isNotBlank()) put("Cookie", cookie)
-      },
-    )
-    val root = response.requireSuccess().let { parseObject(it.body, "search/type") }
+    val response = runCatching {
+      http.get(
+        url,
+        headers = buildMap {
+          put("User-Agent", UA_CHROME138)
+          put("Referer", "https://live.bilibili.com/")
+          if (cookie.isNotBlank()) put("Cookie", cookie)
+        },
+      ).requireSuccess()
+    }.getOrNull() ?: return emptyList<Streamer>() to false
+    val root = runCatching { parseObject(response.body, "search/type") }.getOrNull()
+      ?: return emptyList<Streamer>() to false
     val code = root["code"]?.jsonPrimitive?.intOrNull ?: -1
     if (code != 0) return emptyList<Streamer>() to false
     val users = root["data"]?.jsonObject?.get("result")?.jsonObject?.get("live_user")?.jsonArray

@@ -52,6 +52,14 @@ fun LivePlayer(
   /** Fills the surface instead of letterboxing; used for vertical full-bleed rooms. */
   zoomToFill: Boolean = false,
   /**
+   * Paused by the user via a double tap.
+   *
+   * A live stream cannot be seeked back, so pausing is a "hold the picture" control rather
+   * than real playback control: ExoPlayer keeps its buffer while paused and resumes at the
+   * live edge, which is what a double-tap-to-pause is expected to do here.
+   */
+  paused: Boolean = false,
+  /**
    * Reports the decoded picture's aspect ratio.
    *
    * The screen gates its danmaku overlay on this: without it a vertical stream sat in a
@@ -88,6 +96,11 @@ fun LivePlayer(
     player.setMediaSource(buildMediaSource(url, isHls))
     player.prepare()
     player.play()
+  }
+
+  // The caller owns the paused flag; keep the player in step with it.
+  LaunchedEffect(paused) {
+    if (paused) player.pause() else player.play()
   }
 
   // Aspect + first-frame detection share one listener so the overlay cannot turn on

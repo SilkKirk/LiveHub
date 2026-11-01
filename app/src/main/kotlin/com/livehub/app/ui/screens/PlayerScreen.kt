@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -59,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -94,6 +97,8 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var fullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
   var controlsVisible by remember { mutableStateOf(true) }
+  /** Pause is view-local: leaving the screen always resumes, so it never sticks. */
+  var paused by remember(state.room?.key) { mutableStateOf(false) }
   // Learned from the decoder. Null until the first frame is sized, which keeps the
   // surface at 16:9 instead of collapsing to zero height on open.
   var videoAspect by remember(state.room?.key) { mutableStateOf<Float?>(null) }
@@ -138,6 +143,7 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
           onAction = onAction,
           onVideoAspectRatioChanged = { aspect -> videoAspect = aspect.takeIf { it > 0f } },
           zoomToFill = verticalFullBleed,
+          paused = paused,
           playerError = playerError,
           onHttpFallback = { httpUrl -> httpFallbackUrl = httpUrl },
           onFatalError = { message ->
@@ -182,6 +188,34 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
           )
         }
 
+        // A paused live stream keeps showing the last frame, which is indistinguishable
+        // from a frozen one; a small badge says the user paused it on purpose.
+        if (paused && effectiveVariant != null) {
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = Color.Black.copy(alpha = 0.55f),
+            modifier = Modifier.align(Alignment.Center),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(16.dp),
+              )
+              Text(
+                text = "已暂停 · 双击继续",
+                color = Color.White.copy(alpha = 0.9f),
+                style = MaterialTheme.typography.labelSmall,
+              )
+            }
+          }
+        }
+
         // Round controls down the right edge, as in the reference player.
         if (controlsVisible) {
           SideControls(
@@ -196,16 +230,19 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
           )
         }
 
-        // In portrait a tap anywhere on the picture toggles the controls.
+        // Tap toggles the chrome; double tap toggles pause. Portrait only — full screen
+        // keeps the picture clean and relies on the floating bar. Declared in portrait
+        // only so the gesture layer never covers the full-screen controls.
         if (!fullscreen) {
           Box(
             modifier = Modifier
               .fillMaxSize()
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = { controlsVisible = !controlsVisible },
-              ),
+              .pointerInput(Unit) {
+                detectTapGestures(
+                  onTap = { controlsVisible = !controlsVisible },
+                  onDoubleTap = { paused = !paused },
+                )
+              },
           )
         }
       }
@@ -391,6 +428,7 @@ private fun VideoSurface(
   onAction: (UiAction) -> Unit,
   onVideoAspectRatioChanged: (Float) -> Unit,
   zoomToFill: Boolean,
+  paused: Boolean,
   playerError: String?,
   onHttpFallback: (String) -> Unit,
   onFatalError: (String) -> Unit,
@@ -403,6 +441,7 @@ private fun VideoSurface(
         url = variant.url,
         isHls = variant.isHls,
         zoomToFill = zoomToFill,
+        paused = paused,
         onVideoAspectRatioChanged = onVideoAspectRatioChanged,
         onFatalError = { error ->
           if (error.startsWith("http://") && !variant.url.startsWith("http://")) {
