@@ -62,9 +62,15 @@ jobs:
           if [ -n "${LINT_EXIT:-}" ]; then
             echo "=== lint log tail ==="
             tail -n 40 lint.log
-            # One annotation carrying the failure tail: the report file may not exist when
-            # lint itself fails before writing one, and stdout alone is unreadable via API.
-            SUMMARY="$(tail -n 25 lint.log | tr '\n' ' ' | tr -s ' ' | cut -c1-6000)"
+            echo "=== reports on disk ==="
+            ls -la app/build/reports 2>/dev/null || true
+            # One annotation carrying the *cause*, not the stack trace: grep the sections
+            # that actually name the problem. stdout alone is unreadable through the API.
+            SUMMARY="$(grep -E '^\* |What went wrong|Lint found|^e: |Error:|FAILURE' lint.log \
+              | head -n 30 | tr '\n' ' ' | tr -s ' ' | cut -c1-6000)"
+            if [ -z "$SUMMARY" ]; then
+              SUMMARY="$(head -n 30 lint.log | tr '\n' ' ' | tr -s ' ' | cut -c1-6000)"
+            fi
             echo "::error title=lint failed::${SUMMARY}"
           fi
           exit "${LINT_EXIT:-0}"
