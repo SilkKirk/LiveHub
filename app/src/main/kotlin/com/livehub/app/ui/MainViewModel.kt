@@ -244,7 +244,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun submitSearch() {
     val query = _state.value.searchQuery.trim()
-    if (query.isEmpty()) return
+    if (query.isEmpty()) {
+      // Telling the user why nothing happened beats a silent no-op.
+      _state.update { it.copy(message = "请输入要搜索的主播或直播间名称") }
+      return
+    }
     container.preferences.addSearchHistory(query)
     searchJob?.cancel()
     searchCursor = null
