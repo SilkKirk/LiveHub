@@ -535,7 +535,7 @@ class CrossDeviceSyncTest {
   fun `a pull past the payload cap returns every part`() = kotlinx.coroutines.test.runTest {
     phone.pairWith(tablet)
     repeat(SyncPayload.MAX_RECORDS_PER_PAYLOAD + 12) { index -> tablet.follow("p$index") }
-    assertTrue("the phone must start empty", phone.followedIds().isEmpty())
+    assertTrue(phone.followedIds().isEmpty(), "the phone must start empty")
 
     phone.syncWith(tablet)
 

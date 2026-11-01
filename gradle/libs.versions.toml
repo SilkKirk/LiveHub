@@ -84,6 +84,10 @@ mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+# Robolectric's Android runtime jar, resolved by Gradle so tests never download it at
+# runtime. The version has to match what the Robolectric release asks for; a mismatch shows
+# up as a missing SDK in offline mode rather than a silent refetch.
+robolectric-android-all-instrumented = { module = "org.robolectric:android-all-instrumented", version = "14-robolectric-10818077-i7" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
 compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4", version.ref = "composeUi" }

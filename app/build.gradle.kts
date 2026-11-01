@@ -155,8 +155,47 @@ dependencies {
     androidTestImplementation(libs.compose.ui.test.junit4)
 }
 
+/**
+ * Robolectric's Android runtime jar, fetched by Gradle instead of by Robolectric.
+ *
+ * By default Robolectric downloads `org.robolectric:android-all-instrumented` (151 MB for
+ * SDK 34) from Maven Central **inside the test JVM**, on every clean runner, with no shared
+ * cache. One slow or failed fetch then fails every Robolectric test with
+ * `initializationError: Failed to fetch maven artifact`, which reads exactly like a code
+ * failure and turned three CI runs red for no reason.
+ *
+ * Gradle already resolves and caches dependencies reliably, so the jar is resolved here and
+ * Robolectric is pointed at the directory in offline mode below. `gradle/actions/setup-gradle`
+ * persists the Gradle cache between runs, so this is a one-time download rather than a
+ * per-run gamble.
+ */
+val robolectricRuntime: Configuration by configurations.creating {
+    isTransitive = false
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+dependencies {
+    robolectricRuntime(libs.robolectric.android.all.instrumented)
+}
+
+val robolectricDependencyDir = layout.buildDirectory.dir("robolectric-runtime")
+
+val copyRobolectricRuntime by tasks.registering(Copy::class) {
+    group = "verification"
+    description = "Stages Robolectric's Android runtime so tests never fetch it at runtime."
+    from(robolectricRuntime)
+    into(robolectricDependencyDir)
+}
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // Always staged and always offline: if the artifact cannot be resolved the build fails
+    // with an ordinary Gradle resolution error naming the coordinate, which is far easier to
+    // act on than Robolectric's `initializationError` from inside a forked test JVM.
+    dependsOn(copyRobolectricRuntime)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", robolectricDependencyDir.get().asFile.absolutePath)
     testLogging {
         events("failed", "skipped")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
