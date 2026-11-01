@@ -322,9 +322,92 @@ CI 从一个"看不见原因的红灯"变成了能定位的红灯。期间修掉
 
 ### 仍未解决 / 下一轮
 
-- **抖音弹幕连不上**：WS URL 仍是裸地址，没有参考实现那套约 30 个 query 参数、`signature`、`room_id` 和 Cookie；而且从未解析过 `room.id_str`。这是本轮唯一确认"完全不可用"的能力，需要按 `DouyinDanmakuClientAndroid.kt:281-328` 移植。
-- **抖音签名不一致**：`rooms()` 用 `DouyinABogus.aBogus`（与参考实现逐字节一致），但 `search`/`roomInfo`/`findInFeed` 用的是 `DouyinSigner.aBogus`（自造的 md5 方案），三个接口必然验签失败。
-- **抖音 HTTP 风控画像缺失**：`headers()` 没有 Cookie，`msToken` 传空串，`browser_version` 与 UA 和参考实现不一致。
-- **斗鱼清晰度还没走标签路径**：`DouyuQuality.resolveRate`（原画/高清/标清、蓝光8M、bit 兜底）仍是死代码，`playback()` 只接受 `Int?`。
-- **虎牙列表分页**：参考实现"本页没有新 id 就停"，本项目用"本页条数 ≥ pageSize"，遇到重复页会一直加载。
-- **未做真机验证**：以上都是本机 HTTP/WebSocket 探针 + 单测的结论，真实设备上的 mDNS、CDN 可达性仍未验证。
+- ~~**抖音弹幕连不上**~~：第七轮已补上完整握手（见下）。
+- ~~**抖音签名不一致**~~：第七轮已合并为唯一实现。
+- ~~**斗鱼清晰度还没走标签路径**~~：第七轮已接上。
+- ~~**虎牙列表分页**~~：第七轮已改为读服务端元数据。
+- **抖音 HTTP 风控画像仍不完整**：`headers()` 已补 `Cookie`，`msToken` 已改为真实 107 字符，UA/`browser_version` 已对齐，但**未在真机验证过服务端是否接受**。
+- **未做真机验证**：以上都是本机 HTTP/WebSocket 探针 + 单测的结论，真实设备上的 mDNS、CDN 可达性、弹幕握手仍未验证。
+
+---
+
+## 第七轮迭代：抖音握手、虎牙分页、斗鱼标签清晰度
+
+### 抖音弹幕握手
+
+上一轮把抖音列为"唯一确认完全不可用"的能力。原因有二，本轮都已修：
+
+1. **WS URL 是裸地址**。抖音只接受携带约 30 个 query 参数 + `signature` 的
+   `webcast/im/push/v2/` 连接，而 `signature` 由站点自己的 `webmssdk.js` 计算。
+   新增 `DouyinDanmakuHandshake`（纯逻辑，可单测）负责拼参数、从房间页解析
+   `user_unique_id`、在三个推送域名间轮换；`DouyinRhinoSigner` 用 Rhino（与斗鱼
+   签名同一个引擎）求值 `getMSSDKSignature`。
+
+   **本机验证**：先按 `seedBrowserGlobals` 注入 `window`/`navigator`/`document`/
+   `location`/`screen`，再调用 `getMSSDKSignature(stub, ua)`，在 V8 下 **12/12 次**
+   返回干净的 16 字符 token。MD5 stub 用单测钉住，digest 与我独立用 Node 算的完全一致
+   （`b5fe08c8a92fb38880f89a3a56a46b43`）。
+
+2. **四个接口里三个用了自造签名**。`rooms()` 调用的是真的 `aBogus`（我逐行比对过，
+   与参考 `generateABogus` 除函数名外**逐字节相同**），但 `search`/`roomInfo`/
+   `findInFeed` 调用的是自造的 `DouyinSigner.sign`/`xBogus`。自造签名不可能通过验签，
+   那三个接口必然失败。自造实现已删除，模块里现在只有一个 `a_bogus`，不会再选错。
+
+顺带按参考补回：`Cookie`（缺失时抖音返回 HTTP 200 空 body，与"分区为空"无法区分）、
+真实 107 字符 `msToken`（原先传空串）、参考 UA 与 `browser_version`、
+`internalExt` 从 `Response` 字段 5 读而非从 PushFrame 读、只有 `needAck`
+（字段 9）为真时才按该帧 logId 回 ack（定时无脑 ack 服务端不认）。
+
+### 虎牙分页：读服务端元数据，而不是猜
+
+**实测**：`iPageSize` 被**完全忽略**——请求 10/20/30/60 都返回 120 条并声称
+`iPageSize: 120`；而响应确实带 `iPageNo`/`iTotal`/`iTotalPage`。
+
+旧停止条件是"条数 ≥ 请求的 pageSize"，前五页永远为真，只是恰好第 6 页为空才停下来；
+一个返回重复页的分区会**无限加载**。规则已抽成 `hasMorePages()` 并用单测覆盖中页、
+末页、耗尽（`iTotal: 0` + `iTotalPage: 1`）与元数据缺失四种情况。
+
+### 斗鱼：标签清晰度路径接上了
+
+**rate 码跨房间不稳定**：同一个 `高清`，一个房间是 `2`，另一个房间是 `8`。旧 `select()`
+只按记忆的码匹配，匹配不到就直接跳 `原画`——用户换房间后清晰度选择被悄悄丢掉。
+
+现在 `select()` 会把不可用的记忆码经 `resolveRate(labelFor(code), …)` 映射一遍。
+`resolveRate` 本来就是干这个的，但**没有任何调用方**，只有它自己的测试在用。
+
+断言是**逐条推演**得到的，不是猜的：
+
+| 场景 | 结果 |
+| --- | --- |
+| 高清 记为 2，本房间编号 8 | → 8 |
+| 标清 记为 1，本房间编号 7 | → 7 |
+| 高清，房间只有 原画/标清 | → 1（关键字链走到"最高 rate"），且一定是房间真实提供的码 |
+
+第三条我第一版断言写成 0（原画），推演后发现是 1，改的是断言而不是代码。
+
+### 本轮踩到的坑（都是断言写错，不是实现错）
+
+| 断言 | 实际情况 |
+| --- | --- |
+| `a_bogus` URL safe | 是 s4 字母表 base64，必然含 `/`、`+`、`=`；入 URL 时百分号编码 |
+| `a_bogus` 确定性 | `generateRc4BbStr` 把 `System.currentTimeMillis()` 写进 payload（`b[16]`），每次调用本就不同 |
+| 房间号从 `roomInfo` 块取 | 实测四个真实房间页，页面里是 `\"roomInfo\":{\"roomId\":\"\"}`——**空串**，数字 ID 必须走 API 兜底 |
+| `hexToBytes` 位置 | 写在另一个测试类里，虎牙测试源集编译失败，**一个 JVM 用例都没跑** |
+
+### 当前状态（run 114，commit `7142c1a`）
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 通过（0 error） |
+| JVM 单元测试 | ✅ 通过 |
+| `:app:assembleDebug` / `assembleRelease` | ✅ |
+| 仪器测试（API 34 模拟器） | ✅ 通过 |
+| debug APK 产物 | ✅ 27.3 MB |
+
+### 下一轮
+
+- **抖音握手真机验证**：socket 之前的一切都有测试覆盖，但握手最后一步只能靠实际连接确认。
+- **抖音频道路径**：`rooms()` 传的 `partition` 目前是否被服务端尊重仍未验证（参考实现记录过被忽略）。
+- **播放器手势**：全屏/横屏手势、双击暂停仍未做。
+- **同步增量分页**：关注列表同步目前一次传全量。
+
