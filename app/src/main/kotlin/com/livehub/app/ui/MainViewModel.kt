@@ -78,6 +78,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.ToggleFollow -> toggleFollow(action.streamer)
       is UiAction.UpdateQuery -> _state.update { it.copy(searchQuery = action.query) }
       UiAction.SubmitSearch -> submitSearch()
+      UiAction.LoadMoreSearch -> loadMoreSearch()
+      UiAction.ClearSearchHistory -> clearSearchHistory()
       is UiAction.UseHistory -> {
         _state.update { it.copy(searchQuery = action.keyword) }
         submitSearch()
@@ -236,12 +238,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     if (query.isEmpty()) return
     container.preferences.addSearchHistory(query)
     searchJob?.cancel()
+    searchCursor = null
     searchJob = viewModelScope.launch {
       _state.update {
         it.copy(
           screen = Screen.Search,
           loading = true,
+          loadingMore = false,
           searchResults = emptyList(),
+          searchHasMore = false,
           error = null,
           searchHistory = container.preferences.settings.searchHistory,
         )
@@ -249,11 +254,49 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       try {
         val page = container.platformRepository.search(_state.value.platform, query)
         searchCursor = page.nextCursor
-        _state.update { it.copy(searchResults = page.rooms, loading = false) }
+        _state.update {
+          it.copy(
+            searchResults = page.rooms,
+            searchHasMore = page.hasMore,
+            loading = false,
+          )
+        }
       } catch (error: Exception) {
         _state.update { it.copy(loading = false, error = error.message ?: "搜索失败") }
       }
     }
+  }
+
+  /** Appends the next page of search results, if the platform reported one. */
+  private fun loadMoreSearch() {
+    val current = _state.value
+    val query = current.searchQuery.trim()
+    val cursor = searchCursor
+    if (query.isEmpty() || cursor == null || current.loading || current.loadingMore) return
+
+    searchJob = viewModelScope.launch {
+      _state.update { it.copy(loadingMore = true) }
+      try {
+        val page = container.platformRepository.search(current.platform, query, cursor)
+        searchCursor = page.nextCursor
+        _state.update {
+          it.copy(
+            searchResults = (it.searchResults + page.rooms).distinctBy { room -> room.key },
+            searchHasMore = page.hasMore,
+            loadingMore = false,
+          )
+        }
+      } catch (error: Exception) {
+        _state.update {
+          it.copy(loadingMore = false, message = error.message ?: "加载更多失败")
+        }
+      }
+    }
+  }
+
+  private fun clearSearchHistory() {
+    container.preferences.clearSearchHistory()
+    _state.update { it.copy(searchHistory = emptyList()) }
   }
 
   // -------------------------------------------------------------------- follows

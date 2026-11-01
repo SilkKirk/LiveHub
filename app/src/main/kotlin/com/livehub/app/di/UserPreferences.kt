@@ -91,6 +91,8 @@ class UserPreferences(private val context: Context) {
     }
   }
 
+  fun clearSearchHistory() = update { it.copy(searchHistory = emptyList()) }
+
   fun setLastPlatform(platform: Platform) = update { it.copy(lastPlatform = platform.id) }
 
   fun setPreferredQuality(platform: Platform, quality: Int) = update {

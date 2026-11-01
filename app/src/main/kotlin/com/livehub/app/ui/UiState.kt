@@ -24,6 +24,8 @@ data class UiState(
   val searchQuery: String = "",
   val searchResults: List<Streamer> = emptyList(),
   val searchHistory: List<String> = emptyList(),
+  /** Cursor for the next page of search results, null when exhausted. */
+  val searchHasMore: Boolean = false,
   val room: Streamer? = null,
   val variants: List<StreamVariant> = emptyList(),
   val selectedVariant: StreamVariant? = null,
@@ -77,6 +79,10 @@ sealed interface UiAction {
   data object SubmitSearch : UiAction
 
   data class UseHistory(val keyword: String) : UiAction
+
+  data object ClearSearchHistory : UiAction
+
+  data object LoadMoreSearch : UiAction
 
   data object Back : UiAction
 
