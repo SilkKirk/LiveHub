@@ -218,6 +218,16 @@ private fun ScopeCard(state: UiState, onAction: (UiAction) -> Unit) {
 
 @Composable
 private fun SyncLogRow(entry: SyncLogEntry, timeFormat: SimpleDateFormat) {
+  // The count is the point of the row, so it is always rendered: before this, the row only
+  // showed `note`, which is null for a successful push, so a transfer of twelve records
+  // appeared as a bare timestamp with no indication that anything moved.
+  val detail = buildString {
+    append(if (entry.direction == SyncLogEntry.Direction.PUSH) "发送 " else "接收 ")
+    append(entry.itemCount)
+    append(" 条")
+    entry.note?.takeIf { it.isNotBlank() && !it.contains("条") }?.let { append(" · ").append(it) }
+  }
+
   Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
     Text(
       text = if (entry.direction == SyncLogEntry.Direction.PUSH) "↑" else "↓",
@@ -232,7 +242,7 @@ private fun SyncLogRow(entry: SyncLogEntry, timeFormat: SimpleDateFormat) {
     Column(modifier = Modifier.weight(1f)) {
       Text("${entry.scope} · ${entry.peerName}", style = MaterialTheme.typography.bodyMedium)
       Text(
-        text = "${timeFormat.format(Date(entry.at))}  ${entry.note.orEmpty()}",
+        text = "${timeFormat.format(Date(entry.at))}  $detail",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
