@@ -154,7 +154,10 @@ class DouyinApi(private val http: HttpClient) {
       coverUrl = firstImage(room?.get("cover")),
       avatarUrl = firstImage(owner?.get("avatar_thumb")),
       viewerCount = viewers,
-      isLive = (room?.get("status")?.jsonPrimitive?.intOrNull ?: 2) == 2,
+      // The partition endpoint only returns rooms that are on air, so no status check is
+      // needed here. Reading `room.status` was wrong: that field is not the live flag in
+      // this payload, and it marked every card as 未开播.
+      isLive = true,
       updatedAt = System.currentTimeMillis(),
     )
   }

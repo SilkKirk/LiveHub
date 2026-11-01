@@ -116,7 +116,9 @@ fun LivePlayer(
       factory = { viewContext ->
         PlayerView(viewContext).apply {
           this.player = player
-          useController = true
+          // The screen draws its own controls (round side buttons + settings sheet); the
+          // Media3 controller would stack a second, differently styled set on top.
+          useController = false
           setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
           resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
           keepScreenOn = true
@@ -133,7 +135,13 @@ fun LivePlayer(
   }
 }
 
-/** Builds a media source with the headers the streaming CDNs require. */
+/**
+ * Builds a media source with the headers the streaming CDNs require.
+ *
+ * Every platform CDN rejects requests without the right `Referer` — Douyu answers 403,
+ * Bilibili and Douyin behave the same way. The origin is derived from the stream URL
+ * itself rather than passed in, so a new platform cannot forget it.
+ */
 @androidx.annotation.OptIn(UnstableApi::class)
 fun buildMediaSource(
   url: String,
@@ -143,18 +151,41 @@ fun buildMediaSource(
       "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
   referer: String? = null,
 ): MediaSource {
+  val headers = buildMap {
+    put("User-Agent", userAgent)
+    val resolved = referer ?: refererFor(url)
+    if (resolved != null) put("Referer", resolved)
+  }
+
   val httpFactory = DefaultHttpDataSource.Factory()
-    .setUserAgent(userAgent)
     .setAllowCrossProtocolRedirects(true)
     .setConnectTimeoutMs(15_000)
     .setReadTimeoutMs(30_000)
-    .apply { if (referer != null) setDefaultRequestProperties(mapOf("Referer" to referer)) }
+    .setDefaultRequestProperties(headers)
 
   val mediaItem = MediaItem.fromUri(url)
   return if (isHls || url.contains(".m3u8", ignoreCase = true)) {
     HlsMediaSource.Factory(httpFactory).createMediaSource(mediaItem)
   } else {
     ProgressiveMediaSource.Factory(httpFactory).createMediaSource(mediaItem)
+  }
+}
+
+/**
+ * The `Referer` each CDN demands, matched on the stream host.
+ *
+ * Huya is matched first because its CDN hostnames (`*.msstatic.com`, `ws-*`) carry no
+ * platform marker; the play URLs still contain `huya` in practice, and a wrong Referer
+ * only costs a retry.
+ */
+internal fun refererFor(url: String): String? {
+  val lower = url.lowercase()
+  return when {
+    "huya" in lower -> "https://www.huya.com/"
+    "bilibili" in lower || "bilivideo" in lower -> "https://live.bilibili.com/"
+    "douyin" in lower || "douyincdn" in lower -> "https://live.douyin.com/"
+    "douyu" in lower || "douyucdn" in lower -> "https://www.douyu.com/"
+    else -> null
   }
 }
 
