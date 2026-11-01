@@ -27,3 +27,13 @@
 # Platform adapters are resolved reflectively by the module list only, but keep the
 # public API surface so the adapters stay constructible after shrinking.
 -keep class com.livehub.platform.** { *; }
+
+# Rhino evaluates Douyu's signing script at runtime. R8 cannot see that reflection, so the
+# engine and the classes it instantiates have to be kept verbatim.
+-keep class org.mozilla.javascript.** { *; }
+-dontwarn org.mozilla.javascript.**
+-keepclassmembers class org.mozilla.javascript.** { public *; }
+
+# Rhino references java.beans / javax.script which are absent on Android.
+-dontwarn java.beans.**
+-dontwarn javax.script.**
