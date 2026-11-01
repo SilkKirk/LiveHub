@@ -64,7 +64,7 @@ class FollowOrderingTest {
 
     // Negative clamps to the front.
     assertEquals(listOf(b.key, a.key), FollowOrdering.move(listOf(a, b), b, -5))
-    // Past the end clamps to the last slot, which for the first item means it stays put.
+    // Past the end clamps to the final slot.
     assertEquals(listOf(b.key, a.key), FollowOrdering.move(listOf(a, b), a, 99))
   }
 

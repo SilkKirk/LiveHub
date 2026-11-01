@@ -117,17 +117,10 @@ object FollowOrdering {
    */
   fun move(ordered: List<Streamer>, moved: Streamer, toIndex: Int): List<String> {
     if (ordered.isEmpty()) return emptyList()
-    val fromIndex = ordered.indexOfFirst { it.key == moved.key }
-    if (fromIndex < 0) return ordered.map { it.key }
-
     val without = ordered.filterNot { it.key == moved.key }
-    val target = toIndex.coerceIn(0, ordered.size - 1)
-
-    // Dropping below the original position lands one slot earlier once the item is
-    // lifted out of the list.
-    val insertAt = if (target > fromIndex) target - 1 else target
+    val target = toIndex.coerceIn(0, without.size)
     val result = without.toMutableList()
-    result.add(insertAt.coerceIn(0, without.size), moved)
+    result.add(target, moved)
     return result.map { it.key }
   }
 }
