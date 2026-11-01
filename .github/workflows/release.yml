@@ -1,8 +1,7 @@
 name: Release
 
-# Tagging is what publishes: `git tag v0.2.0 && git push --tags` builds a signed-if-
-# configured APK and attaches it to a GitHub Release. Pushing a tag is the only step a
-# human needs to perform.
+# Tagging is what publishes: `git tag v0.2.0 && git push origin v0.2.0` builds an APK
+# and attaches it to a GitHub Release. The tag push is the only manual step.
 on:
   push:
     tags: [ 'v*' ]
@@ -28,6 +27,13 @@ jobs:
     name: Build & publish APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # `secrets` is not available inside a step-level `if:` expression (the workflow
+      # would fail validation), so it is lifted into the env context first.
+      KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+      STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v5
 
@@ -35,12 +41,12 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "name=LiveHub ${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
@@ -65,57 +71,60 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
-      # A release keystore is optional. Without it the APK is signed with the debug key
-      # so it stays installable; with it, the artifact is a proper release build.
-      - name: Decode keystore
-        id: keystore
-        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
-        env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+      # A release keystore is optional. Without one the debug APK is published instead:
+      # it is still installable, just signed with the throwaway debug key.
+      - name: Configure release signing
+        id: signing
         run: |
           set -euo pipefail
-          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > livehub-release.jks
-          cat > keystore.properties <<EOF
-          storeFile=../livehub-release.jks
-          storePassword=${{ secrets.RELEASE_STORE_PASSWORD }}
-          keyAlias=${{ secrets.RELEASE_KEY_ALIAS }}
-          keyPassword=${{ secrets.RELEASE_KEY_PASSWORD }}
-          EOF
-          echo "signed=true" >> "$GITHUB_OUTPUT"
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > livehub-release.jks
+            {
+              echo "storeFile=../livehub-release.jks"
+              echo "storePassword=${STORE_PASSWORD}"
+              echo "keyAlias=${KEY_ALIAS}"
+              echo "keyPassword=${KEY_PASSWORD}"
+            } > keystore.properties
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Release keystore configured."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "No release keystore; publishing the debug-signed APK."
+          fi
 
-      - name: Build release APK
-        if: ${{ steps.keystore.outputs.signed == 'true' }}
-        run: ./gradlew :app:assembleRelease --stacktrace
-
-      - name: Build debug APK (fallback when no signing key is configured)
-        if: ${{ steps.keystore.outputs.signed != 'true' }}
-        run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Assemble APK
+        id: build
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            ./gradlew :app:assembleRelease --stacktrace
+            echo "src=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+            echo "variant=release" >> "$GITHUB_OUTPUT"
+          else
+            ./gradlew :app:assembleDebug --stacktrace
+            echo "src=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "variant=debug" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Collect APK
         id: apk
         run: |
           set -euo pipefail
+          SRC="${{ steps.build.outputs.src }}"
+          VARIANT="${{ steps.build.outputs.variant }}"
+          NAME="LiveHub-${{ steps.meta.outputs.tag }}-${VARIANT}.apk"
           mkdir -p dist
-          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
-            SRC=app/build/outputs/apk/release/app-release.apk
-            SUFFIX=release
-          else
-            SRC=app/build/outputs/apk/debug/app-debug.apk
-            SUFFIX=debug
-          fi
-          NAME="LiveHub-${{ steps.meta.outputs.tag }}-${SUFFIX}.apk"
           cp "$SRC" "dist/$NAME"
-          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          ls -la dist
-          # Record the exact commit and build identity alongside the binary.
+          SHA="$(sha256sum "dist/$NAME" | cut -d' ' -f1)"
           {
             echo "tag: ${{ steps.meta.outputs.tag }}"
             echo "commit: ${GITHUB_SHA}"
             echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "variant: ${SUFFIX}"
-            echo "sha256: $(sha256sum "dist/$NAME" | cut -d' ' -f1)"
+            echo "variant: ${VARIANT}"
+            echo "sha256: ${SHA}"
           } > "dist/$NAME.sha256.txt"
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+          ls -la dist
           cat "dist/$NAME.sha256.txt"
 
       - name: Publish GitHub Release
@@ -123,6 +132,8 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.name }}
+          # The tag may already exist (created by hand when cutting the release).
+          make_latest: true
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
@@ -131,9 +142,9 @@ jobs:
           body: |
             LiveHub 聚合直播客户端 ${{ steps.meta.outputs.tag }}
 
-            支持斗鱼、虎牙、抖音、哔哩哔哩直播，并通过局域网在设备间同步关注列表。
+            支持斗鱼、虎牙、抖音、哔哩哔哩直播，并在同一局域网内于设备之间同步关注列表。
 
-            **安装**：下载下方 APK，在手机上允许「安装未知应用」即可。
-            构建产物的 SHA-256 见 `*.sha256.txt`。
+            **安装**：下载下方 APK，在手机上允许「安装未知应用」后安装。
+            构建产物的 SHA-256 校验值见 `*.sha256.txt`。
 
             > 本项目仅供学习与技术交流，直播内容与数据版权归各平台所有。
