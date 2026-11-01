@@ -214,7 +214,14 @@ jobs:
           api-level: 34
           target: google_atd
           arch: x86_64
+          # The action defaults to 2 cores and a small RAM budget. The runner has 4
+          # vCPUs and Gradle is idle while the tests run (the APKs are built above), so
+          # the device can have all of them: boot and Compose rendering are the two
+          # things that actually cost time here.
+          cores: 4
+          ram-size: 2048M
           disable-animations: true
+          disable-spellchecker: true
           script: |
             set +e
             ./gradlew connectedDebugAndroidTest --stacktrace > "$GITHUB_WORKSPACE/instrumented.log" 2>&1

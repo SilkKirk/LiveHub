@@ -2,10 +2,14 @@ name: Diagnostics
 
 # Fast feedback loop: compiles every module and uploads the full Gradle/Kotlin
 # diagnostics so failures can be inspected without waiting on the full CI pipeline.
+#
+# Triggered by hand only. It used to also fire on every push to main, where it compiled
+# the same modules as Android CI's `verify` job for the same commit, competing for the
+# same Gradle cache and adding a minute of runner time to every push. Keep it for the
+# case the comment above describes — a failure you want the compile log for — not as a
+# second automatic build.
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 concurrency:
   group: diag-${{ github.ref }}
