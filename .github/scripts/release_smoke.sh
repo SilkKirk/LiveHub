@@ -37,6 +37,12 @@ fi
 echo "installed"
 
 adb logcat -c || true
+# The ATD image boots with the screen off and no launcher, so a capture taken without waking
+# it came out as a single flat colour even though the app had drawn its first frame. Waking
+# and dismissing the keyguard makes the screenshot an actual check that something rendered.
+adb shell input keyevent KEYCODE_WAKEUP > /dev/null 2>&1 || true
+adb shell wm dismiss-keyguard > /dev/null 2>&1 || true
+sleep 1
 adb shell am start -W -n "$ACTIVITY" > "$OUT/start.txt" 2>&1 || true
 cat "$OUT/start.txt"
 
@@ -53,7 +59,21 @@ fi
 
 if adb shell pidof "$PACKAGE" > "$OUT/pid.txt" 2>&1; then
   echo "release APK is alive after ${WAIT_SECONDS}s (pid $(cat "$OUT/pid.txt"))"
+  adb shell input keyevent KEYCODE_WAKEUP > /dev/null 2>&1 || true
   adb exec-out screencap -p > "$OUT/launch.png" 2>/dev/null || true
+
+  # Alive is not the same as showing something. A Compose error that leaves a blank window
+  # still keeps the process running, so the resumed activity is checked explicitly: if our
+  # activity is not the one on screen, the app either crashed back to nothing or never came
+  # to the foreground. Text-based, unlike decoding the screenshot.
+  adb shell dumpsys activity activities > "$OUT/activities.txt" 2>&1 || true
+  if grep -q "ResumedActivity.*$PACKAGE/" "$OUT/activities.txt"; then
+    echo "release activity is resumed and on screen"
+  else
+    echo "::error::release activity is not resumed after ${WAIT_SECONDS}s"
+    grep -iE "ResumedActivity|$PACKAGE" "$OUT/activities.txt" | head -n 20 || true
+    FAILED=1
+  fi
 else
   echo "::error::release APK is not running after ${WAIT_SECONDS}s"
   cat "$OUT/pid.txt" 2>/dev/null || true
