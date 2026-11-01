@@ -28,12 +28,16 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.EmptyState
@@ -52,16 +56,16 @@ import com.livehub.app.ui.components.StreamerGridSkeleton
 @Composable
 fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val followedKeys = remember(state.followed) { state.followed.map { it.key }.toSet() }
-  val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+  val gridState = rememberLazyGridState()
 
-  val shouldLoadMore by androidx.compose.runtime.remember {
-    androidx.compose.runtime.derivedStateOf {
+  val shouldLoadMore by remember {
+    derivedStateOf {
       val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
       state.searchHasMore && last >= state.searchResults.size - 4 && state.searchResults.isNotEmpty()
     }
   }
 
-  androidx.compose.runtime.LaunchedEffect(shouldLoadMore, state.searchResults.size) {
+  LaunchedEffect(shouldLoadMore, state.searchResults.size) {
     if (shouldLoadMore) onAction(UiAction.LoadMoreSearch)
   }
 
