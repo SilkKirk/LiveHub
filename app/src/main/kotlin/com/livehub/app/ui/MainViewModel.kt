@@ -926,7 +926,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   fun categoryTitle(category: Category?): String = category?.name.orEmpty()
 
   override fun onCleared() {
-    super.onCleared()
     danmakuJob?.cancel()
     container.syncController.stop()
   }

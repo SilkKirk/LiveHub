@@ -74,10 +74,10 @@ fun DanmakuOverlay(
   messages: List<com.livehub.core.model.DanmakuMessage>,
   enabled: Boolean,
   blockedKeywords: List<String>,
+  modifier: Modifier = Modifier,
   opacity: Float = 1f,
   fontScale: Float = 1f,
   areaFraction: Float = 0.5f,
-  modifier: Modifier = Modifier,
 ) {
   if (!enabled) return
 

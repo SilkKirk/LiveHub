@@ -37,12 +37,12 @@ import androidx.compose.ui.unit.dp
 fun StateMessage(
   icon: ImageVector,
   title: String,
+  modifier: Modifier = Modifier,
   description: String? = null,
   actionLabel: String? = null,
   onAction: (() -> Unit)? = null,
   secondaryLabel: String? = null,
   onSecondary: (() -> Unit)? = null,
-  modifier: Modifier = Modifier,
 ) {
   Column(
     modifier = modifier.fillMaxSize().padding(32.dp),
@@ -101,11 +101,11 @@ fun ErrorState(message: String, onRetry: () -> Unit, modifier: Modifier = Modifi
 @Composable
 fun EmptyState(
   title: String,
+  modifier: Modifier = Modifier,
   description: String? = null,
   actionLabel: String? = null,
   onAction: (() -> Unit)? = null,
   icon: ImageVector = Icons.Outlined.LiveTv,
-  modifier: Modifier = Modifier,
 ) {
   StateMessage(
     icon = icon,

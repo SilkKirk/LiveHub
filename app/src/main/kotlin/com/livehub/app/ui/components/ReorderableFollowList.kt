@@ -74,7 +74,7 @@ fun ReorderableFollowList(
         isDragging = isDragging,
         onClick = { onClick(streamer) },
         onRemove = onRemove?.let { remove -> { remove(streamer) } },
-        dragModifier = Modifier.pointerInput(streamer.key, streamers.size) {
+        modifier = Modifier.pointerInput(streamer.key, streamers.size) {
           detectDragGesturesAfterLongPress(
             onDragStart = {
               draggingKey = streamer.key
@@ -115,7 +115,7 @@ private fun FollowRow(
   streamer: Streamer,
   isDragging: Boolean,
   onClick: () -> Unit,
-  dragModifier: Modifier,
+  modifier: Modifier,
   onRemove: (() -> Unit)? = null,
 ) {
   // A live room gets the primary-colour border the reference uses, so a long list can be
@@ -134,14 +134,13 @@ private fun FollowRow(
     shape = RoundedCornerShape(12.dp),
     border = border,
     tonalElevation = if (isDragging) 6.dp else 0.dp,
-    modifier = Modifier
+    modifier = modifier
       .fillMaxWidth()
       .then(if (isDragging) Modifier.zIndex(1f) else Modifier)
       .clip(RoundedCornerShape(12.dp))
       // The whole row opens the room; the star used to be the only tap target, which
       // made the follow list feel dead.
-      .clickable(onClick = onClick)
-      .then(dragModifier),
+      .clickable(onClick = onClick),
   ) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(10.dp),

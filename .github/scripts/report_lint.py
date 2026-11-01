@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Turns the Android lint XML report into GitHub check-run annotations.
 
-Lint writes its findings to a report file and prints only a one-line failure to the
-job log. Reading the raw log back through the API needs admin rights, but annotations
-are readable by anyone with `checks: read`, so a finding is echoed as a
-``::error file=…,line=…::`` workflow command.
+Lint writes its findings to a report file and prints only a one-line failure to the job
+log. Reading the raw log back through the API needs admin rights, but annotations are
+readable by anyone with `checks: read`, so each finding is echoed as a workflow command.
+
+Severity mapping matters: a lint *warning* annotated as `::error` inflates the error count
+and hides the finding that actually failed the build, which is exactly what happened once
+already. Warnings stay warnings, and the errors are additionally summarised in one
+annotation so they can be read without scrolling.
 
 Prints nothing and exits 0 when there is no report, so the step never fails on its own.
 """
@@ -29,9 +33,11 @@ def main() -> int:
         return 0
 
     findings = root.findall("issue")
-    print(f"{len(findings)} lint finding(s)")
+    errors = [i for i in findings if (i.get("severity") or "").lower() == "error"]
+    warnings = [i for i in findings if (i.get("severity") or "").lower() != "error"]
+    print(f"{len(findings)} lint finding(s): {len(errors)} error(s), {len(warnings)} warning(s)")
 
-    for issue in findings[:MAX_ANNOTATIONS]:
+    def describe(issue):
         severity = issue.get("severity") or "?"
         issue_id = issue.get("id") or "?"
         message = " ".join((issue.get("message") or "").split())
@@ -41,10 +47,22 @@ def main() -> int:
         # GitHub rejects annotations whose path is not repo-relative.
         if path.startswith(os.getcwd() + os.sep):
             path = os.path.relpath(path, os.getcwd())
-        print(f"::error file={path},line={line}::{severity}: {issue_id}: {message}")
+        return severity, issue_id, message, path, line
 
-    if len(findings) > MAX_ANNOTATIONS:
-        print(f"... and {len(findings) - MAX_ANNOTATIONS} more")
+    for issue in findings[:MAX_ANNOTATIONS]:
+        severity, issue_id, message, path, line = describe(issue)
+        command = "error" if severity.lower() == "error" else "warning"
+        print(f"::{command} file={path},line={line}::{severity}: {issue_id}: {message}")
+
+    # One annotation that names only the real errors, so the cause of a red build is
+    # readable at a glance instead of being buried among version-bump advisories.
+    if errors:
+        summary = " | ".join(
+            f"{issue_id} @ {path}:{line} — {message[:160]}"
+            for _, issue_id, message, path, line in (describe(i) for i in errors[:15])
+        )
+        print(f"::error title=lint errors ({len(errors)})::{summary[:6000]}")
+
     return 0
 
 
