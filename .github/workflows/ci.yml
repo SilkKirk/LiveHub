@@ -53,16 +53,13 @@ jobs:
       - name: Static checks
         run: |
           set -o pipefail
-          # Lint otherwise writes a report and prints only a one-line failure, leaving the
-          # offending rule and file unreadable from the job log. Echo the report to stdout.
-          ./gradlew :app:lintDebug --stacktrace 2>&1 | tee lint.log || LINT_EXIT=$?
-          echo "=== lint report ==="
-          if [ -f app/build/reports/lint-results-debug.txt ]; then
-            cat app/build/reports/lint-results-debug.txt
-          fi
-          if [ -f app/build/reports/lint-results-debug.xml ]; then
-            grep -E '<issue|message=|file=' app/build/reports/lint-results-debug.xml | head -n 200
-          fi
+          # Lint otherwise writes a report and prints only a one-line failure. Surface each
+          # finding as a ::error:: workflow command so it lands in the check-run annotations,
+          # which is where an API client can read it without the raw job log.
+          ./gradlew :app:lintDebug --stacktrace > lint.log 2>&1 || LINT_EXIT=$?
+          echo "=== lint findings ==="
+          python3 .github/scripts/report_lint.py || true
+          tail -n 60 lint.log
           exit "${LINT_EXIT:-0}"
 
       - name: JVM unit tests
