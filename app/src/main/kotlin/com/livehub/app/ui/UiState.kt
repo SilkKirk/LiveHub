@@ -35,11 +35,23 @@ data class UiState(
   val room: Streamer? = null,
   val variants: List<StreamVariant> = emptyList(),
   val selectedVariant: StreamVariant? = null,
+  /**
+   * Every CDN/line the platform advertises for the open room.
+   *
+   * Douyu resolves one URL per *quality* against a single line, so the line is a separate
+   * axis from the variant; the player offers it as its own row.
+   */
+  val lines: List<String> = emptyList(),
+  val selectedLine: String? = null,
+  /** True while a quality or line change is being re-resolved. */
+  val switchingQuality: Boolean = false,
   val danmakuEnabled: Boolean = true,
   val danmaku: List<com.livehub.core.model.DanmakuMessage> = emptyList(),
   val danmakuOpacity: Float = 1f,
   val danmakuFontScale: Float = 1f,
   val danmakuAreaFraction: Float = 0.5f,
+  /** Separate scale for the full-screen overlay, which is much wider than portrait. */
+  val landscapeDanmakuFontScale: Float = 1.15f,
   val blockedKeywords: List<String> = emptyList(),
   val peers: List<TrustedPeer> = emptyList(),
   val discoveredPeers: List<com.livehub.core.sync.DiscoveredPeer> = emptyList(),
@@ -52,11 +64,27 @@ data class UiState(
   val discovering: Boolean = false,
   val loading: Boolean = false,
   val loadingMore: Boolean = false,
+  /**
+   * True only while a pull-to-refresh fetch is in flight.
+   *
+   * Kept separate from [loading] because the two render differently: a pull shows the
+   * refresh indicator over the existing list, while [loading] replaces an empty grid with
+   * the skeleton.
+   */
+  val refreshing: Boolean = false,
   /** Set by the ViewModel from the platform cursor; drives infinite scroll. */
   val hasNextPage: Boolean = false,
   val error: String? = null,
   val message: String? = null,
   val darkTheme: Boolean = false,
+  /**
+   * The user's theme choice.
+   *
+   * Kept as the three-state preference rather than as [darkTheme] alone: "follow the
+   * system" is a real option that a boolean cannot express, and it is what a fresh
+   * install should use.
+   */
+  val themeMode: com.livehub.core.designsystem.ThemeMode = com.livehub.core.designsystem.ThemeMode.System,
   val bilibiliLogin: com.livehub.app.ui.components.BiliLoginUi = com.livehub.app.ui.components.BiliLoginUi(),
 ) {
   /** True only when the adapter reported a next page for the current list. */
@@ -84,6 +112,12 @@ data class SelectSubCategory(val category: Category) : UiAction
 
   data class SelectVariant(val variant: StreamVariant) : UiAction
 
+  /** Picks a quality code (Douyu rate, Bilibili qn) and re-resolves the stream. */
+  data class SelectQuality(val quality: Int) : UiAction
+
+  /** Picks a CDN/line identifier and re-resolves the stream. */
+  data class SelectLine(val line: String) : UiAction
+
   data class ToggleFollow(val streamer: Streamer) : UiAction
 
   data class UpdateQuery(val query: String) : UiAction
@@ -103,6 +137,8 @@ data class SelectSubCategory(val category: Category) : UiAction
   data class ToggleDanmaku(val enabled: Boolean) : UiAction
 data class SetDanmakuAreaFraction(val fraction: Float) : UiAction
 data class SetDanmakuFontScale(val scale: Float) : UiAction
+data class SetDanmakuOpacity(val opacity: Float) : UiAction
+data class SetLandscapeDanmakuFontScale(val scale: Float) : UiAction
 
   data class SetBlockedKeywords(val keywords: List<String>) : UiAction
 
@@ -122,6 +158,9 @@ data class SetDanmakuFontScale(val scale: Float) : UiAction
   data object SyncNow : UiAction
 
   data object ToggleTheme : UiAction
+
+  /** Sets the theme cycle position explicitly (system → dark → light). */
+  data class SetThemeMode(val mode: com.livehub.core.designsystem.ThemeMode) : UiAction
 
   data object StartBilibiliLogin : UiAction
 

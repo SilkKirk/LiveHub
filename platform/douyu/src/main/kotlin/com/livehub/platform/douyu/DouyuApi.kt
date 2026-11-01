@@ -12,6 +12,10 @@ import com.livehub.core.network.HttpResponse
 import com.livehub.core.network.Crypto
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -173,66 +177,78 @@ class DouyuApi(
     return DouyuParser.betard(root)
   }
 
-  /** Resolves playable variants for a room, best first. */
-  suspend fun playback(roomId: String, preferredQuality: Int?): PlaybackSource {
+  /**
+   * Resolves playable variants for a room, one per advertised quality.
+   *
+   * The probe answers with every selectable rate (`原画720P30:0 | 超清:3 | 高清:2` on a
+   * live room), but each rate needs its own signed `getH5Play` call before it has a URL.
+   * Previously only the single selected rate was resolved, so the player's quality row
+   * always contained exactly one chip and the setting was unreachable — the menu existed
+   * but could not change anything. Now every advertised rate is resolved (in parallel, so
+   * the extra latency is one round trip rather than five), which makes the existing
+   * quality selector work without any extra UI plumbing.
+   *
+   * @param preferredCdn explicit line to resolve, or null for the preferred one. The
+   *   response advertises its own line list, which the UI shows next to the qualities.
+   */
+  suspend fun playback(
+    roomId: String,
+    preferredQuality: Int?,
+    preferredCdn: String? = null,
+  ): PlaybackSource {
     val info = betard(roomId)
     if (!info.isLive) throw PlatformOfflineException("主播未开播", Platform.DOUYU)
 
-    val signData = sign(roomId)
     val realRoomId = info.realRoomId
+    val signData = sign(realRoomId = realRoomId, roomId = roomId)
 
-    // The probe response advertises every selectable rate. Each rate needs its own
-    // signed request, so only the rates we actually offer are resolved — asking for a
-    // dozen rates up front would triple the latency of opening a stream.
     val probe = requestPlay(realRoomId = realRoomId, roomId = roomId, signData = signData, cdn = "", rate = -1)
     val selection = DouyuQuality.select(probe, preferredQuality)
-    val resolved = resolveVariants(
-      realRoomId = realRoomId,
-      roomId = roomId,
-      signData = signData,
-      probe = probe,
-      selection = selection,
-    )
-    if (resolved.isEmpty()) {
+    val cdn = DouyuQuality.selectCdn(probe.cdns, preferredCdn)
+
+    // One request per distinct rate. The probe's own rate is reused instead of re-asking
+    // for it, which saves a round trip in the common "auto" case.
+    val wantedRates = DouyuQuality.rateOptions(probe).map { it.rate }.distinct().ifEmpty { listOf(selection.rate) }
+    val resolved = coroutineScope {
+      wantedRates.map { rate ->
+        async(Dispatchers.IO) {
+          if (rate == selection.rate && selection.cdn == cdn) {
+            DouyuQuality.variants(probe, selection)
+          } else {
+            runCatching {
+              val response = requestPlay(
+                realRoomId = realRoomId,
+                roomId = roomId,
+                signData = signData,
+                cdn = cdn,
+                rate = rate,
+              )
+              val label = DouyuQuality.rateOptions(probe).firstOrNull { it.rate == rate }?.name
+                ?.ifBlank { DouyuQuality.labelFor(rate) }
+                ?: DouyuQuality.labelFor(rate)
+              DouyuQuality.variants(response, DouyuQuality.Selection(rate = rate, rateLabel = label, cdn = cdn))
+            }.getOrDefault(emptyList())
+          }
+        }
+      }.awaitAll().flatten()
+    }
+
+    val variants = resolved
+      .distinctBy { it.url }
+      .ifEmpty { DouyuQuality.variants(probe, selection) }
+      .sortedBy { it.qualityRank }
+
+    if (variants.isEmpty()) {
       throw PlatformProtocolException("斗鱼未解析到播放地址", Platform.DOUYU)
     }
-
-    val ordered = resolved.sortedBy { it.qualityRank }
-    val default = ordered.firstOrNull { it.qualityCode == selection.rate } ?: ordered.first()
-    return PlaybackSource(room = info.toStreamer(), variants = ordered, defaultVariant = default)
-  }
-
-  /**
-   * Resolves one URL per CDN rate, falling back to the probed rate when a follow-up
-   * request fails.
-   *
-   * Douyu occasionally answers a specific `rate` with an error even though the probe
-   * succeeded, and a failed quality must never take the whole player down.
-   */
-  private suspend fun resolveVariants(
-    realRoomId: String,
-    roomId: String,
-    signData: String,
-    probe: DyPlayResponse,
-    selection: DouyuQuality.Selection,
-  ): List<StreamVariant> {
-    val primary = if (selection.rate == -1) {
-      probe
-    } else {
-      runCatching {
-        requestPlay(
-          realRoomId = realRoomId,
-          roomId = roomId,
-          signData = signData,
-          cdn = selection.cdn,
-          rate = selection.rate,
-        )
-      }.getOrDefault(probe)
-    }
-
-    return DouyuQuality.variants(primary, selection).ifEmpty {
-      DouyuQuality.variants(probe, DouyuQuality.select(probe, null))
-    }
+    val default = variants.firstOrNull { it.qualityCode == selection.rate } ?: variants.first()
+    return PlaybackSource(
+      room = info.toStreamer(),
+      variants = variants,
+      defaultVariant = default,
+      lines = probe.cdns,
+      selectedLine = cdn,
+    )
   }
   /**
    * Computes the `signData` blob (`key=value&...`) for a room.
@@ -242,8 +258,11 @@ class DouyuApi(
    * site script is evaluated instead, which keeps working across rotations; the pure
    * Kotlin formula remains as the fallback so signing still succeeds without a JS engine.
    */
-  internal suspend fun sign(roomId: String, nowSeconds: Long = System.currentTimeMillis() / 1000): String {
-    val realRoomId = betard(roomId).realRoomId
+  internal suspend fun sign(
+    realRoomId: String,
+    roomId: String,
+    nowSeconds: Long = System.currentTimeMillis() / 1000,
+  ): String {
     val signer = scriptSigner
     if (signer != null) {
       val script = runCatching { homeH5EncScript(realRoomId) }.getOrNull()
@@ -264,7 +283,13 @@ class DouyuApi(
 
   /** Fetches the current signing script source for [realRoomId]. */
   private suspend fun homeH5EncScript(realRoomId: String): String? {
-    val response = http.get("$URL_HOME_H5_ENC?rids=$realRoomId")
+    val response = http.get(
+      "$URL_HOME_H5_ENC?rids=$realRoomId",
+      headers = mapOf(
+        "Referer" to "https://www.douyu.com/$realRoomId",
+        "User-Agent" to HttpClients.UA_DESKTOP,
+      ),
+    )
     val root = DouyuResponseRules.requireJson(response.body, response.code, "homeH5Enc")
     return DouyuSigner.parseEncSource(root, realRoomId)
   }

@@ -43,13 +43,21 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val preferences = container.preferences
     val settings = preferences.settings
     val platform = Platform.fromId(settings.lastPlatform) ?: Platform.DOUYU
+    val themeMode = when (settings.themeMode.lowercase()) {
+      "dark" -> com.livehub.core.designsystem.ThemeMode.Dark
+      "light" -> com.livehub.core.designsystem.ThemeMode.Light
+      else -> com.livehub.core.designsystem.ThemeMode.System
+    }
     _state.update {
       it.copy(
         platform = platform,
+        themeMode = themeMode,
+        darkTheme = themeMode == com.livehub.core.designsystem.ThemeMode.Dark,
         danmakuEnabled = settings.danmakuEnabled,
         danmakuOpacity = settings.danmakuOpacity,
         danmakuFontScale = settings.danmakuFontScale,
         danmakuAreaFraction = settings.danmakuAreaFraction,
+        landscapeDanmakuFontScale = settings.landscapeDanmakuFontScale,
         blockedKeywords = settings.blockedKeywords,
         syncScopes = settings.syncScopes
           .mapNotNull(SyncScope::fromWireName)
@@ -79,7 +87,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       UiAction.Refresh -> refresh()
       is UiAction.OpenRoom -> openRoom(action.streamer)
       UiAction.ClosePlayer -> closePlayer()
-      is UiAction.SelectVariant -> _state.update { it.copy(selectedVariant = action.variant) }
+      is UiAction.SelectVariant -> selectVariant(action.variant)
+      is UiAction.SelectQuality -> selectQuality(action.quality, line = null)
+      is UiAction.SelectLine -> selectQuality(quality = null, line = action.line)
       is UiAction.ToggleFollow -> toggleFollow(action.streamer)
       is UiAction.UpdateQuery -> _state.update { it.copy(searchQuery = action.query) }
       UiAction.SubmitSearch -> submitSearch()
@@ -94,6 +104,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.ToggleDanmaku -> setDanmakuEnabled(action.enabled)
       is UiAction.SetDanmakuAreaFraction -> setDanmakuAreaFraction(action.fraction)
       is UiAction.SetDanmakuFontScale -> setDanmakuFontScale(action.scale)
+      is UiAction.SetDanmakuOpacity -> setDanmakuOpacity(action.opacity)
+      is UiAction.SetLandscapeDanmakuFontScale -> setLandscapeDanmakuFontScale(action.scale)
       is UiAction.SetBlockedKeywords -> setBlockedKeywords(action.keywords)
       is UiAction.SetSyncScopes -> setSyncScopes(action.scopes)
       UiAction.RefreshPeers -> refreshPeers()
@@ -106,7 +118,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       )
       UiAction.StartDiscovery -> startDiscovery()
       UiAction.SyncNow -> syncNow()
-      UiAction.ToggleTheme -> _state.update { it.copy(darkTheme = !it.darkTheme) }
+      UiAction.ToggleTheme -> {
+        // Cycles like the reference client: system → dark → light → system, so all three
+        // states stay reachable. A two-state boolean made Light mode impossible to select.
+        val next = when (_state.value.themeMode) {
+          com.livehub.core.designsystem.ThemeMode.System -> com.livehub.core.designsystem.ThemeMode.Dark
+          com.livehub.core.designsystem.ThemeMode.Dark -> com.livehub.core.designsystem.ThemeMode.Light
+          com.livehub.core.designsystem.ThemeMode.Light -> com.livehub.core.designsystem.ThemeMode.System
+        }
+        setThemeMode(next)
+      }
+      is UiAction.SetThemeMode -> setThemeMode(action.mode)
       UiAction.StartBilibiliLogin -> startBilibiliLogin()
       UiAction.CancelBilibiliLogin -> cancelBilibiliLogin()
       UiAction.LogoutBilibili -> logoutBilibili()
@@ -116,7 +138,24 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   // ------------------------------------------------------------------ navigation
 
+  /**
+   * Screens to return to when leaving the player or the search screen.
+   *
+   * Both used to hardcode Home, so opening a room from the follow list and closing it
+   * dropped the user on the browse tab with their position lost. These restore the origin.
+   */
+  private var playerReturnScreen: Screen = Screen.Home
+  private var searchReturnScreen: Screen = Screen.Home
+
   private fun navigate(screen: Screen) {
+    val current = _state.value.screen
+    // Remember where search and the player were entered from, in the same spirit as the
+    // reference client's `playerReturnScreen` / `searchReturnScreen`.
+    when (screen) {
+      Screen.Player -> playerReturnScreen = current
+      Screen.Search -> searchReturnScreen = current
+      else -> Unit
+    }
     _state.update { it.copy(screen = screen) }
     when (screen) {
       Screen.Follow -> refreshFollowStatus()
@@ -140,10 +179,23 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val current = _state.value.screen
     val target = when (current) {
       Screen.Home -> return
-      Screen.Player -> Screen.Home
+      Screen.Player -> playerReturnScreen.takeIf { it != Screen.Player } ?: Screen.Home
+      Screen.Search -> searchReturnScreen.takeIf { it != Screen.Search } ?: Screen.Home
       else -> Screen.Home
     }
-    _state.update { it.copy(screen = target, room = null, variants = emptyList(), selectedVariant = null) }
+    if (current == Screen.Player) {
+      danmakuJob?.cancel()
+      playbackJob?.cancel()
+    }
+    _state.update {
+      it.copy(
+        screen = target,
+        room = null,
+        variants = emptyList(),
+        selectedVariant = null,
+        danmaku = if (current == Screen.Player) emptyList() else it.danmaku,
+      )
+    }
   }
 
   // ------------------------------------------------------------------- platform
@@ -151,6 +203,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun selectPlatform(platform: Platform) {
     if (platform == _state.value.platform) return
     container.preferences.setLastPlatform(platform)
+    // Search results belong to the platform that produced them: leaving them on screen
+    // after a switch labelled 斗鱼 rooms with 虎牙's name.
+    searchJob?.cancel()
+    searchCursor = null
     _state.update {
       it.copy(
         platform = platform,
@@ -159,6 +215,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         subCategories = emptyList(),
         selectedSubCategory = null,
         rooms = emptyList(),
+        searchResults = emptyList(),
+        searchHasMore = false,
         screen = Screen.Home,
         error = null,
       )
@@ -229,11 +287,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     loadRooms(_state.value.platform, category, reset = true)
   }
 
-  private fun loadRooms(platform: Platform, category: Category, reset: Boolean) {
+  private fun loadRooms(platform: Platform, category: Category, reset: Boolean, pullToRefresh: Boolean = false) {
     roomsJob?.cancel()
     roomsJob = viewModelScope.launch {
       _state.update {
-        if (reset) it.copy(loading = true, error = null) else it.copy(loadingMore = true)
+        when {
+          // A pull keeps the current grid on screen and only shows the indicator; showing
+          // the skeleton as well made the list flash empty on every refresh.
+          pullToRefresh -> it.copy(refreshing = true, error = null)
+          reset -> it.copy(loading = true, error = null)
+          else -> it.copy(loadingMore = true)
+        }
       }
       try {
         val page = container.platformRepository.rooms(
@@ -249,12 +313,18 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             rooms = merged.distinctBy { room -> room.key },
             loading = false,
             loadingMore = false,
+            refreshing = false,
             hasNextPage = page.hasMore,
           )
         }
       } catch (error: Exception) {
         _state.update {
-          it.copy(loading = false, loadingMore = false, error = error.message ?: "加载直播列表失败")
+          it.copy(
+            loading = false,
+            loadingMore = false,
+            refreshing = false,
+            error = error.message ?: "加载直播列表失败",
+          )
         }
       }
     }
@@ -263,7 +333,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun loadMore() {
     val current = _state.value
     val category = current.selectedCategory ?: return
-    if (current.loading || current.loadingMore || nextCursor == null) return
+    if (current.loading || current.loadingMore || current.refreshing || nextCursor == null) return
     loadRooms(current.platform, category, reset = false)
   }
 
@@ -274,9 +344,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       loadCategories(current.platform)
     } else {
       nextCursor = null
-      loadRooms(current.platform, category, reset = true)
+      loadRooms(current.platform, category, reset = true, pullToRefresh = current.screen == Screen.Home)
     }
-    if (current.screen == Screen.Follow) refreshFollowStatus()
+    if (current.screen == Screen.Follow) refreshFollowStatus(pullToRefresh = true)
   }
 
   // --------------------------------------------------------------------- search
@@ -295,9 +365,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       _state.update {
         it.copy(
           screen = Screen.Search,
-          loading = true,
+          // A pull-to-refresh re-runs the same search: keep the grid on screen and show
+          // the indicator instead of blanking it to the skeleton.
+          refreshing = it.searchResults.isNotEmpty(),
+          loading = it.searchResults.isEmpty(),
           loadingMore = false,
-          searchResults = emptyList(),
+          searchResults = if (it.searchResults.isEmpty()) emptyList() else it.searchResults,
           searchHasMore = false,
           error = null,
           searchHistory = container.preferences.settings.searchHistory,
@@ -311,10 +384,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             searchResults = page.rooms,
             searchHasMore = page.hasMore,
             loading = false,
+            refreshing = false,
           )
         }
       } catch (error: Exception) {
-        _state.update { it.copy(loading = false, error = error.message ?: "搜索失败") }
+        _state.update {
+          it.copy(loading = false, refreshing = false, error = error.message ?: "搜索失败")
+        }
       }
     }
   }
@@ -369,13 +445,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
-  private fun refreshFollowStatus() {
+  private fun refreshFollowStatus(pullToRefresh: Boolean = false) {
     val followed = container.followStore.followed()
     if (followed.isEmpty()) {
-      _state.update { it.copy(followed = emptyList()) }
+      _state.update { it.copy(followed = emptyList(), refreshing = false) }
       return
     }
     viewModelScope.launch {
+      if (pullToRefresh) _state.update { it.copy(refreshing = true) }
       val refreshed = followed.map { streamer ->
         runCatching {
           container.platformRepository.liveStatus(streamer.platform, streamer.roomId)
@@ -389,7 +466,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           )
         } ?: streamer
       }
-      _state.update { it.copy(followed = refreshed) }
+      _state.update { it.copy(followed = refreshed, refreshing = false) }
     }
   }
 
@@ -397,8 +474,18 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun openRoom(streamer: Streamer) {
     playbackJob?.cancel()
+    // Remember where the room was opened from so closing it returns there.
+    playerReturnScreen = _state.value.screen.takeIf { it != Screen.Player } ?: Screen.Home
     _state.update {
-      it.copy(screen = Screen.Player, room = streamer, variants = emptyList(), selectedVariant = null, loading = true)
+      it.copy(
+        screen = Screen.Player,
+        room = streamer,
+        variants = emptyList(),
+        selectedVariant = null,
+        lines = emptyList(),
+        selectedLine = null,
+        loading = true,
+      )
     }
     playbackJob = viewModelScope.launch {
       // Danmaku is independent of playback: a chat stream must keep working even when
@@ -412,6 +499,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           it.copy(
             variants = source.variants,
             selectedVariant = preferred,
+            lines = source.lines,
+            selectedLine = source.selectedLine,
             room = source.room.takeIf { room -> room.streamerName.isNotBlank() } ?: streamer,
             loading = false,
           )
@@ -424,15 +513,70 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
+  /**
+   * Switches the quality or the line of the room that is already open.
+   *
+   * Douyu needs a fresh signed `getH5Play` call per `(rate, cdn)` pair, so a change cannot
+   * be applied to the current URL alone; the whole source is resolved again with the new
+   * preference. The previously selected value is kept if the platform does not offer it,
+   * and a failed re-resolve leaves the stream that is already playing untouched.
+   */
+  private fun selectQuality(quality: Int?, line: String?) {
+    val current = _state.value
+    val room = current.room ?: return
+    val nextQuality = quality ?: current.selectedVariant?.qualityCode
+    val nextLine = line ?: current.selectedLine
+
+    if (quality == null && line == null) return
+    // Picking a variant that is already resolved needs no network round trip.
+    if (line == null && nextQuality != null) {
+      current.variants.firstOrNull { it.qualityCode == nextQuality }?.let { resolved ->
+        if (current.lines.isEmpty()) {
+          _state.update { it.copy(selectedVariant = resolved) }
+          return
+        }
+      }
+    }
+
+    playbackJob?.cancel()
+    playbackJob = viewModelScope.launch {
+      _state.update { it.copy(switchingQuality = true) }
+      try {
+        val source = container.platformRepository.playback(
+          platform = room.platform,
+          roomId = room.roomId,
+          preferredQuality = nextQuality,
+          preferredLine = nextLine,
+        )
+        _state.update {
+          it.copy(
+            variants = source.variants,
+            selectedVariant = source.defaultVariant ?: source.variants.firstOrNull(),
+            lines = source.lines,
+            selectedLine = source.selectedLine,
+            switchingQuality = false,
+          )
+        }
+      } catch (error: Exception) {
+        _state.update {
+          it.copy(switchingQuality = false, message = error.message ?: "切换失败")
+        }
+      }
+    }
+  }
+
   private fun closePlayer() {
     playbackJob?.cancel()
     danmakuJob?.cancel()
+    val target = playerReturnScreen.takeIf { it != Screen.Player } ?: Screen.Home
     _state.update {
       it.copy(
-        screen = Screen.Home,
+        screen = target,
         room = null,
         variants = emptyList(),
         selectedVariant = null,
+        lines = emptyList(),
+        selectedLine = null,
         danmaku = emptyList(),
       )
     }
@@ -501,6 +645,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
+  /**
+   * Applies an already-resolved variant.
+   *
+   * Used when the UI hands over a concrete [StreamVariant] (the variant list is a flat
+   * list of resolved URLs for platforms that publish them, e.g. Bilibili and Huya).
+   */
   private fun selectVariant(variant: StreamVariant) {
     _state.update { it.copy(selectedVariant = variant) }
   }
@@ -510,6 +660,30 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun setDanmakuEnabled(enabled: Boolean) {
     container.preferences.setDanmakuEnabled(enabled)
     _state.update { it.copy(danmakuEnabled = enabled) }
+  }
+
+  /**
+   * Persists and applies the theme choice.
+   *
+   * `setThemeMode` already existed on [UserPreferences] but nothing ever called it, so the
+   * selection died on every restart.
+   */
+  private fun setThemeMode(mode: com.livehub.core.designsystem.ThemeMode) {
+    container.preferences.setThemeMode(
+      when (mode) {
+        com.livehub.core.designsystem.ThemeMode.System -> "system"
+        com.livehub.core.designsystem.ThemeMode.Dark -> "dark"
+        com.livehub.core.designsystem.ThemeMode.Light -> "light"
+      },
+    )
+    _state.update {
+      it.copy(
+        themeMode = mode,
+        // Kept in sync for callers that only know "is it dark right now"; the theme
+        // itself is driven by `themeMode` because System is a third state.
+        darkTheme = mode == com.livehub.core.designsystem.ThemeMode.Dark,
+      )
+    }
   }
 
   /** Danmaku area and font scale are persisted so the choice survives a restart. */
@@ -523,6 +697,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val clamped = scale.coerceIn(0.6f, 2f)
     container.preferences.update { it.copy(danmakuFontScale = clamped) }
     _state.update { it.copy(danmakuFontScale = clamped) }
+  }
+
+  /** Opacity had a persisted field but no setter, so the overlay was always opaque. */
+  private fun setDanmakuOpacity(opacity: Float) {
+    val clamped = opacity.coerceIn(0.2f, 1f)
+    container.preferences.update { it.copy(danmakuOpacity = clamped) }
+    _state.update { it.copy(danmakuOpacity = clamped) }
+  }
+
+  private fun setLandscapeDanmakuFontScale(scale: Float) {
+    val clamped = scale.coerceIn(0.8f, 2f)
+    container.preferences.update { it.copy(landscapeDanmakuFontScale = clamped) }
+    _state.update { it.copy(landscapeDanmakuFontScale = clamped) }
   }
 
   private fun setBlockedKeywords(keywords: List<String>) {

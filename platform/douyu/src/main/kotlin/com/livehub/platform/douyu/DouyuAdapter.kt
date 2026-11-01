@@ -113,8 +113,11 @@ class DouyuAdapter(
     )
   }
 
-  override suspend fun playback(roomId: String, preferredQuality: Int?): PlaybackSource =
-    api.playback(roomId, preferredQuality)
+  override suspend fun playback(
+    roomId: String,
+    preferredQuality: Int?,
+    preferredLine: String?,
+  ): PlaybackSource = api.playback(roomId, preferredQuality, preferredLine)
 
   override fun danmaku(roomId: String): Flow<DanmakuEvent> = callbackFlow {
     val backoff = BackoffPolicy(initialDelay = 1_000.milliseconds, maxDelay = 30_000.milliseconds)

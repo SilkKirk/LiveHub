@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.EmptyState
+import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.ReorderableFollowList
 import com.livehub.core.model.Platform
 
@@ -63,6 +64,10 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
           FollowFilter.OFFLINE -> !it.isLive
         }
       }
+      // Live rooms first. The stored order is the user's manual arrangement, but burying
+      // whoever is actually streaming under offline names defeated the point of the list.
+      // `sortedBy` is stable, so manual order still breaks ties inside each group.
+      .sortedBy { if (it.isLive) 0 else 1 }
   }
 
   val liveCount = remember(state.followed) { state.followed.count { it.isLive } }
@@ -105,12 +110,19 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
             },
           )
         } else {
-          ReorderableFollowList(
-            streamers = visible,
-            onClick = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
-            onReorder = { streamer, index -> onAction(UiAction.MoveFollow(streamer, index)) },
+          RefreshableBox(
+            refreshing = state.refreshing,
+            onRefresh = { onAction(UiAction.Refresh) },
             modifier = Modifier.fillMaxSize(),
-          )
+          ) {
+            ReorderableFollowList(
+              streamers = visible,
+              onClick = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
+              onReorder = { streamer, index -> onAction(UiAction.MoveFollow(streamer, index)) },
+              onRemove = { streamer -> onAction(UiAction.ToggleFollow(streamer)) },
+              modifier = Modifier.fillMaxSize(),
+            )
+          }
         }
       }
     }

@@ -66,6 +66,7 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.player.DanmakuOverlay
 import com.livehub.app.ui.player.LivePlayer
+import com.livehub.app.ui.player.withoutBlockedKeywords
 import com.livehub.core.common.ViewerCountFormatter
 import com.livehub.core.designsystem.LiveBadgeColor
 import com.livehub.core.model.StreamVariant
@@ -91,6 +92,13 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var fullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
   var controlsVisible by remember { mutableStateOf(true) }
+  // Learned from the decoder. Null until the first frame is sized, which keeps the
+  // surface at 16:9 instead of collapsing to zero height on open.
+  var videoAspect by remember(state.room?.key) { mutableStateOf<Float?>(null) }
+  // Set when a CDN hostname cannot pass TLS; the same URL is retried over http.
+  var httpFallbackUrl by remember(state.room?.key) { mutableStateOf<String?>(null) }
+  // Set when Media3 gives up after its one automatic retry.
+  var playerError by remember(state.room?.key) { mutableStateOf<String?>(null) }
 
   BackHandler(enabled = fullscreen) { fullscreen = false }
 
@@ -102,25 +110,46 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
   }
 
+  val effectiveVariant = variant?.let { current ->
+    httpFallbackUrl?.let { fallback -> current.copy(url = fallback) } ?: current
+  }
+  val isVerticalVideo = videoAspect?.let { it in 0.2f..0.95f } == true
+  // A vertical stream in portrait should fill the screen, not sit in a 16:9 letterbox
+  // with the top and bottom of the picture outside the frame.
+  val verticalFullBleed = !fullscreen && isVerticalVideo
+
   Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     Column(modifier = Modifier.fillMaxSize()) {
-      if (!fullscreen) {
+      if (!fullscreen && !verticalFullBleed) {
         PlayerHeader(state = state, onAction = onAction, modifier = Modifier.fillMaxWidth())
       }
 
-      val videoModifier = if (fullscreen) {
-        Modifier.fillMaxSize()
-      } else {
-        Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+      val videoModifier = when {
+        fullscreen || verticalFullBleed -> Modifier.fillMaxSize()
+        else -> Modifier.fillMaxWidth().aspectRatio(videoAspect ?: (16f / 9f))
       }
 
       Box(modifier = videoModifier.background(Color.Black)) {
         VideoSurface(
           state = state,
-          variant = variant,
+          variant = effectiveVariant,
           onAction = onAction,
+          onVideoAspectRatioChanged = { aspect -> videoAspect = aspect.takeIf { it > 0f } },
+          zoomToFill = verticalFullBleed,
+          playerError = playerError,
+          onHttpFallback = { httpUrl -> httpFallbackUrl = httpUrl },
+          onFatalError = { message ->
+            // The ViewModel owns the retry path; re-opening the room is what the user's
+            // "重试" button does, so a fatal player error just clears the variant and lets
+            // the error state take over.
+            playerError = message
+          },
           modifier = Modifier.fillMaxSize(),
         )
+
+        if (verticalFullBleed) {
+          PlayerHeader(state = state, onAction = onAction, modifier = Modifier.align(Alignment.TopCenter))
+        }
 
         // In full screen the bar floats over the picture instead of sitting above it.
         if (fullscreen && controlsVisible) {
@@ -132,14 +161,20 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
           )
         }
 
-        // Overlay danmaku: only in full screen; portrait uses the list below instead.
-        if (fullscreen && variant != null) {
+        // Overlay danmaku in full screen and over a full-bleed vertical picture; the
+        // portrait layout uses the list below the video instead.
+        if ((fullscreen || verticalFullBleed) && effectiveVariant != null) {
           DanmakuOverlay(
             messages = state.danmaku,
             enabled = state.danmakuEnabled,
             blockedKeywords = state.blockedKeywords,
             opacity = state.danmakuOpacity,
-            fontScale = state.danmakuFontScale,
+            // Landscape uses its own scale: the overlay is much wider than in portrait.
+            fontScale = if (fullscreen) {
+              state.danmakuFontScale * state.landscapeDanmakuFontScale
+            } else {
+              state.danmakuFontScale
+            },
             areaFraction = state.danmakuAreaFraction,
             modifier = Modifier.fillMaxSize().padding(top = 56.dp, bottom = 16.dp),
           )
@@ -173,7 +208,7 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
         }
       }
 
-      if (!fullscreen) {
+      if (!fullscreen && !verticalFullBleed) {
         RoomActionRow(state = state, onAction = onAction)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         DanmakuPanel(state = state, modifier = Modifier.weight(1f).fillMaxWidth())
@@ -352,13 +387,28 @@ private fun VideoSurface(
   state: UiState,
   variant: StreamVariant?,
   onAction: (UiAction) -> Unit,
+  onVideoAspectRatioChanged: (Float) -> Unit,
+  zoomToFill: Boolean,
+  playerError: String?,
+  onHttpFallback: (String) -> Unit,
+  onFatalError: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Box(modifier = modifier, contentAlignment = Alignment.Center) {
     when {
-      variant != null -> LivePlayer(
+      // A fatal player error wins over a still-present variant: the URL is dead.
+      variant != null && playerError == null -> LivePlayer(
         url = variant.url,
         isHls = variant.isHls,
+        zoomToFill = zoomToFill,
+        onVideoAspectRatioChanged = onVideoAspectRatioChanged,
+        onFatalError = { error ->
+          if (error.startsWith("http://") && !variant.url.startsWith("http://")) {
+            onHttpFallback(error)
+          } else {
+            onFatalError(error)
+          }
+        },
         modifier = Modifier.fillMaxSize(),
       )
 
@@ -370,6 +420,37 @@ private fun VideoSurface(
           color = Color.White.copy(alpha = 0.75f),
           style = MaterialTheme.typography.labelMedium,
         )
+      }
+
+      // Offline and failure look identical to a user unless they are told apart: an
+      // offline room is not a network problem and retrying will not help.
+      playerError == null && state.room?.isLive == false -> Column(
+        modifier = Modifier.padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.Visibility,
+          contentDescription = null,
+          tint = Color.White.copy(alpha = 0.4f),
+          modifier = Modifier.size(32.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+          text = "主播未开播",
+          color = Color.White.copy(alpha = 0.92f),
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+          text = "当前直播间没有在直播",
+          color = Color.White.copy(alpha = 0.7f),
+          style = MaterialTheme.typography.bodySmall,
+          textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(12.dp))
+        PillButton(label = "返回", filled = false) { onAction(UiAction.ClosePlayer) }
       }
 
       else -> Column(
@@ -384,7 +465,7 @@ private fun VideoSurface(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-          text = state.error ?: "无法播放该直播间",
+          text = playerError ?: state.error ?: "无法播放该直播间",
           color = Color.White.copy(alpha = 0.9f),
           style = MaterialTheme.typography.bodySmall,
           textAlign = TextAlign.Center,
@@ -513,6 +594,9 @@ private fun PlayerSettings(
   variant: StreamVariant?,
   onAction: (UiAction) -> Unit,
 ) {
+  // The settings sheet is the same composable in portrait and landscape, so it asks the
+  // window itself rather than taking a parameter the caller could get wrong.
+  val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
   Column(
     modifier = Modifier
       .fillMaxWidth()
@@ -523,26 +607,54 @@ private fun PlayerSettings(
     Text("播放设置", style = MaterialTheme.typography.titleMedium)
 
     if (state.variants.isNotEmpty()) {
-      SettingsLabel("清晰度 / 线路")
+      SettingsLabel("清晰度")
       FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
       ) {
         state.variants.forEach { item ->
           FilterChip(
-            selected = item.identity == variant?.identity,
-            onClick = { onAction(UiAction.SelectVariant(item)) },
-            label = {
-              Text(
-                text = listOfNotNull(item.qualityLabel, item.lineName)
-                  .distinct()
-                  .joinToString(" · "),
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-              )
+            selected = item.qualityCode == variant?.qualityCode,
+            onClick = {
+              // A quality code means "re-resolve for this rate"; a variant selected by
+              // identity is the one already carrying a URL.
+              val code = item.qualityCode
+              if (code != null && state.lines.isNotEmpty()) {
+                onAction(UiAction.SelectQuality(code))
+              } else {
+                onAction(UiAction.SelectVariant(item))
+              }
             },
+            label = { Text(item.qualityLabel, style = MaterialTheme.typography.labelMedium, maxLines = 1) },
           )
         }
+      }
+    }
+
+    // Lines are a separate axis only where the platform resolves one URL per quality
+    // against a chosen CDN (Douyu). For the others every line already produced its own
+    // variant, so a second row would duplicate the chips above.
+    if (state.lines.size > 1) {
+      SettingsLabel("线路")
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        state.lines.forEach { line ->
+          FilterChip(
+            selected = line == state.selectedLine,
+            onClick = { onAction(UiAction.SelectLine(line)) },
+            label = { Text(line, style = MaterialTheme.typography.labelMedium, maxLines = 1) },
+          )
+        }
+      }
+    }
+
+    if (state.switchingQuality) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.width(8.dp))
+        Text("正在切换清晰度…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
     }
 
@@ -584,6 +696,40 @@ private fun PlayerSettings(
         )
       }
     }
+
+    // Opacity was persisted but never editable: the value existed in preferences with no
+    // control writing it, so a user could not dim the danmaku over a bright picture.
+    SettingsLabel("弹幕透明度")
+    FlowRow(
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      DANMAKU_OPACITIES.forEach { (label, value) ->
+        FilterChip(
+          selected = kotlin.math.abs(state.danmakuOpacity - value) < 0.02f,
+          onClick = { onAction(UiAction.SetDanmakuOpacity(value)) },
+          label = { Text(label) },
+        )
+      }
+    }
+
+    // The overlay is much wider in landscape, so the reference client scales the text up
+    // separately there; sharing one scale made full-screen danmaku tiny.
+    if (isLandscape) {
+      SettingsLabel("横屏弹幕字号")
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        LANDSCAPE_DANMAKU_FONT_SCALES.forEach { (label, scale) ->
+          FilterChip(
+            selected = state.landscapeDanmakuFontScale == scale,
+            onClick = { onAction(UiAction.SetLandscapeDanmakuFontScale(scale)) },
+            label = { Text(label) },
+          )
+        }
+      }
+    }
   }
 }
 
@@ -600,6 +746,11 @@ private fun SettingsLabel(text: String) {
 
 @Composable
 private fun DanmakuPanel(state: UiState, modifier: Modifier = Modifier) {
+  // Blocked keywords used to be applied only inside the overlay, so the portrait list
+  // showed every word the user had explicitly filtered out.
+  val visible = remember(state.danmaku, state.blockedKeywords) {
+    state.danmaku.withoutBlockedKeywords(state.blockedKeywords)
+  }
   when {
     !state.danmakuEnabled -> CenteredNotice(
       modifier = modifier,
@@ -607,21 +758,32 @@ private fun DanmakuPanel(state: UiState, modifier: Modifier = Modifier) {
       text = "弹幕已关闭",
     )
 
+    // An empty list after filtering means the stream is alive but everything in it was
+    // blocked; saying so is clearer than an endless "connecting" spinner.
     state.danmaku.isEmpty() -> CenteredNotice(
       modifier = modifier,
       text = "正在连接弹幕…",
       showSpinner = true,
     )
 
-    else -> DanmakuList(state = state, modifier = modifier)
+    visible.isEmpty() -> CenteredNotice(
+      modifier = modifier,
+      icon = Icons.Outlined.ChatBubbleOutline,
+      text = "已屏蔽全部弹幕（${state.blockedKeywords.size} 个屏蔽词）",
+    )
+
+    else -> DanmakuList(messages = visible, modifier = modifier)
   }
 }
 
 @Composable
-private fun DanmakuList(state: UiState, modifier: Modifier = Modifier) {
+private fun DanmakuList(
+  messages: List<com.livehub.core.model.DanmakuMessage>,
+  modifier: Modifier = Modifier,
+) {
   val listState = rememberLazyListState()
   // Newest first: chat flows downward from the top like every live app.
-  val display = remember(state.danmaku) { state.danmaku.asReversed() }
+  val display = remember(messages) { messages.asReversed() }
   LaunchedEffect(display.size) {
     if (display.isNotEmpty()) listState.animateScrollToItem(0)
   }
@@ -733,6 +895,21 @@ private val DANMAKU_FONT_SCALES = listOf(
   "小" to 0.9f,
   "中" to 1.0f,
   "大" to 1.15f,
+)
+
+/** Values match the reference client's four presets. */
+private val DANMAKU_OPACITIES = listOf(
+  "100%" to 1.0f,
+  "80%" to 0.85f,
+  "60%" to 0.70f,
+  "40%" to 0.55f,
+)
+
+private val LANDSCAPE_DANMAKU_FONT_SCALES = listOf(
+  "小" to 1.0f,
+  "中" to 1.15f,
+  "大" to 1.30f,
+  "特大" to 1.45f,
 )
 
 private const val PORTRAIT_HIDE_DELAY_MILLIS = 4_000L

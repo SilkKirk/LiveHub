@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.FlowRow
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -22,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -29,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -43,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.ErrorState
 import com.livehub.app.ui.components.InlineLoader
+import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
 import com.livehub.app.ui.UiAction
@@ -57,6 +62,9 @@ private const val NO_MORE_HINT_THRESHOLD = 21
 fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val gridState = rememberLazyGridState()
   val followedKeys = remember(state.followed) { state.followed.map { it.key }.toSet() }
+  // `refreshing` is view-model driven: a pull sets `loading` for the reset fetch, and the
+  // indicator stays up until that request finishes.
+  val refreshing = state.refreshing
   // Only ask for another page when the platform actually reports one. Douyin's feed and
   // Douyu's directory both serve a single page, and without this guard the grid kept
   // requesting "more" on every scroll to the bottom.
@@ -77,7 +85,12 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
     PlatformBar(state = state, onAction = onAction)
     CategoryRow(state = state, onAction = onAction)
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    RefreshableBox(
+      refreshing = refreshing,
+      enabled = !state.loading,
+      onRefresh = { onAction(UiAction.Refresh) },
+      modifier = Modifier.fillMaxSize(),
+    ) {
       if (state.rooms.isEmpty() && state.loading) {
         StreamerGridSkeleton()
       } else if (state.rooms.isEmpty() && state.error != null) {
@@ -85,7 +98,7 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
       } else if (state.rooms.isEmpty()) {
         EmptyState(
           title = "这个分区暂时没有直播",
-          description = "${state.selectedCategory?.name.orEmpty()} 还没有人在播，换个分区看看？",
+          description = "${state.selectedCategory?.name ?: ""} 还没有人在播，换个分区看看？",
           actionLabel = "刷新",
           onAction = { onAction(UiAction.Refresh) },
         )
@@ -161,10 +174,13 @@ private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
 /**
  * Two level category selector.
  *
- * The top row pins the user's subscribed categories (long press any chip to pin or
- * unpin); the second row lists the categories of the currently selected parent. Pinned
- * entries are synchronised between devices through the CATEGORIES scope.
+ * The top row pins the user's subscribed categories; the 订阅/已订阅 button next to the
+ * active category is what writes them. That button used to be missing entirely — the
+ * action and its handler existed but nothing emitted it, so `subscribedCategories` could
+ * only ever be populated by a sync from another device. Pinned entries are synchronised
+ * between devices through the CATEGORIES scope.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
   if (state.categories.isEmpty()) return
@@ -184,6 +200,8 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
       state.categories
     }
   }
+  val active = state.selectedSubCategory ?: state.selectedCategory
+  val activePinned = active != null && pinnedKeys.contains(active.key)
 
   Column(modifier = Modifier.fillMaxWidth()) {
     if (state.subscribedCategories.isNotEmpty()) {
@@ -193,9 +211,20 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
       ) {
         items(state.subscribedCategories, key = { "pinned-${it.key}" }) { category ->
           FilterChip(
-            selected = state.selectedCategory?.key == category.key,
+            selected = state.selectedCategory?.key == category.key ||
+              state.selectedSubCategory?.key == category.key,
             onClick = { onAction(UiAction.SelectCategory(category)) },
             label = { Text("★ ${category.name}") },
+            trailingIcon = {
+              // A pinned chip is the natural place to unpin from.
+              Icon(
+                Icons.Filled.Star,
+                contentDescription = "取消订阅 ${category.name}",
+                modifier = Modifier
+                  .size(14.dp)
+                  .clickable { onAction(UiAction.ToggleCategorySubscription(category)) },
+              )
+            },
           )
         }
       }
@@ -204,7 +233,7 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
     // Row 1: the group tabs, only when the platform actually has groups.
     if (parents.size > 1) {
       LazyRow(
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(parents) { parent ->
@@ -218,36 +247,59 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
       }
     }
 
-    // Row 2: the concrete categories inside the active group.
-    LazyRow(
-      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      state = rememberLazyListState(),
+    // Row 2: the concrete categories inside the active group, plus the pin toggle for
+    // whichever one is currently open.
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      items(visibleCategories, key = { it.key }) { category ->
-        FilterChip(
-          selected = state.selectedCategory?.key == category.key,
-          onClick = { onAction(UiAction.SelectCategory(category)) },
-          label = { Text(category.name) },
-          leadingIcon = if (pinnedKeys.contains(category.key)) {
-            {
-              Icon(
-                Icons.Filled.Star,
-                contentDescription = "已订阅",
-                modifier = Modifier.size(14.dp),
-              )
-            }
-          } else {
-            null
-          },
-        )
+      LazyRow(
+        contentPadding = PaddingValues(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        state = rememberLazyListState(),
+        modifier = Modifier.weight(1f),
+      ) {
+        items(visibleCategories, key = { it.key }) { category ->
+          FilterChip(
+            selected = state.selectedCategory?.key == category.key &&
+              state.selectedSubCategory == null,
+            onClick = { onAction(UiAction.SelectCategory(category)) },
+            label = { Text(category.name) },
+            leadingIcon = if (pinnedKeys.contains(category.key)) {
+              {
+                Icon(
+                  Icons.Filled.Star,
+                  contentDescription = "已订阅",
+                  modifier = Modifier.size(14.dp),
+                )
+              }
+            } else {
+              null
+            },
+          )
+        }
+      }
+
+      if (active != null) {
+        TextButton(
+          onClick = { onAction(UiAction.ToggleCategorySubscription(active)) },
+          contentPadding = PaddingValues(horizontal = 8.dp),
+        ) {
+          Icon(
+            imageVector = if (activePinned) Icons.Filled.Star else Icons.Filled.StarBorder,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(Modifier.size(4.dp))
+          Text(if (activePinned) "已订阅" else "订阅", style = MaterialTheme.typography.labelMedium)
+        }
       }
     }
 
     // Row 3: the third level, offered only by platforms that publish one (Douyu).
     if (state.subCategories.isNotEmpty()) {
       LazyRow(
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(state.subCategories, key = { "sub-${it.key}" }) { category ->

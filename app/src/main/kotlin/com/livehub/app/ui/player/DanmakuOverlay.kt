@@ -38,6 +38,28 @@ private data class FlyingDanmaku(
 )
 
 /**
+ * Filters blocked keywords out of a danmaku list.
+ *
+ * Both surfaces need this: the overlay used to filter inline while the portrait list
+ * rendered `state.danmaku` raw, so a blocked word disappeared in full screen and came
+ * back as soon as the user left it. Keeping one function means there is no second place
+ * for the rule to drift.
+ *
+ * Matching is case-insensitive and substring-based, which is what users expect from a
+ * "blocked words" list.
+ */
+fun List<com.livehub.core.model.DanmakuMessage>.withoutBlockedKeywords(
+  blockedKeywords: List<String>,
+): List<com.livehub.core.model.DanmakuMessage> {
+  val blocked = blockedKeywords.map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+  if (blocked.isEmpty()) return this
+  return filter { message ->
+    val text = message.text.lowercase()
+    blocked.none { keyword -> text.contains(keyword) }
+  }
+}
+
+/**
  * Danmaku overlay.
  *
  * Each message flies right-to-left in one of [laneCount] lanes. Lanes are chosen

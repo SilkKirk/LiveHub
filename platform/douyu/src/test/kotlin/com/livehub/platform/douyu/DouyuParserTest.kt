@@ -101,11 +101,89 @@ class DouyuParserTest {
     assertEquals("暂无标题", page.rooms.last().title)
   }
 
+  /**
+   * The real payload wraps every anchor in `{"type":1,"anchorInfo":{…}}`.
+   *
+   * Reading `rid`/`nickName` straight off the element — which is what this mapper used to
+   * do — found nothing and silently dropped every result, so search never showed a single
+   * room on Douyu.
+   */
+  @Test
+  fun `search reads the fields out of the anchorInfo envelope`() {
+    val root = obj(
+      """
+      {"error":0,"data":{"pageSize":20,"total":915,"relateUser":[
+        {"type":1,"anchorInfo":{"rid":475252,"nickName":"孙悟空丨兰林汉",
+          "description":"国服第一孙悟空","avatar":"https://apic.douyucdn.cn/a.jpg",
+          "isLive":1,"isLoop":0,"videoLoop":0}},
+        {"type":1,"anchorInfo":{"rid":11761342,"nickName":"主播B","isLive":2}},
+        {"type":2,"anchorInfo":{"rid":999,"nickName":"录像"}}
+      ]}}
+      """,
+    )
+    val page = DouyuParser.search(root, page = 1, pageSize = 20)
+
+    assertEquals(listOf("475252", "11761342"), page.rooms.map { it.roomId })
+    val first = page.rooms.first()
+    assertEquals("孙悟空丨兰林汉", first.streamerName)
+    assertEquals("国服第一孙悟空", first.title)
+    assertTrue(first.isLive)
+    // isLive == 2 means offline, and it must survive as such rather than be dropped.
+    assertTrue(!page.rooms.last().isLive)
+    // total=915 with 20 already consumed: another page exists.
+    assertEquals("2", page.nextOffset)
+  }
+
+  @Test
+  fun `search stops once the reported total is consumed`() {
+    val items = (1..20).joinToString(",") { """{"type":1,"anchorInfo":{"rid":$it,"nickName":"n$it"}}""" }
+    val root = obj("""{"data":{"pageSize":20,"total":40,"relateUser":[$items]}}""")
+
+    assertEquals("3", DouyuParser.search(root, page = 1, pageSize = 20).nextOffset)
+    assertNull(DouyuParser.search(root, page = 2, pageSize = 20).nextOffset)
+  }
+
   @Test
   fun `search resolves the room id from the room url when rid is absent`() {
     val root = obj("""{"data":[{"type":1,"bkUrl":"https://www.douyu.com/777","nickName":"主播"}]}""")
     val page = DouyuParser.search(root, 1, 20)
     assertEquals("777", page.rooms.firstOrNull()?.roomId)
+  }
+
+  /**
+   * A captured live `/betard` payload: `cate2_name` is present but empty, the viewer count
+   * is `room_biz_all.hot` (a string), and the streamer name is `nickname`.
+   *
+   * Reading the documented keys only (`cate2_name`, `hotabit`/`hot_num`, `owner_name`)
+   * left every room without a category and with a viewer count of 0.
+   */
+  @Test
+  fun `betard reads the live payload fields the site actually sends`() {
+    val root = obj(
+      """
+      {"game":{"tag_name":"英雄联盟"},
+       "room":{"room_id":"8682569","room_name":"三团联动户外啵啵",
+         "nickname":"冷少icon","owner_name":"冷少icon",
+         "show_status":1,"videoLoop":0,"iol":0,
+         "cate2_id":1,"cate2_name":"","second_lvl_name":"英雄联盟",
+         "room_biz_all":{"hot":"2498932","isvertical":0},
+         "room_pic":"https://rpic.douyucdn.cn/p.avif/dy4",
+         "owner_avatar":"https://apic.douyucdn.cn/a.jpg"}}
+      """,
+    )
+    val info = DouyuParser.betard(root)
+
+    assertEquals("8682569", info.roomId)
+    assertEquals("2498932", info.viewerCount.toString())
+    assertEquals("英雄联盟", info.categoryName)
+    assertEquals("冷少icon", info.streamerName)
+    assertTrue(info.isLive)
+  }
+
+  @Test
+  fun `betard falls back to the game tag when the room carries no category`() {
+    val root = obj("""{"game":{"tag_name":"户外"},"room":{"room_id":"1","show_status":1}}""")
+    assertEquals("户外", DouyuParser.betard(root).categoryName)
   }
 
   @Test

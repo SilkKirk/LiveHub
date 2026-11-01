@@ -74,7 +74,8 @@ class PlatformGateway(private val registry: PlatformRegistry) {
     platform: Platform,
     roomId: String,
     preferredQuality: Int? = null,
-  ): PlaybackSource = requireAdapter(platform).playback(roomId, preferredQuality)
+    preferredLine: String? = null,
+  ): PlaybackSource = requireAdapter(platform).playback(roomId, preferredQuality, preferredLine)
 
   fun danmaku(platform: Platform, roomId: String): Flow<DanmakuEvent> =
     requireAdapter(platform).danmaku(roomId)

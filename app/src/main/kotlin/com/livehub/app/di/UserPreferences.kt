@@ -27,6 +27,8 @@ data class UserSettings(
   val danmakuOpacity: Float = 1.0f,
   val danmakuFontScale: Float = 1.0f,
   val danmakuAreaFraction: Float = 0.5f,
+  /** Separate overlay scale for landscape/full screen; the picture is much wider there. */
+  val landscapeDanmakuFontScale: Float = 1.15f,
   val blockedKeywords: List<String> = emptyList(),
   val preferredQuality: Map<String, Int> = emptyMap(),
   val autoRefreshFollows: Boolean = true,

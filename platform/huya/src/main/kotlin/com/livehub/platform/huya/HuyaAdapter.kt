@@ -81,7 +81,11 @@ class HuyaAdapter(
     )
   }
 
-  override suspend fun playback(roomId: String, preferredQuality: Int?): PlaybackSource {
+  override suspend fun playback(
+    roomId: String,
+    preferredQuality: Int?,
+    preferredLine: String?,
+  ): PlaybackSource {
     val variants = api.playback(roomId)
     val ordered = preferredQuality
       ?.let { wanted -> variants.sortedBy { if (it.qualityCode == wanted) 0 else 1 } }

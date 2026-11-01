@@ -42,8 +42,10 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.InlineLoader
+import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
+import com.livehub.core.model.Platform
 
 /**
  * Search screen.
@@ -99,7 +101,7 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
         idle -> EmptyState(
           icon = Icons.Filled.Search,
           title = "搜索主播或直播间",
-          description = "输入关键词后按回车，可以搜索 ${state.platform.displayName} 上的主播与直播间。",
+          description = SEARCH_HINTS[state.platform] ?: "输入关键词后按回车搜索。",
         )
 
         !hasResults -> EmptyState(
@@ -110,30 +112,49 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
           onAction = { onAction(UiAction.UpdateQuery("")) },
         )
 
-        else -> LazyVerticalGrid(
-          columns = GridCells.Fixed(2),
-          state = gridState,
-          contentPadding = PaddingValues(12.dp),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp),
+        else -> RefreshableBox(
+          refreshing = state.refreshing,
+          onRefresh = { onAction(UiAction.SubmitSearch) },
           modifier = Modifier.fillMaxSize(),
         ) {
-          items(items = state.searchResults, key = { it.key }) { streamer ->
-            StreamerCard(
-              streamer = streamer,
-              followed = followedKeys.contains(streamer.key),
-              onClick = { onAction(UiAction.OpenRoom(streamer)) },
-              onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
-            )
-          }
-          if (state.loadingMore) {
-            item(span = { GridItemSpan(maxLineSpan) }) { InlineLoader() }
+          LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            state = gridState,
+            contentPadding = PaddingValues(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize(),
+          ) {
+            items(items = state.searchResults, key = { it.key }) { streamer ->
+              StreamerCard(
+                streamer = streamer,
+                followed = followedKeys.contains(streamer.key),
+                onClick = { onAction(UiAction.OpenRoom(streamer)) },
+                onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
+              )
+            }
+            if (state.loadingMore) {
+              item(span = { GridItemSpan(maxLineSpan) }) { InlineLoader() }
+            }
           }
         }
       }
     }
   }
 }
+
+/**
+ * What the search field actually accepts, per platform.
+ *
+ * A single generic placeholder hid a real constraint: Douyin's search only resolves a room
+ * id, so typing a streamer's name there returns nothing no matter how it is spelled.
+ */
+private val SEARCH_HINTS = mapOf(
+  Platform.DOUYU to "输入关键词后按回车，可搜索斗鱼主播与直播间。",
+  Platform.HUYA to "输入关键词后按回车，可搜索虎牙主播与直播间。",
+  Platform.DOUYIN to "抖音只支持按房间号搜索：输入 webRid 后按回车。",
+  Platform.BILIBILI to "输入关键词后按回车，可搜索 B 站主播与直播间。",
+)
 
 @Composable
 private fun SearchField(state: UiState, onAction: (UiAction) -> Unit) {

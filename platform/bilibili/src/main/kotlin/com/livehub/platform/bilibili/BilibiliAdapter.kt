@@ -93,8 +93,12 @@ class BilibiliAdapter(
     )
   }
 
-  override suspend fun playback(roomId: String, preferredQuality: Int?): PlaybackSource {
-    val source = api.playback(roomId, preferredQuality)
+  override suspend fun playback(
+    roomId: String,
+    preferredQuality: Int?,
+    preferredLine: String?,
+  ): PlaybackSource {
+    val source = api.playback(roomId, preferredQuality, preferredLine)
     val detail = runCatching { roomDetail(roomId) }.getOrNull()
     return if (detail != null) source.copy(room = detail) else source
   }

@@ -57,7 +57,8 @@ class ResilientPlatformRepository(
     platform: Platform,
     roomId: String,
     preferredQuality: Int? = null,
-  ): PlaybackSource = withRetry { gateway.playback(platform, roomId, preferredQuality) }
+    preferredLine: String? = null,
+  ): PlaybackSource = withRetry { gateway.playback(platform, roomId, preferredQuality, preferredLine) }
 
   /**
    * Runs [block] and retries transient failures.

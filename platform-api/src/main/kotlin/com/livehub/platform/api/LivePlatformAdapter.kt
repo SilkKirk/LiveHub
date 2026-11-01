@@ -59,9 +59,16 @@ interface LivePlatformAdapter {
    * Resolves playable stream URLs for [roomId].
    *
    * @param preferredQuality platform specific quality code, or null for "best".
+   * @param preferredLine platform specific CDN/line id, or null for the preferred one.
+   *   Only Douyu separates quality from line; other platforms ignore it because there a
+   *   line already produced its own [StreamVariant].
    * @throws PlatformException when the room is offline or resolution fails.
    */
-  suspend fun playback(roomId: String, preferredQuality: Int? = null): PlaybackSource
+  suspend fun playback(
+    roomId: String,
+    preferredQuality: Int? = null,
+    preferredLine: String? = null,
+  ): PlaybackSource
 
   /**
    * Opens a danmaku stream for [roomId].

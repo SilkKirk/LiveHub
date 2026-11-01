@@ -131,6 +131,16 @@ data class PlaybackSource(
   val variants: List<StreamVariant>,
   /** The variant the resolver recommends. */
   val defaultVariant: StreamVariant? = variants.firstOrNull(),
+  /**
+   * Every CDN / line the platform advertises for this room, when it publishes a list
+   * separately from the resolved variants (Douyu's `cdnsWithName`).
+   *
+   * Empty for platforms where a line *is* a variant (Huya, Bilibili), because there each
+   * line already produced its own [StreamVariant].
+   */
+  val lines: List<String> = emptyList(),
+  /** The line the resolver actually used, so the UI can mark it as selected. */
+  val selectedLine: String? = null,
 ) {
   val isEmpty: Boolean get() = variants.isEmpty()
 }

@@ -205,7 +205,19 @@ class BilibiliApi(
 
   // ------------------------------------------------------------------- playback
 
-  suspend fun playback(roomId: String, preferredQn: Int?): PlaybackSource {
+  /**
+   * Resolves playable variants for a room.
+   *
+   * `getRoomPlayInfo` answers a matrix of `stream × format × codec` candidates: the
+   * **codec** object carries the quality (`current_qn`), and the same quality appears
+   * once per container — verified live, `qn=10000` on an anonymous client answers
+   * `flv/avc 150`, `flv/hevc 250`, `ts/avc 150`, `ts/hevc 250`, `fmp4/avc 150`,
+   * `fmp4/hevc 250`. Emitting all six produced a quality menu with six chips for two
+   * qualities, several of which looked identical. One variant per quality is kept,
+   * preferring HLS over progressive FLV because Media3's HLS module handles CDN
+   * failover and discontinuity markers better.
+   */
+  suspend fun playback(roomId: String, preferredQn: Int?, preferredLine: String? = null): PlaybackSource {
     val qn = preferredQn ?: DEFAULT_QN
     val cookie = cookieStore.header()
     val url = "$URL_PLAY_INFO?room_id=$roomId&protocol=0,1&format=0,1,2&codec=0,1&qn=$qn&platform=web"
@@ -256,7 +268,14 @@ class BilibiliApi(
     if (variants.isEmpty()) {
       throw PlatformProtocolException("B站未解析到播放地址", Platform.BILIBILI)
     }
-    val ordered = variants.sortedWith(compareBy({ it.qualityRank }, { it.qualityLabel }))
+    // One entry per quality: the same qn shows up once per container, and the UI can
+    // only meaningfully move between qualities.
+    val ordered = variants
+      .groupBy { it.qualityCode }
+      .values
+      .map { candidates -> candidates.minWith(compareBy({ it.qualityRank }, { it.lineName })) }
+      .sortedWith(compareBy({ qualityOrder(it.qualityCode) }, { it.qualityRank }))
+    val preferred = preferredQn?.let { code -> ordered.firstOrNull { it.qualityCode == code } }
     val room = Streamer(
       platform = Platform.BILIBILI,
       roomId = roomId,
@@ -265,7 +284,19 @@ class BilibiliApi(
       isLive = true,
       updatedAt = System.currentTimeMillis(),
     )
-    return PlaybackSource(room = room, variants = ordered, defaultVariant = ordered.first())
+    return PlaybackSource(
+      room = room,
+      variants = ordered,
+      defaultVariant = preferred ?: ordered.first(),
+      lines = ordered.mapNotNull { it.lineName }.distinct(),
+      selectedLine = (preferred ?: ordered.first()).lineName,
+    )
+  }
+
+  /** qn codes sort high-to-low so the best quality is the first chip. */
+  private fun qualityOrder(qn: Int?): Int = when (qn) {
+    null, 0 -> Int.MAX_VALUE
+    else -> -qn
   }
 
   // ------------------------------------------------------------------- danmaku

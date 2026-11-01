@@ -109,6 +109,39 @@ class MainViewModelTest {
     assertTrue("the danmaku buffer must be cleared", state.danmaku.isEmpty())
   }
 
+  /**
+   * Closing a room returns to where it was opened, not always Home.
+   *
+   * The player and search both hardcoded Home, so opening a room from the follow list and
+   * closing it dropped the user on the browse tab with their place lost.
+   */
+  @Test
+  fun `closing a room opened from the follow list returns to the follow list`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    idle()
+    val room = streamer("7", "主播")
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+    assertEquals(Screen.Player, state.screen)
+
+    viewModel.onAction(UiAction.ClosePlayer)
+    idle()
+    assertEquals(Screen.Follow, state.screen)
+  }
+
+  @Test
+  fun `leaving search returns to the screen it was opened from`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    idle()
+    viewModel.onAction(UiAction.Navigate(Screen.Search))
+    idle()
+    assertEquals(Screen.Search, state.screen)
+
+    viewModel.onAction(UiAction.Back)
+    idle()
+    assertEquals(Screen.Follow, state.screen)
+  }
+
   // -------------------------------------------------------------------- search ---
 
   @Test
@@ -248,12 +281,40 @@ class MainViewModelTest {
     assertEquals(Platform.HUYA.id, container.preferences.settings.lastPlatform)
   }
 
+  /**
+   * The toggle cycles system → dark → light → system.
+   *
+   * A two-state boolean could not express "follow the system", and it also made 浅色
+   * unreachable and lost the choice on restart.
+   */
   @Test
-  fun `theme toggle flips the dark flag`() {
-    val before = state.darkTheme
+  fun `theme toggle cycles through all three modes and persists`() {
+    assertEquals(com.livehub.core.designsystem.ThemeMode.System, state.themeMode)
+
     viewModel.onAction(UiAction.ToggleTheme)
     idle()
-    assertEquals(!before, state.darkTheme)
+    assertEquals(com.livehub.core.designsystem.ThemeMode.Dark, state.themeMode)
+    assertEquals("dark", container.preferences.settings.themeMode)
+    assertTrue(state.darkTheme)
+
+    viewModel.onAction(UiAction.ToggleTheme)
+    idle()
+    assertEquals(com.livehub.core.designsystem.ThemeMode.Light, state.themeMode)
+    assertEquals("light", container.preferences.settings.themeMode)
+    assertTrue("light mode must not report dark", !state.darkTheme)
+
+    viewModel.onAction(UiAction.ToggleTheme)
+    idle()
+    assertEquals(com.livehub.core.designsystem.ThemeMode.System, state.themeMode)
+    assertEquals("system", container.preferences.settings.themeMode)
+  }
+
+  @Test
+  fun `an explicit theme choice is persisted`() {
+    viewModel.onAction(UiAction.SetThemeMode(com.livehub.core.designsystem.ThemeMode.Light))
+    idle()
+    assertEquals("light", container.preferences.settings.themeMode)
+    assertEquals(com.livehub.core.designsystem.ThemeMode.Light, state.themeMode)
   }
 
   // ----------------------------------------------------------------------- sync ---

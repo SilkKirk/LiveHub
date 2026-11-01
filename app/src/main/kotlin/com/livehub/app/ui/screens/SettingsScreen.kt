@@ -2,6 +2,8 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -27,6 +30,7 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 
 /** Settings screen: theme, danmaku and blocked keywords. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var keywordDraft by remember { mutableStateOf("") }
@@ -39,22 +43,24 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     item {
       SectionTitle("外观")
       Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(16.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text("深色主题", style = MaterialTheme.typography.bodyLarge)
-            Text(
-              text = "跟随系统或强制深色",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-          Switch(
-            checked = state.darkTheme,
-            onCheckedChange = { onAction(UiAction.ToggleTheme) },
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          Text("主题", style = MaterialTheme.typography.bodyLarge)
+          Text(
+            text = "跟随系统时打开深浅色开关由系统决定，选择深色或浅色则固定不变",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
+          // Three states, because "follow the system" is a real choice: a boolean switch
+          // could only express two of them and made 浅色 unreachable.
+          FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            THEME_OPTIONS.forEach { (label, mode) ->
+              FilterChip(
+                selected = state.themeMode == mode,
+                onClick = { onAction(UiAction.SetThemeMode(mode)) },
+                label = { Text(label) },
+              )
+            }
+          }
         }
       }
     }
@@ -163,3 +169,9 @@ private fun SectionTitle(text: String) {
     modifier = Modifier.padding(top = 4.dp),
   )
 }
+
+private val THEME_OPTIONS = listOf(
+  "跟随系统" to com.livehub.core.designsystem.ThemeMode.System,
+  "深色" to com.livehub.core.designsystem.ThemeMode.Dark,
+  "浅色" to com.livehub.core.designsystem.ThemeMode.Light,
+)

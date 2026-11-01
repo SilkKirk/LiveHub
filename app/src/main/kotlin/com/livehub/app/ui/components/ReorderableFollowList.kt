@@ -54,6 +54,7 @@ fun ReorderableFollowList(
   onClick: (Streamer) -> Unit,
   onReorder: (Streamer, Int) -> Unit,
   modifier: Modifier = Modifier,
+  onRemove: ((Streamer) -> Unit)? = null,
 ) {
   val listState = rememberLazyListState()
   var draggingKey by remember { mutableStateOf<String?>(null) }
@@ -72,6 +73,7 @@ fun ReorderableFollowList(
         streamer = streamer,
         isDragging = isDragging,
         onClick = { onClick(streamer) },
+        onRemove = onRemove?.let { remove -> { remove(streamer) } },
         dragModifier = Modifier.pointerInput(streamer.key, streamers.size) {
           detectDragGesturesAfterLongPress(
             onDragStart = {
@@ -114,7 +116,15 @@ private fun FollowRow(
   isDragging: Boolean,
   onClick: () -> Unit,
   dragModifier: Modifier,
+  onRemove: (() -> Unit)? = null,
 ) {
+  // A live room gets the primary-colour border the reference uses, so a long list can be
+  // scanned for "who is on right now" without reading the badges.
+  val border = if (streamer.isLive) {
+    androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+  } else {
+    null
+  }
   Surface(
     color = if (isDragging) {
       MaterialTheme.colorScheme.surfaceVariant
@@ -122,6 +132,7 @@ private fun FollowRow(
       MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
     },
     shape = RoundedCornerShape(12.dp),
+    border = border,
     tonalElevation = if (isDragging) 6.dp else 0.dp,
     modifier = Modifier
       .fillMaxWidth()
@@ -202,6 +213,19 @@ private fun FollowRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
+      }
+
+      if (onRemove != null) {
+        // Unfollowing used to be impossible from this screen: the only remove affordance
+        // was the star on the grid card, which this list does not use.
+        IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+          Icon(
+            imageVector = Icons.Filled.Star,
+            contentDescription = "取消关注 ${streamer.streamerName}",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+          )
+        }
       }
 
       Icon(

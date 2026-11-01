@@ -37,7 +37,6 @@ import com.livehub.app.ui.screens.SearchScreen
 import com.livehub.app.ui.screens.SettingsScreen
 import com.livehub.app.ui.screens.SyncScreen
 import com.livehub.core.designsystem.LiveHubTheme
-import com.livehub.core.designsystem.ThemeMode
 
 /** Bottom bar destinations, in display order. */
 private enum class Dock(val screen: Screen, val label: String, val icon: ImageVector) {
@@ -54,7 +53,6 @@ fun LiveHubRoot(
   onAction: (UiAction) -> Unit,
 ) {
   val snackbar = remember { SnackbarHostState() }
-  val themeMode = if (state.darkTheme) ThemeMode.Dark else ThemeMode.System
 
   // Only transient messages go through the snackbar. A load error is already rendered
   // inline by the screen (with a retry button), so echoing it here duplicates the text.
@@ -71,7 +69,7 @@ fun LiveHubRoot(
     onAction(UiAction.Back)
   }
 
-  LiveHubTheme(mode = themeMode) {
+  LiveHubTheme(mode = state.themeMode) {
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
       if (state.screen == Screen.Player) {
         // Swipe from the left edge is the gesture users expect for "go back".

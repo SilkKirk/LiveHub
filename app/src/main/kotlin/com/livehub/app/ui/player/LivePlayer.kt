@@ -49,6 +49,25 @@ fun LivePlayer(
   url: String,
   isHls: Boolean,
   modifier: Modifier = Modifier,
+  /** Fills the surface instead of letterboxing; used for vertical full-bleed rooms. */
+  zoomToFill: Boolean = false,
+  /**
+   * Reports the decoded picture's aspect ratio.
+   *
+   * The screen gates its danmaku overlay on this: without it a vertical stream sat in a
+   * hardcoded 16:9 band with ~70% of the phone's picture area black. The value comes from
+   * Media3's `VideoSize` (including rotation and pixel ratio), not from the container.
+   */
+  onVideoAspectRatioChanged: ((Float) -> Unit)? = null,
+  /**
+   * Emitted when the player gives up on [url].
+   *
+   * A CDN hostname containing `_` fails Android's IDN/SNI check with
+   * "Invalid input to toASCII" no matter how often it is retried; the same host works over
+   * plain http, which is what Huya's `*.msstatic.com`-style hosts need. The screen
+   * downgrades the URL and re-opens it rather than showing a dead end.
+   */
+  onFatalError: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -71,29 +90,49 @@ fun LivePlayer(
     player.play()
   }
 
+  // Aspect + first-frame detection share one listener so the overlay cannot turn on
+  // before the decoder has actually sized the picture.
+  var hasFirstFrame by remember { mutableStateOf(false) }
+  var retriedRef = remember { mutableStateOf(false) }
+
   LaunchedEffect(player) {
     val listener = object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
+        // A host with an underscore in it can never pass Android's IDN/SNI check, so
+        // retrying is pointless: hand the caller the http form of the same URL instead.
+        val idnFailure = generateSequence(error.cause) { it.cause }
+          .mapNotNull { it.message }
+          .any { it.contains("toASCII", ignoreCase = true) }
+        if (idnFailure && url.startsWith("https://")) {
+          onFatalError?.invoke(url.replaceFirst("https://", "http://"))
+          return
+        }
+
         // A live CDN dropping the stream is routine; retry once after a short pause.
-        scope.launch {
-          delay(RETRY_DELAY_MILLIS)
-          player.prepare()
-          player.play()
+        if (!retriedRef.value) {
+          retriedRef.value = true
+          scope.launch {
+            delay(RETRY_DELAY_MILLIS)
+            player.prepare()
+            player.play()
+          }
+        } else {
+          onFatalError?.invoke(error.message ?: "播放器错误: ${error.errorCodeName}")
         }
       }
-    }
-    player.addListener(listener)
-    try {
-      awaitCancellation()
-    } finally {
-      player.removeListener(listener)
-    }
-  }
 
-  var hasFirstFrame by remember { mutableStateOf(false) }
+      override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+        val rawW = videoSize.width
+        val rawH = videoSize.height
+        val rotation = videoSize.unappliedRotationDegrees
+        val pixelRatio = videoSize.pixelWidthHeightRatio
+        val (w, h) = if (rotation == 90 || rotation == 270) rawH to rawW else rawW to rawH
+        val aspect = if (w > 0 && h > 0) (w.toFloat() * pixelRatio) / h.toFloat() else null
+        if (aspect != null) {
+          onVideoAspectRatioChanged?.invoke(aspect)
+        }
+      }
 
-  LaunchedEffect(player) {
-    val listener = object : Player.Listener {
       override fun onRenderedFirstFrame() {
         hasFirstFrame = true
       }
@@ -120,11 +159,26 @@ fun LivePlayer(
           // Media3 controller would stack a second, differently styled set on top.
           useController = false
           setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-          resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+          resizeMode = if (zoomToFill) {
+            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+          } else {
+            AspectRatioFrameLayout.RESIZE_MODE_FIT
+          }
           keepScreenOn = true
         }
       },
-      update = { view -> view.player = player },
+      update = { view ->
+        view.player = player
+        view.resizeMode = if (zoomToFill) {
+          AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        } else {
+          AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+        view.post {
+          view.requestLayout()
+          view.invalidate()
+        }
+      },
     )
 
     // Until the first frame arrives PlayerView draws solid black, which reads as a

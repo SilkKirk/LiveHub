@@ -162,6 +162,18 @@ object DouyuParser {
     )
   }
 
+  /**
+   * Maps `/japi/search/api/searchUser`.
+   *
+   * Every element is an **envelope**: `{"type": 1, "anchorInfo": {…}}`. The room id,
+   * nickname and live flag all live inside `anchorInfo`, not at the element level, so a
+   * mapper that reads them directly from the element finds nothing and drops the whole
+   * page. Recorded rooms (`type != 1`) share the same envelope and must be filtered on
+   * the *envelope's* `type`.
+   *
+   * `data.total` (the full match count) is present, so paging stops on it rather than on
+   * a page-size guess.
+   */
   fun search(root: JsonObject, page: Int, pageSize: Int): DouyuRoomPage {
     val container = root["data"] ?: root["relateUser"] ?: root["relate_user"]
     val list = when (container) {
@@ -173,13 +185,15 @@ object DouyuParser {
           ?: JsonArray(emptyList())
       else -> JsonArray(emptyList())
     }
+    val total = (container as? JsonObject)?.get("total")?.jsonPrimitive?.intOrNull
 
     val rooms = list.mapNotNull { element ->
-      val obj = element as? JsonObject ?: return@mapNotNull null
+      val envelope = element as? JsonObject ?: return@mapNotNull null
       // Douyu mixes anchors and recorded videos in this response.
-      val type = obj["type"]?.jsonPrimitive?.intOrNull
+      val type = envelope["type"]?.jsonPrimitive?.intOrNull
       if (type != null && type != 1) return@mapNotNull null
 
+      val obj = envelope.anchorObject()
       val roomId = obj.string("rid")
         ?: obj.string("room_id")
         ?: obj.string("roomId")
@@ -209,31 +223,65 @@ object DouyuParser {
       )
     }
 
+    // `total` counts every match; a page that came back short (or whose offset already
+    // covers the total) is the last one. Falling back to the raw page length matters
+    // because filtered-out recordings would otherwise end the list early.
+    val consumed = page * pageSize
+    val hasMore = when {
+      list.isEmpty() -> false
+      total != null && total > 0 -> consumed < total
+      else -> list.size >= pageSize
+    }
     return DouyuRoomPage(
       rooms = rooms,
-      nextOffset = if (rooms.size >= pageSize) (page + 1).toString() else null,
+      nextOffset = if (hasMore) (page + 1).toString() else null,
     )
   }
 
+  /**
+   * The object carrying the anchor fields.
+   *
+   * Search results wrap everything in `anchorInfo`; a response that ever returns the
+   * fields directly keeps working because the envelope itself is used as the fallback.
+   */
+  private fun JsonObject.anchorObject(): JsonObject =
+    (this["anchorInfo"] as? JsonObject) ?: this
+
+  /**
+   * Maps `/betard/{roomId}`.
+   *
+   * Three fields need the fallbacks below, all confirmed against a live payload:
+   *
+   *  * `cate2_name` is present but **empty** — the game label is `second_lvl_name`
+   *    (with `game.tag_name` at the root as a second fallback), so reading only the
+   *    documented key left every room without a category.
+   *  * `hotabit`/`hot_num` do not exist; the viewer count is `room_biz_all.hot`
+   *    (a string) with `iol` as the fallback.
+   *  * `nickname` and `owner_name` both exist and agree; `owner_name` stays as the
+   *    fallback because some rooms only send that one.
+   */
   fun betard(root: JsonObject): DouyuRoomInfo {
     val room = root["room"] as? JsonObject
       ?: throw IllegalArgumentException("betard 响应缺少 room 字段")
     val roomId = room.string("room_id").orEmpty()
     val showStatus = room["show_status"]?.jsonPrimitive?.intOrNull ?: 0
     val videoLoop = room["videoLoop"]?.jsonPrimitive?.intOrNull ?: 0
+    val hot = room["room_biz_all"]?.let { it as? JsonObject }?.string("hot")
+    val gameTagName = root["game"]?.let { it as? JsonObject }?.string("tag_name")
     return DouyuRoomInfo(
       roomId = roomId,
       realRoomId = room.string("room_id").orEmpty(),
       title = room.string("room_name").orEmpty(),
-      streamerName = room.string("owner_name").orEmpty(),
+      streamerName = room.string("nickname") ?: room.string("owner_name").orEmpty(),
       coverUrl = room.string("room_pic")?.let(::normalizeUrl),
       avatarUrl = room.string("owner_avatar")?.let(::normalizeUrl),
-      viewerCount = room["hotabit"]?.jsonPrimitive?.longOrNull
+      viewerCount = hot?.toLongOrNull()
+        ?: room["iol"]?.jsonPrimitive?.longOrNull
         ?: room.string("hot_num")?.toLongOrNull()
         ?: 0,
       isLive = showStatus == 1 && videoLoop != 1,
       categoryId = room.string("cate2_id"),
-      categoryName = room.string("cate2_name"),
+      categoryName = room.string("cate2_name") ?: room.string("second_lvl_name") ?: gameTagName,
     )
   }
 
