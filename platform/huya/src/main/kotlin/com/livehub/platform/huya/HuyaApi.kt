@@ -70,7 +70,11 @@ class HuyaApi(private val http: HttpClient) {
    * Huya publishes its category list as a JS array on the live site; the JSON endpoint
    * is used where available and falls back to the curated static list otherwise.
    */
-  suspend fun categories(): List<Category> = HuyaCategories.all()
+  /**
+   * Static fallback used only when the shipped table is unavailable. The adapter tries
+   * the bundled catalogue first, so this is a last resort rather than the source.
+   */
+  suspend fun categories(): List<Category> = emptyList()
 
   // ---------------------------------------------------------------------- rooms
 

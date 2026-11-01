@@ -57,7 +57,11 @@ class BilibiliApi(
 
   // ------------------------------------------------------------------ categories
 
-  suspend fun categories(): List<Category> = BilibiliCategories.all()
+  /**
+   * Static fallback used only when the shipped table is unavailable. The adapter tries
+   * the bundled catalogue first, so this is a last resort rather than the source.
+   */
+  suspend fun categories(): List<Category> = emptyList()
 
   // ---------------------------------------------------------------------- rooms
 

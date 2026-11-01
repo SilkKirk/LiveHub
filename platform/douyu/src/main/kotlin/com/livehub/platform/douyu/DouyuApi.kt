@@ -101,7 +101,7 @@ class DouyuApi(private val http: HttpClient) {
     val hasMore = rooms.size >= limit
     return DouyuRoomPage(
       rooms = rooms,
-      nextOffset = if (hasMore) currentPage + 1 else null,
+      nextOffset = if (hasMore) (currentPage + 1).toString() else null,
     )
   }
 
@@ -139,7 +139,41 @@ class DouyuApi(private val http: HttpClient) {
     }
   }
 
-  /** Prefix marking a category id as a level-3 sub-category. */
+
+  // --------------------------------------------------------------------- search
+
+  /** `GET /japi/search/api/searchUser` — anchors matching [keyword]. */
+  suspend fun search(keyword: String, page: Int, pageSize: Int): DouyuRoomPage {
+    val did = DouyuSigner.randomDid()
+    val url = "$URL_SEARCH?kw=${encode(keyword)}&page=$page&pageSize=$pageSize&filterType=0"
+    val response = http.get(
+      url,
+      headers = mapOf(
+        "Referer" to "https://www.douyu.com/search/",
+        "Cookie" to "dy_did=$did; acf_did=$did",
+        "User-Agent" to HttpClients.UA_DESKTOP,
+      ),
+    )
+    val root = response.requireSuccess().parseObject("searchUser")
+    return DouyuParser.search(root, page = page, pageSize = pageSize)
+  }
+
+  // --------------------------------------------------------------------- detail
+
+  /** `GET /betard/{roomId}` — room metadata; doubles as the live check. */
+  suspend fun betard(roomId: String): DouyuRoomInfo {
+    val response = http.get(
+      "$URL_BETARD/$roomId",
+      headers = mapOf(
+        "Referer" to "https://www.douyu.com/$roomId",
+        "User-Agent" to HttpClients.UA_DESKTOP,
+      ),
+    )
+    val root = response.requireSuccess().parseObject("betard")
+    return DouyuParser.betard(root)
+  }
+
+  /** Resolves playable variants for a room, best first. */
   suspend fun playback(roomId: String, preferredQuality: Int?): PlaybackSource {
     val info = betard(roomId)
     if (!info.isLive) throw PlatformOfflineException("主播未开播", Platform.DOUYU)
