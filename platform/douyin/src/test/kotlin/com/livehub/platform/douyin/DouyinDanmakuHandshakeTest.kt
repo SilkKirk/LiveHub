@@ -182,6 +182,27 @@ class DouyinMsdkStubTest {
     assertTrue(base != DouyinMsdkSigner.msStub("1", "2", "1.4.0"))
   }
 
+  /**
+   * The stub for a **real** live room, taken from a handshake that actually worked.
+   *
+   * This is the strongest evidence available without an emulator: the digest below was the
+   * input to `getMSSDKSignature` in a Node probe that connected to
+   * `webcast5-ws-web-hl.douyin.com`, received 61 frames and decoded 82 real chat messages
+   * (`KPL王者荣耀职业联赛`'s room). If the stub construction ever drifts — a key renamed, a
+   * fixed value changed, the order altered — this digest changes and the handshake breaks.
+   */
+  @Test
+  fun `stub matches the digest that produced a working handshake`() {
+    assertEquals(
+      "2affaa9a00a0cd469bcdc03f90b5a97e",
+      DouyinMsdkSigner.msStub(
+        roomId = "7703137625093278464",
+        userUniqueId = "7514508016932636197",
+        webcastSdkVersion = "1.3.0",
+      ),
+    )
+  }
+
   @Test
   fun `stub key order is the documented one`() {
     assertEquals(
