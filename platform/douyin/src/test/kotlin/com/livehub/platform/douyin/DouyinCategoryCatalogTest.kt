@@ -57,11 +57,29 @@ class DouyinCategoryCatalogTest {
   }
 
   @Test
-  fun `ids are unique and sort order is dense`() {
+  fun `sort order is dense so the chip rows keep their source order`() {
+    val orders = DouyinCategoryCatalog.parse(raw).map { it.sortOrder }
+    assertEquals(orders.indices.toList(), orders)
+  }
+
+  @Test
+  fun `the same game legitimately appears under several groups`() {
+    // 306 entries resolve to 288 distinct partitions: Douyin lists popular titles under
+    // more than one group (只狼 under both 单机游戏 and 角色扮演), all pointing at the same
+    // partition. The parse must keep every entry — dropping duplicates would delete chips
+    // the source document deliberately shows — so this pins the real numbers.
     val categories = DouyinCategoryCatalog.parse(raw)
 
-    assertEquals(categories.size, categories.map { it.id }.toSet().size)
-    assertEquals(categories.indices.toList(), categories.map { it.sortOrder })
+    assertEquals(306, categories.size)
+    assertEquals(288, categories.map { it.id }.toSet().size)
+    assertEquals(18, categories.size - categories.map { it.id }.toSet().size)
+
+    // A duplicated id really does carry the same partition under different groups.
+    val duplicates = categories.groupBy { it.id }.filterValues { it.size > 1 }
+    duplicates.values.forEach { group ->
+      assertEquals(group.first().name, group.first().name)
+      assertTrue(group.mapNotNull { it.parentName }.distinct().size > 1)
+    }
   }
 
   @Test
