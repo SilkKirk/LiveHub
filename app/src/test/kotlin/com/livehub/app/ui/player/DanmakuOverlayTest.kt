@@ -15,10 +15,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Overlay behaviour that a plain unit test cannot see.
+ * Overlay behaviour that neither the screenshot harness nor a plain unit test can see.
  *
- * The bug these cover was invisible in both the screenshot harness (the animation clock is
- * frozen, so nothing has moved yet) and the JVM tests (no composition at all).
+ * The screenshots freeze the clock, so nothing has moved; a plain JVM test never composes
+ * at all. Both would have missed the duplication bug below, which survived nine rounds.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -32,12 +32,26 @@ class DanmakuOverlayTest {
   /**
    * Freezes the animation clock before composing.
    *
-   * Each bubble runs an 8 s `Animatable`, and `onFinished` removes it from the overlay. With
-   * `autoAdvance` left on, `waitForIdle()` runs the animation to completion, every message
-   * is dropped, and the assertions see an empty overlay rather than the real state.
+   * Each bubble runs an 8 s `Animatable` and `onFinished` removes it. With `autoAdvance`
+   * left at its default, `waitForIdle()` runs that animation to completion, so every
+   * message has already flown off and been dropped by the time the assertions run.
    */
   private fun freezeClock() {
     composeRule.mainClock.autoAdvance = false
+  }
+
+  /**
+   * Advances a little virtual time and lets the tree settle.
+   *
+   * One frame is not enough after a state change: the recomposition that restarts
+   * `LaunchedEffect(messages)` must run, the effect body must be dispatched, and the
+   * resulting list mutation must be composed in turn. A single `advanceTimeByFrame()`
+   * left a newly appended message un-composed. 500 ms is many frames and still well
+   * inside the 8 s flight, so every bubble exists and is still mid-screen.
+   */
+  private fun settle() {
+    composeRule.mainClock.advanceTimeBy(500)
+    composeRule.waitForIdle()
   }
 
   /**
@@ -48,7 +62,7 @@ class DanmakuOverlayTest {
    * "a" was animated three times, "b" twice and "c" once — the overlay filled with
    * duplicates within seconds of opening a busy room.
    *
-   * Compose does not compose two nodes with identical text unless they are genuinely two
+   * Compose does not produce two nodes with identical text unless they really are two
    * separate bubbles, so the assertion is on node counts.
    */
   @Test
@@ -65,17 +79,11 @@ class DanmakuOverlayTest {
         areaFraction = 1f,
       )
     }
-    composeRule.waitForIdle()
-    composeRule.mainClock.advanceTimeByFrame()
-    composeRule.waitForIdle()
+    settle()
 
-    // One more arrives.
+    // One more arrives, exactly as the ViewModel's `danmaku + new` update would.
     messages = first + message("c")
-    composeRule.waitForIdle()
-    // The frozen clock means the new bubble has been added to the list but not yet laid
-    // out or drawn; one frame is what turns it into a node.
-    composeRule.mainClock.advanceTimeByFrame()
-    composeRule.waitForIdle()
+    settle()
 
     composeRule.onAllNodesWithText("a").assertCountEquals(1)
     composeRule.onAllNodesWithText("b").assertCountEquals(1)
@@ -93,7 +101,7 @@ class DanmakuOverlayTest {
         blockedKeywords = emptyList(),
       )
     }
-    composeRule.waitForIdle()
+    settle()
 
     composeRule.onAllNodesWithText("hidden").assertCountEquals(0)
   }
@@ -109,9 +117,7 @@ class DanmakuOverlayTest {
         blockedKeywords = listOf("广告"),
       )
     }
-    composeRule.waitForIdle()
-    composeRule.mainClock.advanceTimeByFrame()
-    composeRule.waitForIdle()
+    settle()
 
     composeRule.onAllNodesWithText("买广告").assertCountEquals(0)
     composeRule.onNodeWithText("正常弹幕").assertExists()
