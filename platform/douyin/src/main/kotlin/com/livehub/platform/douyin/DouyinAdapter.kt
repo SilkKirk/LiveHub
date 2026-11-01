@@ -53,6 +53,16 @@ class DouyinAdapter(
   override suspend fun categories(): List<Category> =
     DouyinCategoryCatalog.load(assets).ifEmpty { api.categories() }
 
+  /**
+   * One page of rooms for [categoryId].
+   *
+   * The partition endpoint is preferred because it is the only one that can filter. It is
+   * also the one Douyin currently refuses: verified live, it answers HTTP 200 with a
+   * zero-length body for every partition. When it yields nothing — which is the normal case
+   * today, not an error — the anonymous recommendation feed is used instead. The feed
+   * ignores the partition but returns real rooms, so the tab stays useful rather than
+   * permanently empty; the trade-off is visible in the UI, which labels it 推荐.
+   */
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
     // Ids come from the shipped catalogue encoded as "<partitionType>:<partition>";
@@ -61,12 +71,21 @@ class DouyinAdapter(
     // A bare id keeps working for callers that predate the catalogue.
     val partitionType = ids?.first ?: "1"
     val partition = ids?.second ?: categoryId
-    val (rooms, hasMore) = api.rooms(
-      partition = partition,
-      partitionType = partitionType,
-      page = page,
-    )
-    return RoomPage(rooms = rooms, nextCursor = if (hasMore) (page + 1).toString() else null)
+
+    val partitioned = runCatching {
+      api.rooms(partition = partition, partitionType = partitionType, page = page)
+    }.getOrNull()
+    if (partitioned != null && partitioned.first.isNotEmpty()) {
+      return RoomPage(
+        rooms = partitioned.first,
+        nextCursor = if (partitioned.second) (page + 1).toString() else null,
+      )
+    }
+
+    // Fallback: the feed only serves one page, so no cursor is offered.
+    val feed = runCatching { api.feed(offset = (page - 1) * DouyinApi.PAGE_SIZE, count = DouyinApi.PAGE_SIZE) }
+      .getOrDefault(emptyList<Streamer>() to false)
+    return RoomPage(rooms = feed.first, nextCursor = null)
   }
 
   override suspend fun search(keyword: String, cursor: String?): RoomPage {

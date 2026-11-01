@@ -160,6 +160,42 @@ class DouyinApi(private val http: HttpClient) {
   }
 
   /**
+   * One page of the anonymous recommendation feed.
+   *
+   * This is the endpoint that actually works without a logged-in, fingerprinted client —
+   * verified live: an unsigned `webcast/feed` request returns ~300 KB of real rooms, while
+   * `webcast/web/partition/detail/room/v2` answers HTTP 200 with a **zero-length body** for
+   * every partition, signed or not. It ignores `partition`, so it cannot filter; it exists
+   * as the fallback that keeps the Douyin tab from being permanently empty.
+   */
+  suspend fun feed(offset: Int, count: Int): Pair<List<Streamer>, Boolean> {
+    val params = listOf(
+      "aid" to "6383",
+      "app_name" to "douyin_web",
+      "live_id" to "1",
+      "device_platform" to "web",
+      "language" to "zh-CN",
+      "enter_from" to "web_live",
+      "cookie_enabled" to "true",
+      "browser_language" to "zh-CN",
+      "browser_name" to "Chrome",
+      "browser_version" to DouyinSigner.BROWSER_VERSION,
+      "count" to count.toString(),
+      "offset" to offset.toString(),
+    )
+    val response = runCatching {
+      http.get("$URL_FEED?${DouyinSigner.signQuery(params)}", headers = headers()).requireSuccess()
+    }.getOrNull() ?: return emptyList<Streamer>() to false
+    val root = runCatching { parseObject(response.body, "feed") }.getOrNull()
+      ?: return emptyList<Streamer>() to false
+    val list = root["data"] as? JsonArray ?: return emptyList<Streamer>() to false
+    val rooms = list.mapNotNull { parseFeedItem(it) }
+    // The feed caps `count` server-side (6 in practice) and ignores `offset`, so a short
+    // page is the end rather than a signal to ask for more.
+    return rooms to (rooms.size >= count)
+  }
+
+  /**
    * Maps one `webcast/feed` entry.
    *
    * The feed wraps every card in an envelope whose room object lives under `data`;
