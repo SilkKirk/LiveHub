@@ -134,12 +134,18 @@ class DouyuParserTest {
     assertEquals("2", page.nextOffset)
   }
 
+  /**
+   * A page whose offset already covers the reported total is the last one.
+   *
+   * `consumed` is `page * pageSize` because the cursor is 1-based: page 1 has consumed
+   * 20 of the 40 matches, so another page exists; page 2 has consumed 40, so it does not.
+   */
   @Test
   fun `search stops once the reported total is consumed`() {
     val items = (1..20).joinToString(",") { """{"type":1,"anchorInfo":{"rid":$it,"nickName":"n$it"}}""" }
     val root = obj("""{"data":{"pageSize":20,"total":40,"relateUser":[$items]}}""")
 
-    assertEquals("3", DouyuParser.search(root, page = 1, pageSize = 20).nextOffset)
+    assertEquals("2", DouyuParser.search(root, page = 1, pageSize = 20).nextOffset)
     assertNull(DouyuParser.search(root, page = 2, pageSize = 20).nextOffset)
   }
 

@@ -38,6 +38,11 @@ class MainViewModelTest {
   @Before
   fun setUp() {
     container = AppContainer(ApplicationProvider.getApplicationContext())
+    // DataStore is a process-wide file, so any value a test persists leaks into whichever
+    // test runs next. That is not hypothetical: the theme test wrote "light" and the next
+    // test's "a fresh install starts at System" assertion saw it. Reset the whole settings
+    // record so every test starts from the same state regardless of order.
+    container.preferences.update { com.livehub.app.di.UserSettings() }
     // Start from a clean follow list so tests do not depend on ordering.
     container.followStore.replaceAll(emptyList())
     viewModel = MainViewModel(container)
