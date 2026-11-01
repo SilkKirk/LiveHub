@@ -88,11 +88,14 @@ class SyncController(
       handler = object : SyncHttpServer.Handler {
         override fun onPair(envelope: SyncEnvelope, remoteAddress: String): Pair<String, TrustedPeer>? {
           val expected = pairingCode ?: return null
+          // The caller told us the secret it will present; we store that, and reply
+          // with our own so the caller can authenticate against us.
           val result = engine.completePairing(
             peerDeviceId = envelope.deviceId,
             peerDeviceName = envelope.deviceName,
             code = envelope.payload?.entries.orEmpty(),
             expectedCode = expected,
+            remoteSecret = envelope.secret.ifBlank { null },
           )
           val peer = result.getOrNull() ?: return null
           // Record where the *peer* is listening. `remoteAddress` is their IP but the
@@ -179,10 +182,11 @@ class SyncController(
     val currentTransport = transport
       ?: return Result.failure(IllegalStateException("同步服务未启动，请重新打开同步页"))
 
+    // Present the secret we issued for ourselves; the host stores it.
     val envelope = SyncEnvelope(
       deviceId = preferences.deviceId,
       deviceName = preferences.deviceName,
-      secret = "",
+      secret = selfSecret(),
       preferredPort = listeningPort,
       payload = SyncPayload(
         scope = "pair",
@@ -281,6 +285,19 @@ class SyncController(
   }
 
   data class SyncSummary(val pulled: Int, val pushed: Int, val message: String)
+
+  /**
+   * Secret this installation presents to peers.
+   *
+   * Derived from the persisted device id so it survives restarts and is identical for
+   * every peer: a peer stores exactly this value and compares it on each request.
+   */
+  private fun selfSecret(): String =
+    preferences.settings.selfSecret.ifBlank {
+      val generated = java.util.UUID.randomUUID().toString().replace("-", "")
+      preferences.update { it.copy(selfSecret = generated) }
+      generated
+    }
 
   companion object {
     const val DEFAULT_PORT = 47653

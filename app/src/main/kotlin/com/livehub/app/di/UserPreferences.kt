@@ -39,6 +39,13 @@ data class UserSettings(
   val preferenceRecords: String = "",
   /** Serialised pinned-category records, including tombstones. */
   val categoryRecords: String = "",
+  /**
+   * Secret this device presents to paired peers.
+   *
+   * Peers store it verbatim and compare it on every request, so it must be stable
+   * across restarts. Generated once on first pairing.
+   */
+  val selfSecret: String = "",
 )
 
 /**

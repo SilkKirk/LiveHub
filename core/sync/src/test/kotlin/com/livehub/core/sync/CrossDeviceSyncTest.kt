@@ -33,6 +33,9 @@ class CrossDeviceSyncTest {
     val name: String,
     var now: Long,
   ) {
+    /** What this device presents to peers; peers store exactly this. */
+    val selfSecret: String = "secret$id"
+
     val store = FakeFollowStore()
     val target = SyncTargetAdapter(store)
     var peers = mutableListOf<TrustedPeer>()
@@ -68,6 +71,7 @@ class CrossDeviceSyncTest {
               peerDeviceName = envelope.deviceName,
               code = envelope.payload?.entries.orEmpty(),
               expectedCode = PAIRING_CODE,
+              remoteSecret = envelope.secret.ifBlank { null },
             )
             val peer = result.getOrNull() ?: return null
             // Record where the *caller* listens, which the handshake told us.
@@ -119,7 +123,7 @@ class CrossDeviceSyncTest {
       val envelope = SyncEnvelope(
         deviceId = id,
         deviceName = name,
-        secret = "",
+        secret = selfSecret,
         preferredPort = port,
         payload = SyncPayload(
           scope = "pair",
@@ -214,20 +218,20 @@ class CrossDeviceSyncTest {
   fun `pairing gives each side the secret the other will accept`() {
     phone.pairWith(tablet)
 
-    // The phone invited, so it stores the secret the tablet issued...
+    // The phone invited, so it stores the secret the tablet presents.
     assertEquals(1, phone.peers.size)
     assertEquals(tablet.id, phone.peers.first().deviceId)
-    // completePairing strips dashes so the secret is URL/QR friendly.
-    assertEquals("secret2", phone.peers.first().sharedSecret)
+    assertEquals(tablet.selfSecret, phone.peers.first().sharedSecret)
 
-    // ...and the tablet stores the phone as a peer with the secret the phone issued.
+    // The tablet learned the phone's secret from the request and stored it.
     assertEquals(1, tablet.peers.size)
     assertEquals(phone.id, tablet.peers.first().deviceId)
-    assertEquals("secret1", tablet.peers.first().sharedSecret)
+    assertEquals(phone.selfSecret, tablet.peers.first().sharedSecret)
 
-    // Each side's stored secret is exactly what the other side will present, which is
-    // what makes authenticate() succeed in both directions.
-    assertEquals("secret2", phone.peers.first().sharedSecret)
+    // Cross-check the invariant SyncHttpServer.authenticate relies on: the value a peer
+    // stores is exactly the value the other side presents.
+    assertEquals(phone.selfSecret, tablet.peers.first().sharedSecret)
+    assertEquals(tablet.selfSecret, phone.peers.first().sharedSecret)
   }
 
   @Test

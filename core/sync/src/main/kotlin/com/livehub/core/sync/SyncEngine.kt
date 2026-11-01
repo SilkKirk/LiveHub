@@ -190,17 +190,31 @@ class SyncEngine(
     return PairingState.Hosting(code = code, expiresAt = clock() + ttlMillis)
   }
 
-  /** Builds the [TrustedPeer] for a peer that completed the code exchange. */
+  /**
+   * Builds the [TrustedPeer] for a peer that completed the code exchange.
+   *
+   * The stored `sharedSecret` is the secret **the peer issued for itself**, not one this
+   * device generates: `SyncHttpServer.authenticate` compares the caller's `secret` field
+   * against the stored value, so a device must hold the [remoteSecret] the other side
+   * will present. Generating it locally produced two unrelated secrets and every
+   * authenticated request failed.
+   *
+   * @param remoteSecret the secret the peer returned for us to present.
+   * @param issuedSecret the secret this device issued for the peer to present; only used
+   *   when the caller is the pairing host and has not been handed one yet.
+   */
   fun completePairing(
     peerDeviceId: Long,
     peerDeviceName: String,
     code: String,
     expectedCode: String,
+    remoteSecret: String? = null,
+    issuedSecret: String? = null,
   ): Result<TrustedPeer> {
     if (!code.equals(expectedCode, ignoreCase = false)) {
       return Result.failure(IllegalArgumentException("配对码不正确"))
     }
-    val secret = idGenerator().replace("-", "")
+    val secret = (remoteSecret ?: issuedSecret ?: idGenerator()).replace("-", "")
     val peer = TrustedPeer(
       deviceId = peerDeviceId,
       deviceName = peerDeviceName,

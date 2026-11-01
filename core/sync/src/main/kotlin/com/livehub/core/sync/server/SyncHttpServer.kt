@@ -133,20 +133,34 @@ class SyncHttpServer(
     )
   }
 
+  /**
+   * Completes a pairing handshake.
+   *
+   * The exchange is symmetric: each device owns a secret and the other side stores it.
+   *
+   *  * the **caller** sends `secret` = the secret it issued for itself,
+   *  * the **host** replies with `secret` = the secret it issued for itself.
+   *
+   * After a successful round trip the caller can authenticate against the host (the host
+   * stored the caller's secret) and the host can authenticate against the caller (the
+   * caller stored the host's secret). Having each side invent its own idea of the shared
+   * secret — the previous behaviour — left every authenticated request failing.
+   */
   private fun handlePair(request: Request, socket: Socket): Response {
     val envelope = decode(request.body) ?: return Response(400, errorBody("bad envelope"))
     val remote = socket.inetAddress?.hostAddress.orEmpty()
     val paired = handler.onPair(envelope, remote)
       ?: return Response(403, errorBody("配对码不正确"))
 
-    val (secret, peer) = paired
+    val (issuedSecret, peer) = paired
     return Response(
       200,
       SyncEnvelope.encode(
         SyncEnvelope(
           deviceId = deviceId,
           deviceName = deviceName,
-          secret = secret,
+          // Hand the caller the secret it must present to us next time.
+          secret = issuedSecret,
           serverDeviceId = deviceId,
           serverDeviceName = deviceName,
           preferredPort = port,
