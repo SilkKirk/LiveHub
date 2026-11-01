@@ -21,6 +21,23 @@ object HuyaDanmakuProtocol {
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
   /** Decodes a chat frame, or returns null for heartbeats and other push types. */
+  /**
+   * Decodes a chat push into `(nickname, text)`.
+   *
+   * The body has two shapes in the wild and both have to be read, which a captured frame from
+   * room 660000 made obvious:
+   *
+   * ```
+   * BODY: t0:STRUCT_BEGIN | t0:LONG | t1:ZERO | t2:S1(9)="威仔zzz" | t3:ZERO | ... END
+   *       t1:ZERO | t2:ZERO | t3:S1(21)="只有凌晨是直播" | ...
+   * ```
+   *
+   * The nickname lives at tag 2 *inside* the struct at tag 0, while the visible text is at
+   * tag 3 of the **body itself** — tag 3 inside that struct is a ZERO_TAG, i.e. empty.
+   * Reading only the struct therefore produced an empty text and the message was dropped.
+   * Both levels are tried, struct first, because the self-built frames in the tests put the
+   * text inside the struct.
+   */
   fun decodeChat(frame: ByteArray): Pair<String, String>? {
     val outer = Tars.Reader(frame)
     val pushType = outer.readInt32(0)
@@ -29,7 +46,8 @@ object HuyaDanmakuProtocol {
     if (inner.isEmpty()) return null
 
     val middle = Tars.Reader(inner)
-    // tag 0 carries the message group id; tag 1 is the message type.
+    // tag 0 carries the message group id; tag 1 is the message type. Both are small numbers
+    // and arrive as BYTE as often as INT, which readInt32 already tolerates.
     middle.readInt32(0)
     val messageType = middle.readInt32(1)
     if (messageType != MESSAGE_TYPE_CHAT) return null
@@ -38,12 +56,23 @@ object HuyaDanmakuProtocol {
 
     var nick = ""
     var text = ""
-    Tars.Reader(body).readStruct(0) {
-      val nickBytes = readBytes(2)
-      val textBytes = readBytes(3)
-      nick = decodeText(nickBytes)
-      text = decodeText(textBytes)
+    runCatching {
+      Tars.Reader(body).readStruct(0) {
+        nick = decodeText(readBytes(2))
+        text = decodeText(readBytes(3))
+      }
     }
+
+    // The body-level tag 3 is where live frames actually carry the visible text.
+    if (text.isBlank()) {
+      val direct = runCatching { decodeText(Tars.Reader(body).readBytes(3)) }.getOrDefault("")
+      if (direct.isNotBlank()) text = direct
+    }
+    if (nick.isBlank()) {
+      val directNick = runCatching { decodeText(Tars.Reader(body).readBytes(2)) }.getOrDefault("")
+      if (directNick.isNotBlank()) nick = directNick
+    }
+
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return null
     return nick.trim().ifBlank { "匿名" } to trimmed

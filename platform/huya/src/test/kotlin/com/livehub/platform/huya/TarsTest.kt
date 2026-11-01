@@ -276,28 +276,24 @@ class HuyaDanmakuProtocolTest {
   }
 
   /**
-   * A captured live frame, kept as a reproducer for a **known, unfixed** gap.
+   * A frame captured off the live socket, decoded by the shipped reader.
    *
-   * Disabled rather than deleted: it is the evidence. The frame came from
-   * `wss://cdnws.api.huya.com` in room 660000 after registering with the room's real ayyuid
-   * (1346609715), and it carries 威仔zzz: 只有凌晨是直播.
+   * `chatFrame` above builds its input with this codebase's own writer, so it round-trips
+   * even when the length encoding is wrong — which is how the raw-int32 bug survived four
+   * rounds of "huya chat works" claims. This frame came from `wss://cdnws.api.huya.com` in
+   * room 660000 after registering with the room's real ayyuid (1346609715).
    *
-   * Walking it by hand shows why the shipped reader drops it:
+   * Walking it by hand is what produced the fix. Its body is:
    *
-   * - the inner payload starts with `05` — tag 0, type 5, a DOUBLE — followed by
-   *   `0a` (tag 0, STRUCT_BEGIN), so the message is not the flat `{0: int, 1: int, 2: bytes}`
-   *   shape `decodeChat` assumes;
-   * - the nickname really is at tag 2 (`26 09` + 9 bytes) as expected, but tag 3 of that same
-   *   struct is `3c` — ZERO_TAG, i.e. empty. The visible text sits deeper, behind
-   *   `2c 36 15` (tag 2 ZERO_TAG, tag 3 STRING1, length 21) inside a nested struct at tag 6;
-   * - the frame also contains type 8 (MAP), which `Tars.Reader.skip` does not implement.
+   * ```
+   * t0:STRUCT_BEGIN | t0:LONG | t1:ZERO | t2:S1(9)="威仔zzz" | t3:ZERO | ... END
+   * t1:ZERO | t2:ZERO | t3:S1(21)="只有凌晨是直播" | ...
+   * ```
    *
-   * So Huya chat is **not** confirmed working: the tagged-length encoding and the
-   * ZERO_TAG-as-empty-string handling are both right and verified, but the body layout for
-   * at least some live frames is still unhandled. The Node probe decoded 5 of 51 frames,
-   * which is consistent with "some shapes work, this one does not".
+   * So the nickname is at tag 2 inside the struct at tag 0, while the text is at tag 3 of the
+   * body itself — the struct's own tag 3 is a ZERO_TAG. Reading only the struct yielded an
+   * empty text and dropped the message; `decodeChat` now checks both levels.
    */
-  @org.junit.jupiter.api.Disabled("known gap: live frame body layout, see the comment")
   @Test
   fun `a captured live frame decodes with the shipped reader`() {
     val hex = "00071d000100f700051105782d000100d00a03000001174a1e18261c2609e5a881e4bb947a7a7a" +
