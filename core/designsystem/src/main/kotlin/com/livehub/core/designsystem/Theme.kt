@@ -69,7 +69,11 @@ val LiveBadgeColor: Color = LiveRed
 @Composable
 fun liveHubColorScheme(
   mode: ThemeMode,
-  dynamicColor: Boolean = true,
+  /**
+   * Material You. Off by default: the brand pink/teal is part of the identity and
+   * wallpaper-derived colours made the covers and chips look washed out.
+   */
+  dynamicColor: Boolean = false,
 ): ColorScheme {
   val dark = when (mode) {
     ThemeMode.System -> isSystemInDarkTheme()
@@ -91,7 +95,7 @@ fun liveHubColorScheme(
 @Composable
 fun LiveHubTheme(
   mode: ThemeMode = ThemeMode.System,
-  dynamicColor: Boolean = true,
+  dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   MaterialTheme(

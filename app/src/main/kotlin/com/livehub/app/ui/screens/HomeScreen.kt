@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
@@ -108,19 +109,27 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
 @Composable
 private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
   Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
+    // `weight(1f)` on a LazyRow lets the last chip be squeezed to "哔", so the row is
+    // given the remaining width instead and scrolls when it overflows.
     LazyRow(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
-      modifier = Modifier.weight(1f),
-      userScrollEnabled = true,
+      modifier = Modifier.weight(1f, fill = true),
     ) {
       items(Platform.supported) { platform ->
         FilterChip(
           selected = state.platform == platform,
           onClick = { onAction(UiAction.SelectPlatform(platform)) },
-          label = { Text(platform.displayName, maxLines = 1, softWrap = false) },
+          label = {
+            Text(
+              text = platform.displayName,
+              maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Visible,
+            )
+          },
         )
       }
     }

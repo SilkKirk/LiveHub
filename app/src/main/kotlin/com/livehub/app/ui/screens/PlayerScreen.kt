@@ -76,9 +76,12 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var controlsVisible by remember { mutableStateOf(true) }
   var wasPlaying by remember { mutableStateOf(true) }
 
-  // Auto-hide the chrome while playing; any tap brings it back.
-  LaunchedEffect(controlsVisible, variant?.url) {
-    if (controlsVisible) {
+  // Auto-hide the chrome only once something is actually playing. While the stream is
+  // still connecting the controls stay up, otherwise the player looks like a dead
+  // black screen with no way to pick a quality.
+  val isPlaying = variant != null && !state.loading
+  LaunchedEffect(controlsVisible, variant?.url, isPlaying) {
+    if (controlsVisible && isPlaying) {
       delay(CONTROLS_HIDE_DELAY_MILLIS)
       controlsVisible = false
     }
