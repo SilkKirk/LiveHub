@@ -16,8 +16,13 @@ object Tars {
     const val SHORT = 1
     const val INT = 2
     const val LONG = 3
+    const val FLOAT = 4
+    const val DOUBLE = 5
     const val STRING1 = 6
     const val STRING4 = 7
+
+    /** TARS map; live frames carry one, so skipping it has to be implemented. */
+    const val MAP = 8
     const val LIST = 9
     const val STRUCT_BEGIN = 10
     const val STRUCT_END = 11
@@ -275,6 +280,8 @@ object Tars {
         Type.SHORT -> readShortRaw()
         Type.INT -> readIntRaw()
         Type.LONG -> readLongRaw()
+        Type.FLOAT -> readIntRaw()
+        Type.DOUBLE -> readLongRaw()
         Type.STRING1 -> {
           val length = readByteRaw().toInt() and 0xFF
           readRaw(length)
@@ -283,13 +290,43 @@ object Tars {
           val length = readIntRaw()
           readRaw(length)
         }
+        // A nested struct is not length-prefixed: it runs until its own STRUCT_END, so the
+        // only way past it is to walk its fields. Throwing here desynchronised the reader
+        // whenever a field it wanted sat after a struct — which is why the live frame's
+        // body-level tag 3 was never reached.
+        Type.STRUCT_BEGIN -> skipStruct()
         Type.LIST -> skipList()
+        Type.MAP -> skipMap()
         Type.SIMPLE_LIST -> {
           readHead()
           val length = readTaggedLength()
           readRaw(length)
         }
         else -> throw IllegalStateException("cannot skip unsupported type $type")
+      }
+    }
+
+    /** Walks a nested struct to its matching `STRUCT_END`, tolerating deeper nesting. */
+    private fun skipStruct() {
+      var depth = 1
+      while (depth > 0 && position < data.size) {
+        val (_, type) = readHead()
+        when (type) {
+          Type.STRUCT_BEGIN -> depth++
+          Type.STRUCT_END -> depth--
+          else -> skip(type)
+        }
+      }
+    }
+
+    /** Walks a TARS map: a tagged size, then that many key/value pairs. */
+    private fun skipMap() {
+      val count = readTaggedLength()
+      repeat(count) {
+        val (_, keyType) = readHead()
+        skip(keyType)
+        val (_, valueType) = readHead()
+        skip(valueType)
       }
     }
 
