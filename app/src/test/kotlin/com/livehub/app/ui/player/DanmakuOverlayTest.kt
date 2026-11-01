@@ -30,6 +30,17 @@ class DanmakuOverlayTest {
   private fun message(text: String) = DanmakuMessage(roomKey = "douyu:1", userName = "观众", text = text)
 
   /**
+   * Freezes the animation clock before composing.
+   *
+   * Each bubble runs an 8 s `Animatable`, and `onFinished` removes it from the overlay. With
+   * `autoAdvance` left on, `waitForIdle()` runs the animation to completion, every message
+   * is dropped, and the assertions see an empty overlay rather than the real state.
+   */
+  private fun freezeClock() {
+    composeRule.mainClock.autoAdvance = false
+  }
+
+  /**
    * A new message must not re-add the messages already on screen.
    *
    * `messages` is the ViewModel's whole rolling buffer, so appending one entry changed the
@@ -42,6 +53,7 @@ class DanmakuOverlayTest {
    */
   @Test
   fun `appending a message does not duplicate the ones already shown`() {
+    freezeClock()
     val first = listOf(message("a"), message("b"))
     var messages by mutableStateOf(first)
 
@@ -67,6 +79,7 @@ class DanmakuOverlayTest {
   /** A disabled overlay composes nothing, and therefore costs nothing. */
   @Test
   fun `a disabled overlay renders no messages`() {
+    freezeClock()
     composeRule.setContent {
       DanmakuOverlay(
         messages = listOf(message("hidden")),
@@ -82,6 +95,7 @@ class DanmakuOverlayTest {
   /** Blocked keywords never reach the overlay, and are matched case-insensitively. */
   @Test
   fun `blocked keywords are filtered before animating`() {
+    freezeClock()
     composeRule.setContent {
       DanmakuOverlay(
         messages = listOf(message("买广告"), message("正常弹幕")),
