@@ -289,8 +289,17 @@ object Tars {
       }
     }
 
+    /**
+     * Reads a length-prefixed string body.
+     *
+     * `ZERO_TAG` (type 12) means the field was written with the value 0 — for a string that
+     * is an empty string, not an error. Live frames use it for optional fields: a captured
+     * chat frame from room 660000 encodes the text field as `ZERO_TAG` in the struct it
+     * appears in, and throwing here dropped the whole message.
+     */
     private fun readStringBytes(type: Int): ByteArray {
       val length = when (type) {
+        Type.ZERO_TAG -> 0
         Type.STRING1 -> readByteRaw().toInt() and 0xFF
         Type.STRING4 -> readIntRaw()
         Type.SIMPLE_LIST -> {
