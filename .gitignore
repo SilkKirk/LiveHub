@@ -25,3 +25,5 @@ release/
 
 # Misc
 *.log
+
+dist/

@@ -1,0 +1,139 @@
+name: Release
+
+# Tagging is what publishes: `git tag v0.2.0 && git push --tags` builds a signed-if-
+# configured APK and attaches it to a GitHub Release. Pushing a tag is the only step a
+# human needs to perform.
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (for example v0.2.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+jobs:
+  publish:
+    name: Build & publish APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=LiveHub ${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure Android SDK 37.2
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$SDK_ROOT" ANDROID_HOME="$SDK_ROOT"
+          SDKM="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 2 -name sdkmanager -type f 2>/dev/null | sort | tail -n1 || true)"
+          if [ -n "$SDKM" ]; then
+            yes 2>/dev/null | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-37.2" "build-tools;37.0.0" "platform-tools" >/dev/null || true
+          fi
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      # A release keystore is optional. Without it the APK is signed with the debug key
+      # so it stays installable; with it, the artifact is a proper release build.
+      - name: Decode keystore
+        id: keystore
+        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > livehub-release.jks
+          cat > keystore.properties <<EOF
+          storeFile=../livehub-release.jks
+          storePassword=${{ secrets.RELEASE_STORE_PASSWORD }}
+          keyAlias=${{ secrets.RELEASE_KEY_ALIAS }}
+          keyPassword=${{ secrets.RELEASE_KEY_PASSWORD }}
+          EOF
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        if: ${{ steps.keystore.outputs.signed == 'true' }}
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Build debug APK (fallback when no signing key is configured)
+        if: ${{ steps.keystore.outputs.signed != 'true' }}
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Collect APK
+        id: apk
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            SRC=app/build/outputs/apk/release/app-release.apk
+            SUFFIX=release
+          else
+            SRC=app/build/outputs/apk/debug/app-debug.apk
+            SUFFIX=debug
+          fi
+          NAME="LiveHub-${{ steps.meta.outputs.tag }}-${SUFFIX}.apk"
+          cp "$SRC" "dist/$NAME"
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          ls -la dist
+          # Record the exact commit and build identity alongside the binary.
+          {
+            echo "tag: ${{ steps.meta.outputs.tag }}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "variant: ${SUFFIX}"
+            echo "sha256: $(sha256sum "dist/$NAME" | cut -d' ' -f1)"
+          } > "dist/$NAME.sha256.txt"
+          cat "dist/$NAME.sha256.txt"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.apk.outputs.path }}
+            ${{ steps.apk.outputs.path }}.sha256.txt
+          body: |
+            LiveHub 聚合直播客户端 ${{ steps.meta.outputs.tag }}
+
+            支持斗鱼、虎牙、抖音、哔哩哔哩直播，并通过局域网在设备间同步关注列表。
+
+            **安装**：下载下方 APK，在手机上允许「安装未知应用」即可。
+            构建产物的 SHA-256 见 `*.sha256.txt`。
+
+            > 本项目仅供学习与技术交流，直播内容与数据版权归各平台所有。
