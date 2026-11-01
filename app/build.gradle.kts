@@ -13,6 +13,20 @@ val hasReleaseKeystore = keystoreFile.exists().also { exists ->
     if (exists) keystoreFile.inputStream().use(keystoreProperties::load)
 }
 
+/**
+ * Version, overridable from the command line.
+ *
+ * `-PversionName=v0.9.1` / `-PversionCode=901` is what the release workflow passes, derived
+ * from the git tag. The defaults keep an ordinary `assembleDebug` working without them, but
+ * a store build must never fall back to them: `versionCode` has to increase on every
+ * release or an update is rejected as a downgrade, and forgetting to bump it by hand is
+ * exactly the kind of thing that only shows up when a user cannot install the new build.
+ */
+val releaseVersionName: String = (findProperty("versionName") as String?)?.takeIf { it.isNotBlank() }
+    ?: "0.1.0"
+val releaseVersionCode: Int = (findProperty("versionCode") as String?)?.toIntOrNull()
+    ?: 1
+
 android {
     namespace = "com.livehub.app"
     compileSdk = 37
@@ -21,8 +35,8 @@ android {
         applicationId = "com.livehub.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
