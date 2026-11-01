@@ -1,12 +1,16 @@
 package com.livehub.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,29 +21,30 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,23 +74,27 @@ import kotlinx.coroutines.delay
 /**
  * Live room screen.
  *
- * Portrait follows the layout every live-streaming app uses: a 16:9 video surface with
- * the room header overlaid on it, then the room's action row, then a danmaku list that
- * fills the rest of the screen and scrolls newest-first. Full screen keeps only the
- * video plus the floating danmaku overlay.
+ * Mirrors the reference player's shape:
+ *
+ *  * a pill-shaped glass header (back, identity, follow, close) above the video,
+ *  * a 16:9 video surface,
+ *  * a vertical column of round controls (settings / reload / fullscreen) on the right,
+ *  * the danmaku list filling the rest of the screen,
+ *  * a settings sheet holding quality, line and every danmaku option, because those do
+ *    not fit in a chip row without crowding the picture,
+ *  * full screen keeping only video plus the floating overlay.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val variant: StreamVariant? = state.selectedVariant
   var fullscreen by remember { mutableStateOf(false) }
+  var showSettings by remember { mutableStateOf(false) }
   var controlsVisible by remember { mutableStateOf(true) }
 
-  // Back must leave full screen first, not the room.
   BackHandler(enabled = fullscreen) { fullscreen = false }
 
   val isPlaying = variant != null && !state.loading
-  // Keep the chrome up until something is actually playing; the first seconds otherwise
-  // look like a dead black screen with no way to change quality.
   LaunchedEffect(controlsVisible, variant?.url, isPlaying, fullscreen) {
     if (controlsVisible && isPlaying) {
       delay(if (fullscreen) FULLSCREEN_HIDE_DELAY_MILLIS else PORTRAIT_HIDE_DELAY_MILLIS)
@@ -93,88 +102,250 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
   }
 
-  if (fullscreen) {
-    FullscreenPlayer(
-      state = state,
-      variant = variant,
-      controlsVisible = controlsVisible,
-      onToggleControls = { controlsVisible = !controlsVisible },
-      onExitFullscreen = { fullscreen = false },
-      onAction = onAction,
-    )
-    return
+  Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Column(modifier = Modifier.fillMaxSize()) {
+      if (!fullscreen) {
+        PlayerHeader(state = state, onAction = onAction, modifier = Modifier.fillMaxWidth())
+      }
+
+      val videoModifier = if (fullscreen) {
+        Modifier.fillMaxSize()
+      } else {
+        Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+      }
+
+      Box(modifier = videoModifier.background(Color.Black)) {
+        VideoSurface(
+          state = state,
+          variant = variant,
+          onAction = onAction,
+          modifier = Modifier.fillMaxSize(),
+        )
+
+        // In full screen the bar floats over the picture instead of sitting above it.
+        if (fullscreen && controlsVisible) {
+          FullscreenBar(
+            state = state,
+            onExit = { fullscreen = false },
+            onAction = onAction,
+            modifier = Modifier.align(Alignment.TopCenter),
+          )
+        }
+
+        // Overlay danmaku: only in full screen; portrait uses the list below instead.
+        if (fullscreen && variant != null) {
+          DanmakuOverlay(
+            messages = state.danmaku,
+            enabled = state.danmakuEnabled,
+            blockedKeywords = state.blockedKeywords,
+            opacity = state.danmakuOpacity,
+            fontScale = state.danmakuFontScale,
+            areaFraction = state.danmakuAreaFraction,
+            modifier = Modifier.fillMaxSize().padding(top = 56.dp, bottom = 16.dp),
+          )
+        }
+
+        // Round controls down the right edge, as in the reference player.
+        if (controlsVisible) {
+          SideControls(
+            fullscreen = fullscreen,
+            onToggleFullscreen = {
+              fullscreen = !fullscreen
+              controlsVisible = true
+            },
+            onOpenSettings = { showSettings = true },
+            onReload = { state.room?.let { onAction(UiAction.OpenRoom(it)) } },
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
+          )
+        }
+
+        // In portrait a tap anywhere on the picture toggles the controls.
+        if (!fullscreen) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { controlsVisible = !controlsVisible },
+              ),
+          )
+        }
+      }
+
+      if (!fullscreen) {
+        RoomActionRow(state = state, onAction = onAction)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        DanmakuPanel(state = state, modifier = Modifier.weight(1f).fillMaxWidth())
+      }
+    }
   }
 
-  Column(modifier = Modifier.fillMaxSize()) {
-    VideoSection(
-      state = state,
-      variant = variant,
-      onAction = onAction,
-      onEnterFullscreen = {
-        fullscreen = true
-        controlsVisible = true
-      },
-    )
-
-    RoomActionRow(state = state, onAction = onAction)
-
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
-    if (state.variants.isNotEmpty()) {
-      QualityBar(state = state, variant = variant, onAction = onAction)
+  if (showSettings) {
+    ModalBottomSheet(onDismissRequest = { showSettings = false }) {
+      PlayerSettings(state = state, variant = variant, onAction = onAction)
     }
-
-    DanmakuPanel(state = state, modifier = Modifier.weight(1f).fillMaxWidth())
   }
 }
 
-// -------------------------------------------------------------- video section ----
+// ------------------------------------------------------------------- header ---
 
 @Composable
-private fun VideoSection(
+private fun PlayerHeader(
   state: UiState,
-  variant: StreamVariant?,
   onAction: (UiAction) -> Unit,
-  onEnterFullscreen: () -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-  Box(
-    modifier = Modifier
-      .fillMaxWidth()
-      .aspectRatio(16f / 9f)
-      .background(Color.Black),
+  val followed = remember(state.followed, state.room) {
+    state.room?.let { room -> state.followed.any { it.key == room.key } } ?: false
+  }
+
+  Row(
+    modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    VideoSurface(
-      state = state,
-      variant = variant,
-      onAction = onAction,
-      modifier = Modifier.fillMaxSize(),
-    )
-
-    // The header overlays the video so the picture keeps the full width.
-    PlayerOverlayHeader(
-      state = state,
-      onAction = onAction,
-      modifier = Modifier.align(Alignment.TopCenter),
-    )
-
-    Row(
-      modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    Surface(
+      modifier = Modifier.weight(1f).height(40.dp),
+      shape = RoundedCornerShape(20.dp),
+      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
     ) {
-      OverlayIconButton(
-        icon = if (state.danmakuEnabled) Icons.Filled.ChatBubble else Icons.Outlined.ChatBubbleOutline,
-        description = if (state.danmakuEnabled) "关闭弹幕" else "开启弹幕",
-        tint = if (state.danmakuEnabled) MaterialTheme.colorScheme.primary else Color.White,
-        onClick = { onAction(UiAction.ToggleDanmaku(!state.danmakuEnabled)) },
-      )
-      OverlayIconButton(
-        icon = Icons.Filled.Fullscreen,
-        description = "全屏",
-        onClick = onEnterFullscreen,
-      )
+      Row(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+          contentDescription = "返回",
+          tint = MaterialTheme.colorScheme.onSurface,
+          modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .clickable { onAction(UiAction.ClosePlayer) }
+            .padding(4.dp),
+        )
+
+        Column(modifier = Modifier.weight(1f).padding(start = 2.dp)) {
+          Text(
+            text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          val viewers = state.room?.viewerCount ?: 0
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            if (state.room?.isLive == true) {
+              Box(
+                modifier = Modifier
+                  .size(5.dp)
+                  .clip(CircleShape)
+                  .background(LiveBadgeColor),
+              )
+              Spacer(Modifier.width(4.dp))
+            }
+            Text(
+              text = if (viewers > 0) {
+                "${ViewerCountFormatter.format(viewers)}人在看"
+              } else {
+                state.room?.platform?.displayName.orEmpty()
+              },
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+            )
+          }
+        }
+
+        Icon(
+          imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
+          contentDescription = if (followed) "取消关注" else "关注",
+          tint = if (followed) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .clickable(enabled = state.room != null) {
+              state.room?.let { onAction(UiAction.ToggleFollow(it)) }
+            }
+            .padding(5.dp),
+        )
+      }
+    }
+
+    Surface(
+      modifier = Modifier.size(40.dp),
+      shape = CircleShape,
+      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(
+          imageVector = Icons.Filled.Close,
+          contentDescription = "关闭",
+          tint = MaterialTheme.colorScheme.onSurface,
+          modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .clickable { onAction(UiAction.ClosePlayer) }
+            .padding(9.dp),
+        )
+      }
     }
   }
 }
+
+@Composable
+private fun FullscreenBar(
+  state: UiState,
+  onExit: () -> Unit,
+  onAction: (UiAction) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val followed = state.room?.let { room -> state.followed.any { it.key == room.key } } == true
+
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent)))
+      .padding(horizontal = 6.dp, vertical = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Icon(
+      imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+      contentDescription = "退出全屏",
+      tint = Color.White,
+      modifier = Modifier
+        .size(34.dp)
+        .clip(CircleShape)
+        .clickable(onClick = onExit)
+        .padding(5.dp),
+    )
+    Text(
+      text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
+      color = Color.White,
+      style = MaterialTheme.typography.titleSmall,
+      fontWeight = FontWeight.SemiBold,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f),
+    )
+    Icon(
+      imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
+      contentDescription = "关注",
+      tint = Color.White,
+      modifier = Modifier
+        .size(34.dp)
+        .clip(CircleShape)
+        .clickable { state.room?.let { onAction(UiAction.ToggleFollow(it)) } }
+        .padding(6.dp),
+    )
+  }
+}
+
+// -------------------------------------------------------------------- video ---
 
 @Composable
 private fun VideoSurface(
@@ -233,71 +404,52 @@ private fun VideoSurface(
 }
 
 @Composable
-private fun PlayerOverlayHeader(
-  state: UiState,
-  onAction: (UiAction) -> Unit,
+private fun SideControls(
+  fullscreen: Boolean,
+  onToggleFullscreen: () -> Unit,
+  onOpenSettings: () -> Unit,
+  onReload: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val followed = remember(state.followed, state.room) {
-    state.room?.let { room -> state.followed.any { it.key == room.key } } ?: false
-  }
-
-  Row(
-    modifier = modifier
-      .fillMaxWidth()
-      .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.72f), Color.Transparent)))
-      .padding(horizontal = 2.dp, vertical = 2.dp),
-    verticalAlignment = Alignment.CenterVertically,
+  Column(
+    modifier = modifier,
+    verticalArrangement = Arrangement.spacedBy(14.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    IconButton(onClick = { onAction(UiAction.ClosePlayer) }) {
-      Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
-    }
-    Column(modifier = Modifier.weight(1f)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        if (state.room?.isLive == true) {
-          Surface(color = LiveBadgeColor, shape = RoundedCornerShape(3.dp)) {
-            Text(
-              text = "LIVE",
-              style = MaterialTheme.typography.labelSmall,
-              color = Color.White,
-              fontWeight = FontWeight.Bold,
-              modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-            )
-          }
-          Spacer(Modifier.width(6.dp))
-        }
-        Text(
-          text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
-          color = Color.White,
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-      val viewers = state.room?.viewerCount ?: 0
-      if (viewers > 0) {
-        Text(
-          text = "${ViewerCountFormatter.format(viewers)}人在看",
-          color = Color.White.copy(alpha = 0.72f),
-          style = MaterialTheme.typography.labelSmall,
-        )
-      }
-    }
-    IconButton(
-      onClick = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
-      enabled = state.room != null,
-    ) {
+    ControlFab(icon = Icons.Filled.Settings, description = "播放设置", onClick = onOpenSettings)
+    ControlFab(icon = Icons.Filled.Refresh, description = "刷新", onClick = onReload)
+    ControlFab(
+      icon = if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+      description = if (fullscreen) "退出全屏" else "全屏",
+      onClick = onToggleFullscreen,
+    )
+  }
+}
+
+@Composable
+private fun ControlFab(
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  description: String,
+  onClick: () -> Unit,
+) {
+  Surface(
+    modifier = Modifier.size(38.dp).clip(CircleShape).clickable(onClick = onClick),
+    shape = CircleShape,
+    color = Color.White.copy(alpha = 0.10f),
+    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+  ) {
+    Box(contentAlignment = Alignment.Center) {
       Icon(
-        imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
-        contentDescription = if (followed) "取消关注" else "关注",
-        tint = if (followed) MaterialTheme.colorScheme.primary else Color.White,
+        imageVector = icon,
+        contentDescription = description,
+        tint = Color.White.copy(alpha = 0.92f),
+        modifier = Modifier.size(20.dp),
       )
     }
   }
 }
 
-// --------------------------------------------------------------- action rows ----
+// --------------------------------------------------------------- action row ---
 
 @Composable
 private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
@@ -315,6 +467,10 @@ private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
     )
     val subtitle = buildString {
       state.room?.platform?.displayName?.let { append(it) }
+      state.selectedSubCategory?.name?.let {
+        if (isNotEmpty()) append(" · ")
+        append(it)
+      }
       state.room?.categoryName?.takeIf { it.isNotBlank() }?.let {
         if (isNotEmpty()) append(" · ")
         append(it)
@@ -338,11 +494,6 @@ private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
         filled = !followed,
         onClick = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
       )
-      PillButton(
-        label = "刷新",
-        filled = false,
-        onClick = { state.room?.let { onAction(UiAction.OpenRoom(it)) } },
-      )
       Spacer(Modifier.weight(1f))
       Text(
         text = "弹幕 ${state.danmaku.size}",
@@ -353,52 +504,99 @@ private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
   }
 }
 
+// ---------------------------------------------------------------- settings ---
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun QualityBar(
+private fun PlayerSettings(
   state: UiState,
   variant: StreamVariant?,
   onAction: (UiAction) -> Unit,
 ) {
-  Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-    Row(
-      modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = Icons.Filled.HighQuality,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.size(15.dp),
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp)
+      .padding(bottom = 24.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    Text("播放设置", style = MaterialTheme.typography.titleMedium)
+
+    if (state.variants.isNotEmpty()) {
+      SettingsLabel("清晰度 / 线路")
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        state.variants.forEach { item ->
+          FilterChip(
+            selected = item.identity == variant?.identity,
+            onClick = { onAction(UiAction.SelectVariant(item)) },
+            label = {
+              Text(
+                text = listOfNotNull(item.qualityLabel, item.lineName)
+                  .distinct()
+                  .joinToString(" · "),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+              )
+            },
+          )
+        }
+      }
+    }
+
+    SettingsLabel("弹幕")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      FilterChip(
+        selected = state.danmakuEnabled,
+        onClick = { onAction(UiAction.ToggleDanmaku(true)) },
+        label = { Text("开") },
       )
-      Spacer(Modifier.width(5.dp))
-      Text(
-        text = "清晰度 / 线路",
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      FilterChip(
+        selected = !state.danmakuEnabled,
+        onClick = { onAction(UiAction.ToggleDanmaku(false)) },
+        label = { Text("关") },
       )
     }
-    LazyRow(
-      contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp),
+
+    SettingsLabel("弹幕显示区域")
+    FlowRow(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      items(state.variants, key = { it.identity }) { item ->
+      DANMAKU_AREAS.forEach { (label, fraction) ->
         FilterChip(
-          selected = item.identity == variant?.identity,
-          onClick = { onAction(UiAction.SelectVariant(item)) },
-          label = {
-            Text(
-              text = listOfNotNull(item.qualityLabel, item.lineName).distinct().joinToString(" · "),
-              style = MaterialTheme.typography.labelMedium,
-              maxLines = 1,
-            )
-          },
+          selected = state.danmakuAreaFraction == fraction,
+          onClick = { onAction(UiAction.SetDanmakuAreaFraction(fraction)) },
+          label = { Text(label) },
+        )
+      }
+    }
+
+    SettingsLabel("弹幕字号")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      DANMAKU_FONT_SCALES.forEach { (label, scale) ->
+        FilterChip(
+          selected = state.danmakuFontScale == scale,
+          onClick = { onAction(UiAction.SetDanmakuFontScale(scale)) },
+          label = { Text(label) },
         )
       }
     }
   }
 }
 
-// -------------------------------------------------------------- danmaku list ----
+@Composable
+private fun SettingsLabel(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.labelLarge,
+    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+  )
+}
+
+// ----------------------------------------------------------------- danmaku ---
 
 @Composable
 private fun DanmakuPanel(state: UiState, modifier: Modifier = Modifier) {
@@ -436,8 +634,6 @@ private fun DanmakuList(state: UiState, modifier: Modifier = Modifier) {
   ) {
     itemsIndexed(
       display,
-      // No id on the model; the arrival time is unique per message in practice and the
-      // index guards the (rare) same-millisecond case.
       key = { index, message -> "${message.receivedAt}:$index" },
     ) { _, message ->
       DanmakuRow(user = message.userName, content = message.text)
@@ -447,18 +643,23 @@ private fun DanmakuList(state: UiState, modifier: Modifier = Modifier) {
 
 @Composable
 private fun DanmakuRow(user: String, content: String) {
-  Row {
-    Text(
-      text = "${user.ifBlank { "匿名" }}：",
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-      maxLines = 1,
-    )
-    Text(
-      text = content,
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurface,
-    )
+  BoxWithConstraints {
+    val nameWidth = (maxWidth * 0.32f).coerceAtMost(120.dp)
+    Row {
+      Text(
+        text = "${user.ifBlank { "匿名" }}：",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.widthIn(max = nameWidth),
+      )
+      Text(
+        text = content,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+    }
   }
 }
 
@@ -495,98 +696,16 @@ private fun CenteredNotice(
   }
 }
 
-// ---------------------------------------------------------------- fullscreen ----
-
-@Composable
-private fun FullscreenPlayer(
-  state: UiState,
-  variant: StreamVariant?,
-  controlsVisible: Boolean,
-  onToggleControls: () -> Unit,
-  onExitFullscreen: () -> Unit,
-  onAction: (UiAction) -> Unit,
-) {
-  Box(
-    modifier = Modifier
-      .fillMaxSize()
-      .background(Color.Black)
-      .clickable(
-        interactionSource = remember { MutableInteractionSource() },
-        indication = null,
-        onClick = onToggleControls,
-      ),
-  ) {
-    if (variant != null) {
-      LivePlayer(url = variant.url, isHls = variant.isHls, modifier = Modifier.fillMaxSize())
-      DanmakuOverlay(
-        messages = state.danmaku,
-        enabled = state.danmakuEnabled,
-        blockedKeywords = state.blockedKeywords,
-        opacity = state.danmakuOpacity,
-        fontScale = state.danmakuFontScale,
-        areaFraction = state.danmakuAreaFraction,
-        modifier = Modifier.fillMaxSize().padding(top = 56.dp, bottom = 72.dp),
-      )
-    } else {
-      VideoSurface(
-        state = state,
-        variant = null,
-        onAction = onAction,
-        modifier = Modifier.fillMaxSize(),
-      )
-    }
-
-    if (controlsVisible) {
-      Row(
-        modifier = Modifier
-          .align(Alignment.TopCenter)
-          .fillMaxWidth()
-          .background(
-            Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent)),
-          )
-          .padding(horizontal = 4.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        IconButton(onClick = onExitFullscreen) {
-          Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "退出全屏", tint = Color.White)
-        }
-        Text(
-          text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
-          color = Color.White,
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = onExitFullscreen) {
-          Icon(Icons.Filled.FullscreenExit, contentDescription = "退出全屏", tint = Color.White)
-        }
-      }
-    }
-  }
-}
-
-// ------------------------------------------------------------------ helpers ----
-
-@Composable
-private fun OverlayIconButton(
-  icon: androidx.compose.ui.graphics.vector.ImageVector,
-  description: String,
-  onClick: () -> Unit,
-  tint: Color = Color.White,
-) {
-  Surface(color = Color.Black.copy(alpha = 0.42f), shape = CircleShape, modifier = Modifier.clip(CircleShape)) {
-    IconButton(onClick = onClick, modifier = Modifier.size(34.dp)) {
-      Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(18.dp))
-    }
-  }
-}
+// ----------------------------------------------------------------- helpers ---
 
 @Composable
 private fun PillButton(label: String, filled: Boolean, onClick: () -> Unit) {
   Surface(
-    color = if (filled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+    color = if (filled) {
+      MaterialTheme.colorScheme.primary
+    } else {
+      MaterialTheme.colorScheme.surfaceVariant
+    },
     shape = RoundedCornerShape(20.dp),
     modifier = Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick),
   ) {
@@ -602,6 +721,19 @@ private fun PillButton(label: String, filled: Boolean, onClick: () -> Unit) {
     )
   }
 }
+
+private val DANMAKU_AREAS = listOf(
+  "上1/4" to 0.25f,
+  "上1/2" to 0.5f,
+  "上3/4" to 0.75f,
+  "全屏" to 1.0f,
+)
+
+private val DANMAKU_FONT_SCALES = listOf(
+  "小" to 0.9f,
+  "中" to 1.0f,
+  "大" to 1.15f,
+)
 
 private const val PORTRAIT_HIDE_DELAY_MILLIS = 4_000L
 private const val FULLSCREEN_HIDE_DELAY_MILLIS = 3_000L

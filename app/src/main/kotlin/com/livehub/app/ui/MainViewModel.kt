@@ -47,6 +47,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       it.copy(
         platform = platform,
         danmakuEnabled = settings.danmakuEnabled,
+        danmakuOpacity = settings.danmakuOpacity,
+        danmakuFontScale = settings.danmakuFontScale,
+        danmakuAreaFraction = settings.danmakuAreaFraction,
         blockedKeywords = settings.blockedKeywords,
         syncScopes = settings.syncScopes
           .mapNotNull(SyncScope::fromWireName)
@@ -89,6 +92,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       UiAction.Back -> back()
       is UiAction.Navigate -> navigate(action.screen)
       is UiAction.ToggleDanmaku -> setDanmakuEnabled(action.enabled)
+      is UiAction.SetDanmakuAreaFraction -> setDanmakuAreaFraction(action.fraction)
+      is UiAction.SetDanmakuFontScale -> setDanmakuFontScale(action.scale)
       is UiAction.SetBlockedKeywords -> setBlockedKeywords(action.keywords)
       is UiAction.SetSyncScopes -> setSyncScopes(action.scopes)
       UiAction.RefreshPeers -> refreshPeers()
@@ -505,6 +510,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun setDanmakuEnabled(enabled: Boolean) {
     container.preferences.setDanmakuEnabled(enabled)
     _state.update { it.copy(danmakuEnabled = enabled) }
+  }
+
+  /** Danmaku area and font scale are persisted so the choice survives a restart. */
+  private fun setDanmakuAreaFraction(fraction: Float) {
+    val clamped = fraction.coerceIn(0.1f, 1f)
+    container.preferences.update { it.copy(danmakuAreaFraction = clamped) }
+    _state.update { it.copy(danmakuAreaFraction = clamped) }
+  }
+
+  private fun setDanmakuFontScale(scale: Float) {
+    val clamped = scale.coerceIn(0.6f, 2f)
+    container.preferences.update { it.copy(danmakuFontScale = clamped) }
+    _state.update { it.copy(danmakuFontScale = clamped) }
   }
 
   private fun setBlockedKeywords(keywords: List<String>) {

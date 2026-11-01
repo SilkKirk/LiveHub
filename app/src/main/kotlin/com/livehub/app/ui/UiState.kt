@@ -101,6 +101,8 @@ data class SelectSubCategory(val category: Category) : UiAction
   data class Navigate(val screen: Screen) : UiAction
 
   data class ToggleDanmaku(val enabled: Boolean) : UiAction
+data class SetDanmakuAreaFraction(val fraction: Float) : UiAction
+data class SetDanmakuFontScale(val scale: Float) : UiAction
 
   data class SetBlockedKeywords(val keywords: List<String>) : UiAction
 
