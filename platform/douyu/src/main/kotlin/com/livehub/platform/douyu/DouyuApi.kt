@@ -12,7 +12,6 @@ import com.livehub.core.network.HttpResponse
 import com.livehub.core.network.Crypto
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -30,12 +29,6 @@ import kotlinx.serialization.json.longOrNull
  * tests feed recorded JSON and assert on the resulting models.
  */
 class DouyuApi(private val http: HttpClient) {
-
-  internal val json: Json = Json {
-    ignoreUnknownKeys = true
-    isLenient = true
-    coerceInputValues = true
-  }
 
   // ------------------------------------------------------------------ categories
 
@@ -266,15 +259,9 @@ class DouyuApi(private val http: HttpClient) {
   internal fun JsonObject.intField(name: String): Int? =
     (this[name] as? JsonElement)?.jsonPrimitive?.intOrNull
 
-  private fun HttpResponse.parseObject(label: String): JsonObject = try {
-    json.parseToJsonElement(body).jsonObject
-  } catch (error: Exception) {
-    throw PlatformProtocolException(
-      "$label 返回了无法解析的内容 (HTTP $code)",
-      Platform.DOUYU,
-      error,
-    )
-  }
+  /** Delegates to [DouyuResponseRules]; see there for why HTML needs translating. */
+  private fun HttpResponse.parseObject(label: String): JsonObject =
+    DouyuResponseRules.requireJson(body = body, code = code, label = label)
 
   companion object {
     const val URL_WEB = "https://www.douyu.com"
