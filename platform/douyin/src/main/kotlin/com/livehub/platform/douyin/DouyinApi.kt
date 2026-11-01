@@ -12,6 +12,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -77,18 +78,27 @@ class DouyinApi(private val http: HttpClient) {
    * The adapter reports `hasMore = false` rather than letting an infinite-scroll list
    * spin forever on duplicates.
    */
+  /**
+   * One page of rooms for a partition.
+   *
+   * This is the endpoint that actually honours `partition`/`partition_type`; the
+   * anonymous `webcast/feed` path ignored every partition parameter and capped at six
+   * rooms. It requires an `a_bogus` signature — without it Douyin answers HTTP 200 with
+   * an empty body, which previously looked like "this partition has no rooms".
+   */
   suspend fun rooms(
-    categoryId: String,
+    partition: String,
+    partitionType: String,
     page: Int,
-    partitionType: String? = null,
   ): Pair<List<Streamer>, Boolean> {
+    val offset = ((page - 1) * PAGE_SIZE).coerceAtLeast(0)
     val params = listOf(
       "aid" to "6383",
       "app_name" to "douyin_web",
       "live_id" to "1",
       "device_platform" to "web",
       "language" to "zh-CN",
-      "enter_from" to "web_live",
+      "enter_from" to "web_homepage_hot",
       "cookie_enabled" to "true",
       "screen_width" to "1920",
       "screen_height" to "1080",
@@ -97,22 +107,56 @@ class DouyinApi(private val http: HttpClient) {
       "browser_name" to "Chrome",
       "browser_version" to DouyinSigner.BROWSER_VERSION,
       "count" to PAGE_SIZE.toString(),
-      "offset" to ((page - 1) * PAGE_SIZE).toString(),
-      "partition" to categoryId,
-      "partition_type" to (partitionType ?: "1"),
+      "offset" to offset.toString(),
+      "partition" to partition,
+      "partition_type" to partitionType,
+      "req_from" to "2",
+      "msToken" to "",
     )
-    val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
-    val response = http.get("$URL_FEED?${signed.queryString()}", headers = headers())
-    val root = response.requireSuccess().let { parseObject(it.body, "feed") }
-    val status = root["status_code"]?.jsonPrimitive?.intOrNull ?: 0
-    if (status != 0) {
-      throw PlatformProtocolException("抖音列表获取失败: status=$status", Platform.DOUYIN)
+    val query = params.joinToString("&") { (key, value) ->
+      key + "=" + encodeQueryValue(value)
     }
-    val list = root["data"]?.jsonArray ?: JsonArray(emptyList())
-    // `count` is capped at 6 server side, so "did we fill the page" is meaningless;
-    // there is never a second page to request.
-    val rooms = list.mapNotNull { parseFeedItem(it) }
-    return rooms to false
+    val bogus = DouyinABogus.sign(query, DouyinSigner.USER_AGENT)
+    val url = "$URL_PARTITION_V2?" + query + "&a_bogus=" + encodeQueryValue(bogus)
+
+    val response = http.get(url, headers = headers())
+    val root = response.requireSuccess().let { parseObject(it.body, "partition") }
+    val status = root["status_code"]?.jsonPrimitive?.intOrNull ?: -1
+    if (status != 0) {
+      throw PlatformProtocolException("抖音分区列表获取失败: status=$status", Platform.DOUYIN)
+    }
+
+    val wrapper = root["data"] as? JsonObject ?: return emptyList<Streamer>() to false
+    val list = wrapper["data"] as? JsonArray ?: JsonArray(emptyList())
+    val rooms = list.mapNotNull { parsePartitionItem(it) }
+    val apiHasMore = wrapper["has_more"]?.jsonPrimitive?.booleanOrNull
+    return rooms to (apiHasMore ?: (rooms.size >= PAGE_SIZE))
+  }
+
+  /** Maps one `partition/detail/room` entry, whose room object sits under `room`. */
+  private fun parsePartitionItem(element: JsonElement): Streamer? {
+    val envelope = element as? JsonObject ?: return null
+    val webRid = envelope.str("web_rid")
+      ?: (envelope["room"] as? JsonObject)?.str("id_str")
+      ?: return null
+    if (webRid.isBlank()) return null
+    val room = envelope["room"] as? JsonObject
+    val owner = room?.get("owner") as? JsonObject
+    val stats = room?.get("stats") as? JsonObject
+    val viewers = stats?.get("total_user")?.jsonPrimitive?.longOrNull
+      ?: stats?.str("user_count_str")?.let { parseCount(it) }
+      ?: 0
+    return Streamer(
+      platform = Platform.DOUYIN,
+      roomId = webRid,
+      streamerName = owner?.str("nickname").orEmpty().ifBlank { "抖音主播" },
+      title = room?.str("title").orEmpty().ifBlank { "直播中" },
+      coverUrl = firstImage(room?.get("cover")),
+      avatarUrl = firstImage(owner?.get("avatar_thumb")),
+      viewerCount = viewers,
+      isLive = (room?.get("status")?.jsonPrimitive?.intOrNull ?: 2) == 2,
+      updatedAt = System.currentTimeMillis(),
+    )
   }
 
   /**
@@ -150,6 +194,10 @@ class DouyinApi(private val http: HttpClient) {
       updatedAt = System.currentTimeMillis(),
     )
   }
+
+  /** Percent-encodes one query value the way the web client does. */
+  private fun encodeQueryValue(value: String): String =
+    java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
   private fun JsonObject.str(key: String): String? =
     (this[key] as? JsonElement)?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -408,6 +456,9 @@ class DouyinApi(private val http: HttpClient) {
 
   companion object {
     const val URL_FEED = "https://live.douyin.com/webcast/feed/"
+    /** Partition-scoped list; requires an `a_bogus` signature. */
+    const val URL_PARTITION_V2 =
+      "https://live.douyin.com/webcast/web/partition/detail/room/v2/"
     const val URL_PARTITION = "https://live.douyin.com/webcast/web/partition/detail/room/"
     const val URL_SEARCH = "https://live.douyin.com/webcast/search/partition/room/"
     const val URL_ENTER = "https://live.douyin.com/webcast/room/web/enter/"

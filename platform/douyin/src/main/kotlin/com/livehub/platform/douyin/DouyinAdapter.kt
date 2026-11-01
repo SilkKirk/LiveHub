@@ -54,9 +54,14 @@ class DouyinAdapter(
     // Ids come from the shipped catalogue encoded as "<partitionType>:<partition>";
     // a bare number is still accepted for older callers.
     val ids = DouyinCategoryCatalog.idsOf(categoryId)
+    // A bare id keeps working for callers that predate the catalogue.
+    val partitionType = ids?.first ?: "1"
     val partition = ids?.second ?: categoryId
-    val partitionType = ids?.first
-    val (rooms, hasMore) = api.rooms(partition, page, partitionType)
+    val (rooms, hasMore) = api.rooms(
+      partition = partition,
+      partitionType = partitionType,
+      page = page,
+    )
     return RoomPage(rooms = rooms, nextCursor = if (hasMore) (page + 1).toString() else null)
   }
 
