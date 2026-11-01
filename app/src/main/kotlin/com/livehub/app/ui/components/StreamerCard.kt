@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.outlined.Visibility
@@ -26,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -120,7 +122,7 @@ fun StreamerCard(
 
         IconButton(
           onClick = onToggleFollow,
-          modifier = Modifier.align(Alignment.BottomEnd).padding(2.dp),
+          modifier = Modifier.align(Alignment.TopEnd).padding(2.dp),
         ) {
           Icon(
             imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
@@ -165,7 +167,7 @@ fun StreamerCard(
 @Composable
 private fun CoverImage(streamer: Streamer) {
   if (streamer.coverUrl.isNullOrBlank()) {
-    CoverPlaceholder(title = streamer.title.ifBlank { streamer.streamerName })
+    CoverPlaceholder(seed = streamer.title.ifBlank { streamer.streamerName })
   } else {
     AsyncImage(
       model = streamer.coverUrl,
@@ -180,29 +182,28 @@ private fun CoverImage(streamer: Streamer) {
 
 /** Deterministic gradient placeholder so a missing cover is still visually informative. */
 @Composable
-private fun CoverPlaceholder(title: String) {
+private fun CoverPlaceholder(seed: String) {
   val palette = listOf(
     Color(0xFF2C3E50) to Color(0xFF4CA1AF),
     Color(0xFF3A1C71) to Color(0xFFD76D77),
     Color(0xFF134E5E) to Color(0xFF71B280),
     Color(0xFF642B73) to Color(0xFFC6426E),
   )
-  val pair = palette[(title.hashCode().absoluteValue) % palette.size]
+  val pair = palette[(seed.hashCode().absoluteValue) % palette.size]
 
   Box(
     modifier = Modifier
       .fillMaxSize()
-      .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(pair.first, pair.second))),
+      .background(Brush.linearGradient(listOf(pair.first, pair.second))),
     contentAlignment = Alignment.Center,
   ) {
-    Text(
-      text = title.take(8).ifBlank { "直播" },
-      style = MaterialTheme.typography.titleMedium,
-      color = Color.White.copy(alpha = 0.85f),
-      textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-      modifier = Modifier.padding(horizontal = 8.dp),
-      maxLines = 2,
-      overflow = TextOverflow.Ellipsis,
+    // A play glyph, not the title: the title is already shown directly below the cover,
+    // so repeating it inside the placeholder just reads as duplicated text.
+    Icon(
+      imageVector = Icons.Filled.PlayArrow,
+      contentDescription = null,
+      tint = Color.White.copy(alpha = 0.55f),
+      modifier = Modifier.size(36.dp),
     )
   }
 }

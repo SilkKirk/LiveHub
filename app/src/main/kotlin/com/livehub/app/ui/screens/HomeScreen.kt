@@ -114,12 +114,13 @@ private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
     LazyRow(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       modifier = Modifier.weight(1f),
+      userScrollEnabled = true,
     ) {
       items(Platform.supported) { platform ->
         FilterChip(
           selected = state.platform == platform,
           onClick = { onAction(UiAction.SelectPlatform(platform)) },
-          label = { Text(platform.displayName) },
+          label = { Text(platform.displayName, maxLines = 1, softWrap = false) },
         )
       }
     }
@@ -145,6 +146,16 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
   val pinnedKeys = remember(state.subscribedCategories) {
     state.subscribedCategories.map { it.key }.toSet()
   }
+  // Categories of the group the user is currently in. With a single group (Douyin,
+  // Huya) this is simply every category.
+  val activeParent = state.selectedCategory?.parentName
+  val visibleCategories = remember(state.categories, activeParent, parents.size) {
+    if (parents.size > 1 && activeParent != null) {
+      state.categories.filter { it.parentName == activeParent }
+    } else {
+      state.categories
+    }
+  }
 
   Column(modifier = Modifier.fillMaxWidth()) {
     if (state.subscribedCategories.isNotEmpty()) {
@@ -157,39 +168,51 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
             selected = state.selectedCategory?.key == category.key,
             onClick = { onAction(UiAction.SelectCategory(category)) },
             label = { Text("★ ${category.name}") },
-            leadingIcon = null,
           )
         }
       }
     }
 
+    // Row 1: the group tabs, only when the platform actually has groups.
+    if (parents.size > 1) {
+      LazyRow(
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(parents) { parent ->
+          val first = state.categories.firstOrNull { it.parentName == parent }
+          FilterChip(
+            selected = activeParent == parent,
+            onClick = { first?.let { onAction(UiAction.SelectCategory(it)) } },
+            label = { Text(parent, fontWeight = FontWeight.Medium) },
+          )
+        }
+      }
+    }
+
+    // Row 2: the concrete categories inside the active group.
     LazyRow(
       contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       state = rememberLazyListState(),
     ) {
-      if (parents.size > 1) {
-        items(parents) { parent ->
-          val first = state.categories.firstOrNull { it.parentName == parent }
-          FilterChip(
-            selected = state.selectedCategory?.parentName == parent,
-            onClick = { first?.let { onAction(UiAction.SelectCategory(it)) } },
-            label = { Text(parent, fontWeight = FontWeight.Medium) },
-          )
-        }
-      } else {
-        items(state.categories, key = { it.key }) { category ->
-          FilterChip(
-            selected = state.selectedCategory?.key == category.key,
-            onClick = { onAction(UiAction.SelectCategory(category)) },
-            label = { Text(category.name) },
-            leadingIcon = if (pinnedKeys.contains(category.key)) {
-              { Icon(Icons.Filled.Star, contentDescription = "已订阅", modifier = Modifier.size(14.dp)) }
-            } else {
-              null
-            },
-          )
-        }
+      items(visibleCategories, key = { it.key }) { category ->
+        FilterChip(
+          selected = state.selectedCategory?.key == category.key,
+          onClick = { onAction(UiAction.SelectCategory(category)) },
+          label = { Text(category.name) },
+          leadingIcon = if (pinnedKeys.contains(category.key)) {
+            {
+              Icon(
+                Icons.Filled.Star,
+                contentDescription = "已订阅",
+                modifier = Modifier.size(14.dp),
+              )
+            }
+          } else {
+            null
+          },
+        )
       }
     }
   }

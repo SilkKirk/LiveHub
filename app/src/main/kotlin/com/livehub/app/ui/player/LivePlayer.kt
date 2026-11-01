@@ -2,11 +2,23 @@ package com.livehub.app.ui.player
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -78,7 +90,27 @@ fun LivePlayer(
     }
   }
 
-  Box(modifier = modifier) {
+  var hasFirstFrame by remember { mutableStateOf(false) }
+
+  LaunchedEffect(player) {
+    val listener = object : Player.Listener {
+      override fun onRenderedFirstFrame() {
+        hasFirstFrame = true
+      }
+
+      override fun onPlaybackStateChanged(playbackState: Int) {
+        if (playbackState == Player.STATE_READY) hasFirstFrame = true
+      }
+    }
+    player.addListener(listener)
+    try {
+      awaitCancellation()
+    } finally {
+      player.removeListener(listener)
+    }
+  }
+
+  Box(modifier = modifier, contentAlignment = Alignment.Center) {
     AndroidView(
       modifier = Modifier.fillMaxSize(),
       factory = { viewContext ->
@@ -92,6 +124,12 @@ fun LivePlayer(
       },
       update = { view -> view.player = player },
     )
+
+    // Until the first frame arrives PlayerView draws solid black, which reads as a
+    // broken screen. Show the room's identity instead.
+    if (!hasFirstFrame) {
+      LoadingScrim(modifier = Modifier.fillMaxSize())
+    }
   }
 }
 
@@ -121,3 +159,23 @@ fun buildMediaSource(
 }
 
 private const val RETRY_DELAY_MILLIS = 1_500L
+
+/** Neutral placeholder shown until the decoder produces its first frame. */
+@Composable
+private fun LoadingScrim(modifier: Modifier = Modifier) {
+  Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+      CircularProgressIndicator(
+        color = MaterialTheme.colorScheme.primary,
+        strokeWidth = 2.dp,
+        modifier = Modifier.size(28.dp),
+      )
+      Text(
+        text = "正在连接直播流…",
+        color = Color.White.copy(alpha = 0.7f),
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.padding(top = 10.dp),
+      )
+    }
+  }
+}

@@ -56,8 +56,10 @@ fun LiveHubRoot(
   val snackbar = remember { SnackbarHostState() }
   val themeMode = if (state.darkTheme) ThemeMode.Dark else ThemeMode.System
 
-  LaunchedEffect(state.message, state.error) {
-    val notice = state.error ?: state.message
+  // Only transient messages go through the snackbar. A load error is already rendered
+  // inline by the screen (with a retry button), so echoing it here duplicates the text.
+  LaunchedEffect(state.message) {
+    val notice = state.message
     if (!notice.isNullOrBlank()) {
       snackbar.showSnackbar(notice)
       onAction(UiAction.DismissMessage)

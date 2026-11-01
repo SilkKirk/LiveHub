@@ -138,15 +138,40 @@ private fun FollowRow(
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Box {
-        AsyncImage(
-          model = streamer.coverUrl ?: streamer.avatarUrl,
-          contentDescription = streamer.streamerName,
-          contentScale = ContentScale.Crop,
-          modifier = Modifier
-            .size(56.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-        )
+        // Reuse the same gradient placeholder the grid uses; without it a room whose
+        // cover failed to load shows an empty grey square.
+        if (streamer.coverUrl.isNullOrBlank() && streamer.avatarUrl.isNullOrBlank()) {
+          Box(
+            modifier = Modifier
+              .size(56.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                  listOf(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f),
+                  ),
+                ),
+              ),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = streamer.streamerName.firstOrNull()?.toString() ?: "?",
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onPrimary,
+            )
+          }
+        } else {
+          AsyncImage(
+            model = streamer.coverUrl ?: streamer.avatarUrl,
+            contentDescription = streamer.streamerName,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+              .size(56.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(MaterialTheme.colorScheme.surfaceVariant),
+          )
+        }
         if (streamer.isLive) {
           Surface(
             color = com.livehub.core.designsystem.LiveBadgeColor,
