@@ -1,5 +1,14 @@
 package com.livehub.platform.douyin
 
+/**
+ * `a_bogus` request signature for Douyin's web endpoints.
+ *
+ * Douyin rejects partition and room requests without it by answering HTTP 200 with an
+ * empty body, which is indistinguishable from "this partition has no rooms". The
+ * algorithm is SM3 + RC4 over the query string and browser UA, with a window
+ * fingerprint mixed in. Entry point: [aBogus].
+ */
+
 import kotlin.math.ceil
 
 private fun rc4Encrypt(plaintext: String, key: String): String {
@@ -356,7 +365,7 @@ private fun generateRc4BbStr(
   return rc4Encrypt(plaintext, (121).toChar().toString())
 }
 
-fun sign(query: String, userAgent: String): String {
+fun aBogus(query: String, userAgent: String): String {
   val windowEnvStr = "1920|1080|1920|1040|0|30|0|0|1872|92|1920|1040|1857|92|1|24|Win32"
   val bb = generateRc4BbStr(query, userAgent, windowEnvStr, "cus", intArrayOf(0, 1, 14))
   return resultEncrypt(generateRandomStr() + bb, "s4") + "="

@@ -116,7 +116,7 @@ class DouyinApi(private val http: HttpClient) {
     val query = params.joinToString("&") { (key, value) ->
       key + "=" + encodeQueryValue(value)
     }
-    val bogus = DouyinABogus.sign(query, DouyinSigner.USER_AGENT)
+    val bogus = aBogus(query, DouyinSigner.USER_AGENT)
     val url = "$URL_PARTITION_V2?" + query + "&a_bogus=" + encodeQueryValue(bogus)
 
     val response = http.get(url, headers = headers())
