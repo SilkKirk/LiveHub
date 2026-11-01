@@ -59,7 +59,14 @@ jobs:
           ./gradlew :app:lintDebug --stacktrace > lint.log 2>&1 || LINT_EXIT=$?
           echo "=== lint findings ==="
           python3 .github/scripts/report_lint.py || true
-          tail -n 60 lint.log
+          if [ -n "${LINT_EXIT:-}" ]; then
+            echo "=== lint log tail ==="
+            tail -n 40 lint.log
+            # One annotation carrying the failure tail: the report file may not exist when
+            # lint itself fails before writing one, and stdout alone is unreadable via API.
+            SUMMARY="$(tail -n 25 lint.log | tr '\n' ' ' | tr -s ' ' | cut -c1-6000)"
+            echo "::error title=lint failed::${SUMMARY}"
+          fi
           exit "${LINT_EXIT:-0}"
 
       - name: JVM unit tests
