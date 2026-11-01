@@ -1,0 +1,86 @@
+package com.livehub.platform.douyin
+
+import com.livehub.core.model.Platform
+import com.livehub.platform.api.AssetReader
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+
+/**
+ * The shipped Douyin catalogue.
+ *
+ * 9 groups and 306 partitions. The partition/partitionType pair is recovered from the
+ * last two segments of each `href`, which is the only place Douyin publishes it.
+ */
+class DouyinCategoryCatalogTest {
+
+  private val raw: String by lazy {
+    DouyinCategoryCatalogTest::class.java
+      .getResourceAsStream("/categories/douyin_categories.json")!!
+      .bufferedReader()
+      .use { it.readText() }
+  }
+
+  @Test
+  fun `the shipped table parses into every declared partition`() {
+    val categories = DouyinCategoryCatalog.parse(raw)
+
+    assertEquals(306, categories.size)
+    assertTrue(categories.all { it.platform == Platform.DOUYIN })
+  }
+
+  @Test
+  fun `every id decodes back to a numeric partition pair`() {
+    DouyinCategoryCatalog.parse(raw).forEach { category ->
+      val ids = DouyinCategoryCatalog.idsOf(category.id)
+      assertNotNull(ids, "id '${category.id}' for ${category.name} is not encodable")
+      assertTrue(ids!!.first.toLongOrNull() != null, "partitionType must be numeric")
+      assertTrue(ids.second.toLongOrNull() != null, "partition must be numeric")
+    }
+  }
+
+  @Test
+  fun `the href rule takes the last two segments`() {
+    // /category/1_2_1_1010023 -> partitionType 1, partition 1010023
+    assertEquals("1" to "1010023", DouyinCategoryCatalog.partitionOf("/category/1_2_1_1010023"))
+    assertEquals("1" to "1010032", DouyinCategoryCatalog.partitionOf("/category/1_1_1_1010032"))
+  }
+
+  @Test
+  fun `a known partition from the table is present`() {
+    val pubg = DouyinCategoryCatalog.parse(raw).firstOrNull { it.name == "和平精英" }
+
+    assertNotNull(pubg)
+    assertEquals("1:1010032", pubg!!.id)
+  }
+
+  @Test
+  fun `ids are unique and sort order is dense`() {
+    val categories = DouyinCategoryCatalog.parse(raw)
+
+    assertEquals(categories.size, categories.map { it.id }.toSet().size)
+    assertEquals(categories.indices.toList(), categories.map { it.sortOrder })
+  }
+
+  @Test
+  fun `groups are populated so the first chip row is not empty`() {
+    val groups = DouyinCategoryCatalog.parse(raw).mapNotNull { it.parentName }.distinct()
+    assertTrue(groups.size >= 9, "expected at least nine groups, saw $groups")
+  }
+
+  @Test
+  fun `a malformed href yields null rather than a wrong partition`() {
+    assertNull(DouyinCategoryCatalog.partitionOf("/category/abc"))
+    assertNull(DouyinCategoryCatalog.partitionOf("/category/1_2_x_1010023"))
+    assertNull(DouyinCategoryCatalog.partitionOf(""))
+  }
+
+  @Test
+  fun `a missing asset yields no categories instead of throwing`() {
+    assertTrue(DouyinCategoryCatalog.load(AssetReader.Empty).isEmpty())
+    assertTrue(DouyinCategoryCatalog.parse(null).isEmpty())
+    assertTrue(DouyinCategoryCatalog.parse("not json").isEmpty())
+  }
+}

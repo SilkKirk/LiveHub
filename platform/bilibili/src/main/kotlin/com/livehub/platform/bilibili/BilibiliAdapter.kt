@@ -35,11 +35,18 @@ class BilibiliAdapter(
   private val webSocketClient: OkHttpClient,
   private val cookieStore: BilibiliCookieStore = BilibiliCookieStore.InMemory,
   private val api: BilibiliApi = BilibiliApi(http, cookieStore),
+  /** Supplies the bundled category table; empty in tests. */
+  private val assets: com.livehub.platform.api.AssetReader = com.livehub.platform.api.AssetReader.Empty,
 ) : LivePlatformAdapter {
 
   override val platform: Platform = Platform.BILIBILI
 
-  override suspend fun categories(): List<Category> = api.categories()
+  /**
+   * The shipped table carries 13 groups and 386 sub-categories, each id encoded as
+   * `"<parentAreaId>:<areaId>"`.
+   */
+  override suspend fun categories(): List<Category> =
+    BilibiliCategories.load(assets).ifEmpty { api.categories() }
 
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1

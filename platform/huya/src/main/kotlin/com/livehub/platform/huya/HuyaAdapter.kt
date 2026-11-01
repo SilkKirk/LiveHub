@@ -34,11 +34,19 @@ class HuyaAdapter(
   private val http: HttpClient,
   private val webSocketClient: OkHttpClient,
   private val api: HuyaApi = HuyaApi(http),
+  /** Supplies the bundled category table; empty in tests. */
+  private val assets: com.livehub.platform.api.AssetReader = com.livehub.platform.api.AssetReader.Empty,
 ) : LivePlatformAdapter {
 
   override val platform: Platform = Platform.HUYA
 
-  override suspend fun categories(): List<Category> = api.categories()
+  /**
+   * Huya publishes no usable catalogue endpoint, so the shipped table is the source.
+   * It carries 4 groups and 424 sub-categories; falling back to the network only when
+   * the asset is missing keeps old builds working.
+   */
+  override suspend fun categories(): List<Category> =
+    HuyaCategories.load(assets).ifEmpty { api.categories() }
 
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1

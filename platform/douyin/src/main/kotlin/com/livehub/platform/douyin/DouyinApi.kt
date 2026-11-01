@@ -77,7 +77,11 @@ class DouyinApi(private val http: HttpClient) {
    * The adapter reports `hasMore = false` rather than letting an infinite-scroll list
    * spin forever on duplicates.
    */
-  suspend fun rooms(categoryId: String, page: Int): Pair<List<Streamer>, Boolean> {
+  suspend fun rooms(
+    categoryId: String,
+    page: Int,
+    partitionType: String? = null,
+  ): Pair<List<Streamer>, Boolean> {
     val params = listOf(
       "aid" to "6383",
       "app_name" to "douyin_web",
@@ -95,7 +99,7 @@ class DouyinApi(private val http: HttpClient) {
       "count" to PAGE_SIZE.toString(),
       "offset" to ((page - 1) * PAGE_SIZE).toString(),
       "partition" to categoryId,
-      "partition_type" to "1",
+      "partition_type" to (partitionType ?: "1"),
     )
     val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
     val response = http.get("$URL_FEED?${signed.queryString()}", headers = headers())

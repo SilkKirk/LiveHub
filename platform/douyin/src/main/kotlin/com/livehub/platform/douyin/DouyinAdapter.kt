@@ -36,15 +36,27 @@ class DouyinAdapter(
   private val http: HttpClient,
   private val webSocketClient: OkHttpClient,
   private val api: DouyinApi = DouyinApi(http),
+  /** Supplies the bundled category table; empty in tests. */
+  private val assets: com.livehub.platform.api.AssetReader = com.livehub.platform.api.AssetReader.Empty,
 ) : LivePlatformAdapter {
 
   override val platform: Platform = Platform.DOUYIN
 
-  override suspend fun categories(): List<Category> = api.categories()
+  /**
+   * The shipped table carries 9 groups and 306 partitions; each id encodes
+   * `"<partitionType>:<partition>"`.
+   */
+  override suspend fun categories(): List<Category> =
+    DouyinCategoryCatalog.load(assets).ifEmpty { api.categories() }
 
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
-    val (rooms, hasMore) = api.rooms(categoryId, page)
+    // Ids come from the shipped catalogue encoded as "<partitionType>:<partition>";
+    // a bare number is still accepted for older callers.
+    val ids = DouyinCategoryCatalog.idsOf(categoryId)
+    val partition = ids?.second ?: categoryId
+    val partitionType = ids?.first
+    val (rooms, hasMore) = api.rooms(partition, page, partitionType)
     return RoomPage(rooms = rooms, nextCursor = if (hasMore) (page + 1).toString() else null)
   }
 

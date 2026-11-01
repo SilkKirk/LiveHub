@@ -15,6 +15,14 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+sourceSets {
+  // The catalogue JSON ships with the APK (app assets); the tests read the very same
+  // file so the checked-in table and the parsed table can never drift apart.
+  test {
+    resources.srcDir("../../app/src/main/assets")
+  }
+}
+
 dependencies {
     api(project(":platform-api"))
     api(project(":core:model"))

@@ -32,6 +32,18 @@ class AppContainer(
 ) {
   private val applicationContext: Context = context.applicationContext
 
+  /**
+   * Reads `assets/` text. Huya, Douyin and Bilibili publish their catalogue as a static
+   * document rather than a live endpoint, so the platform modules take this instead of
+   * depending on Android.
+   */
+  private val assetReader: com.livehub.platform.api.AssetReader =
+    com.livehub.platform.api.AssetReader { name ->
+      runCatching {
+        applicationContext.assets.open(name).bufferedReader().use { it.readText() }
+      }.getOrNull()
+    }
+
   // ------------------------------------------------------------------ networking
 
   val jsonClient: OkHttpClient by lazy {
@@ -60,12 +72,13 @@ class AppContainer(
   val adapters: List<LivePlatformAdapter> by lazy {
     listOf(
       DouyuAdapter(http = httpClient, webSocketClient = webSocketClient),
-      HuyaAdapter(http = httpClient, webSocketClient = webSocketClient),
-      DouyinAdapter(http = httpClient, webSocketClient = webSocketClient),
+      HuyaAdapter(http = httpClient, webSocketClient = webSocketClient, assets = assetReader),
+      DouyinAdapter(http = httpClient, webSocketClient = webSocketClient, assets = assetReader),
       BilibiliAdapter(
         http = httpClient,
         webSocketClient = webSocketClient,
         cookieStore = bilibiliCookieStore,
+        assets = assetReader,
       ),
     )
   }

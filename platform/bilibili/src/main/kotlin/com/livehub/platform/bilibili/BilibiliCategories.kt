@@ -2,95 +2,81 @@ package com.livehub.platform.bilibili
 
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
+import com.livehub.platform.api.AssetReader
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Bilibili live section catalogue as `parentAreaId:areaId` pairs.
+ * Bilibili's full category tree.
  *
- * The ids are stable and documented by the platform; names are the display labels the
- * web client uses. Grouping into parents drives the two-level selector.
+ * Shipped as `assets/categories/bilibili_categories.json`: 13 groups and 386
+ * sub-categories. The shape is:
+ *
+ * ```json
+ * [ { "title": "网游", "subcategories": [ { "title": "英雄联盟", "id": "86", "parent_id": "2" } ] } ]
+ * ```
+ *
+ * `parent_id` and `id` are exactly the `parent_area_id` and `area_id` that
+ * `second/getList` takes, so the category id is encoded as `"<parent>:<area>"`.
  */
 object BilibiliCategories {
 
-  private data class Parent(val id: String, val name: String, val children: List<Pair<String, String>>)
+  private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-  private val tree = listOf(
-    Parent(
-      id = "0",
-      name = "热门",
-      children = listOf("0" to "推荐"),
-    ),
-    Parent(
-      id = "1",
-      name = "娱乐",
-      children = listOf(
-        "21" to "视频唱见",
-        "177" to "视频聊天",
-        "199" to "语音厅",
-        "207" to "虚拟主播",
-        "587" to "舞见",
-        "935" to "唱见",
-        "123" to "户外",
-        "77" to "交友",
-        "371" to "电台",
-      ),
-    ),
-    Parent(
-      id = "2",
-      name = "网游",
-      children = listOf(
-        "86" to "英雄联盟",
-        "27" to "王者荣耀",
-        "491" to "无畏契约",
-        "129" to "绝地求生",
-        "3" to "穿越火线",
-        "209" to "CS2",
-        "108" to "DOTA2",
-        "5" to "魔兽世界",
-        "30" to "DNF",
-        "113" to "剑网3",
-        "107" to "主机游戏",
-        "339" to "永劫无间",
-        "417" to "Apex英雄",
-      ),
-    ),
-    Parent(
-      id = "3",
-      name = "手游",
-      children = listOf(
-        "376" to "和平精英",
-        "658" to "原神",
-        "808" to "崩坏：星穹铁道",
-        "213" to "英雄联盟手游",
-        "116" to "王者荣耀体验服",
-        "885" to "命运方舟",
-      ),
-    ),
-    Parent(
-      id = "4",
-      name = "单机",
-      children = listOf(
-        "222" to "单机游戏",
-        "228" to "我的世界",
-        "370" to "艾尔登法环",
-      ),
-    ),
-  )
+  /** Hot tab: the only combination served by `index/getList` rather than `second/getList`. */
+  const val HOT_ID = "0:0"
 
-  fun all(): List<Category> {
+  fun parse(raw: String?): List<Category> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val root = runCatching { json.parseToJsonElement(raw) as? JsonArray }.getOrNull()
+      ?: return emptyList()
+
+    val out = mutableListOf<Category>()
     var order = 0
-    return tree.flatMap { parent ->
-      parent.children.map { (areaId, name) ->
-        Category(
+    root.forEach { groupElement ->
+      val group = groupElement as? JsonObject ?: return@forEach
+      val groupName = group.str("title") ?: return@forEach
+      val parentAreaId = group["id"]?.jsonPrimitive?.intOrNull
+        ?: group.str("id")?.toIntOrNull()
+      val subcategories = group["subcategories"] as? JsonArray ?: return@forEach
+      subcategories.forEach { subElement ->
+        val sub = subElement as? JsonObject ?: return@forEach
+        val areaId = sub["id"]?.jsonPrimitive?.intOrNull ?: sub.str("id")?.toIntOrNull()
+          ?: return@forEach
+        val name = sub.str("title") ?: return@forEach
+        val parent = sub.str("parent_id")?.toIntOrNull() ?: parentAreaId ?: return@forEach
+        out += Category(
           platform = Platform.BILIBILI,
-          id = BilibiliArea(parent.id, areaId).encoded,
+          id = "$parent:$areaId",
           name = name,
-          parentId = parent.id,
-          parentName = parent.name,
+          parentId = parent.toString(),
+          parentName = groupName,
           sortOrder = order++,
         )
       }
     }
+    return out
   }
 
-  val default: BilibiliArea get() = BilibiliArea.HOT
+  fun load(assets: AssetReader): List<Category> = parse(assets.read(ASSET_NAME))
+
+  /** Splits an encoded id back into `parentAreaId to areaId`. */
+  fun idsOf(categoryId: String): Pair<Int, Int>? {
+    val parts = categoryId.split(':')
+    if (parts.size != 2) return null
+    val parent = parts[0].toIntOrNull() ?: return null
+    val area = parts[1].toIntOrNull() ?: return null
+    return parent to area
+  }
+
+  private fun JsonObject.str(key: String): String? =
+    this[key]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+
+  const val ASSET_NAME = "categories/bilibili_categories.json"
 }
