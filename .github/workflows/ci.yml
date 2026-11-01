@@ -86,6 +86,24 @@ jobs:
       - name: JVM unit tests
         run: |
           set -o pipefail
+          # Robolectric fetches its Android runtime jar (org.robolectric:android-all-*,
+          # from Maven Central) on first use, inside the test JVM. A transient fetch
+          # failure then fails every Robolectric test with
+          # `initializationError: Failed to fetch maven artifact`, which reads like a code
+          # failure but is not — it turned a green run red once already. Warm the cache
+          # with retries before the real run; a still-broken warm-up leaves the real run to
+          # report whatever it actually finds.
+          for attempt in 1 2 3; do
+            if ./gradlew :app:testDebugUnitTest \
+                 --tests 'com.livehub.app.ui.player.DanmakuOverlayTest' \
+                 --stacktrace > robolectric-warmup.log 2>&1; then
+              echo "Robolectric runtime available (attempt $attempt)"
+              break
+            fi
+            echo "Robolectric warm-up attempt $attempt failed; retrying"
+            tail -n 15 robolectric-warmup.log || true
+            sleep $((attempt * 10))
+          done
           # A failing test otherwise reports only "exit code 1"; the failing class and
           # assertion are surfaced through the XML results so they reach the annotations.
           ./gradlew test --stacktrace > test.log 2>&1 || TEST_EXIT=$?
