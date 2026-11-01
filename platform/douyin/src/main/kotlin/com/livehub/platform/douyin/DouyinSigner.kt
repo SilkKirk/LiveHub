@@ -3,12 +3,13 @@ package com.livehub.platform.douyin
 /**
  * Douyin web client identifiers and query assembly.
  *
- * The signatures themselves live in [DouyinABogus] (pure Kotlin, transcribed verbatim from
- * the reference implementation) and in the app's `DouyinWebMsdkSigner`, which evaluates the
- * site's own `webmssdk.js` for the danmaku handshake.
+ * The signatures themselves live in `DouyinABogus.kt` — `aBogus(query, userAgent)` is a
+ * top-level function transcribed verbatim from the reference implementation's
+ * `generateABogus` — and in the app's `DouyinRhinoSigner`, which evaluates the site's own
+ * `webmssdk.js` for the danmaku handshake.
  *
  * An earlier revision also carried a locally invented `xBogus`/`aBogus` pair in this
- * object. `rooms()` happened to call the real [DouyinABogus] while `search`, `roomInfo` and
+ * object. `rooms()` happened to call the real `aBogus` while `search`, `roomInfo` and
  * `findInFeed` called the invented one, so three of four endpoints sent a signature the
  * server cannot validate. Those functions are gone: there is now exactly one `a_bogus`
  * implementation in the module, so the wrong one cannot be picked by accident.
@@ -66,7 +67,7 @@ object DouyinSigner {
    */
   fun signQuery(orderedParams: List<Pair<String, String>>): String {
     val query = orderedParams.joinToString("&") { (key, value) -> "$key=${encodeQueryValue(value)}" }
-    val bogus = DouyinABogus.aBogus(query, USER_AGENT)
+    val bogus = aBogus(query, USER_AGENT)
     return "$query&a_bogus=${encodeQueryValue(bogus)}"
   }
 

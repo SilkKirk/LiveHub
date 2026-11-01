@@ -216,29 +216,29 @@ class DouyinDanmakuProtocolTest {
  *
  * The previous suite asserted on a locally invented `xBogus`/`aBogus` pair that was not the
  * algorithm Douyin uses, so it could pass while every signed request was rejected. Those
- * functions are deleted; these tests cover the real transcription in [DouyinABogus] and the
- * query assembly in [DouyinSigner].
+ * functions are deleted; these tests cover the real transcription in `DouyinABogus.kt` and
+ * the query assembly in [DouyinSigner].
  */
 class DouyinSignerTest {
 
   @Test
   fun `a-bogus is deterministic for the same query and ua`() {
-    val a = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
-    val b = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val a = aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val b = aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
     assertEquals(a, b)
     assertTrue(a.isNotEmpty())
   }
 
   @Test
   fun `a-bogus changes with the query`() {
-    val a = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
-    val b = DouyinABogus.aBogus("aid=6383&count=21", DouyinSigner.USER_AGENT)
+    val a = aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val b = aBogus("aid=6383&count=21", DouyinSigner.USER_AGENT)
     assertTrue(a != b, "a different query must produce a different signature")
   }
 
   @Test
   fun `a-bogus is url safe`() {
-    val value = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val value = aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
     assertTrue(value.isNotEmpty())
     assertTrue(value.none { it == '+' || it == '/' || it == '=' }, "value was $value")
     assertTrue(
@@ -250,8 +250,8 @@ class DouyinSignerTest {
   /** The signature is parameter-order sensitive, which is why callers must not sort. */
   @Test
   fun `a-bogus depends on parameter order`() {
-    val a = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
-    val b = DouyinABogus.aBogus("count=20&aid=6383", DouyinSigner.USER_AGENT)
+    val a = aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val b = aBogus("count=20&aid=6383", DouyinSigner.USER_AGENT)
     assertTrue(a != b, "reordering the query must change the signature")
   }
 
