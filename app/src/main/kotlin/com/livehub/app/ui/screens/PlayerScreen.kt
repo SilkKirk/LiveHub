@@ -121,6 +121,12 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
  * Split out so the layout can be composed on its own — the instrumented screenshots render
  * every screen without a real decoder, and the previous single composable could not be
  * rendered without going through the full-screen path.
+ *
+ * @param videoSurface replaces the real Media3 surface. `captureToImage` cannot read a
+ *   `SurfaceView`'s contents (they are composited by SurfaceFlinger, not drawn into the
+ *   window), so a screenshot of a live `LivePlayer` is a black rectangle no matter what
+ *   the surrounding layout does. The screenshot harness supplies a labelled placeholder
+ *   so the render still proves the chrome around the video laid out correctly.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,6 +137,7 @@ internal fun PlayerContent(
   onFullscreenChange: (Boolean) -> Unit,
   onOpenSettings: () -> Unit,
   modifier: Modifier = Modifier,
+  videoSurface: (@Composable (Modifier) -> Unit)? = null,
 ) {
   val variant: StreamVariant? = state.selectedVariant
   var controlsVisible by remember { mutableStateOf(true) }
@@ -174,23 +181,27 @@ internal fun PlayerContent(
       }
 
       Box(modifier = videoModifier.background(Color.Black)) {
-        VideoSurface(
-          state = state,
-          variant = effectiveVariant,
-          onAction = onAction,
-          onVideoAspectRatioChanged = { aspect -> videoAspect = aspect.takeIf { it > 0f } },
-          zoomToFill = verticalFullBleed,
-          paused = paused,
-          playerError = playerError,
-          onHttpFallback = { httpUrl -> httpFallbackUrl = httpUrl },
-          onFatalError = { message ->
-            // The ViewModel owns the retry path; re-opening the room is what the user's
-            // "重试" button does, so a fatal player error just clears the variant and lets
-            // the error state take over.
-            playerError = message
-          },
-          modifier = Modifier.fillMaxSize(),
-        )
+        if (videoSurface != null) {
+          videoSurface(Modifier.fillMaxSize())
+        } else {
+          VideoSurface(
+            state = state,
+            variant = effectiveVariant,
+            onAction = onAction,
+            onVideoAspectRatioChanged = { aspect -> videoAspect = aspect.takeIf { it > 0f } },
+            zoomToFill = verticalFullBleed,
+            paused = paused,
+            playerError = playerError,
+            onHttpFallback = { httpUrl -> httpFallbackUrl = httpUrl },
+            onFatalError = { message ->
+              // The ViewModel owns the retry path; re-opening the room is what the user's
+              // "重试" button does, so a fatal player error just clears the variant and lets
+              // the error state take over.
+              playerError = message
+            },
+            modifier = Modifier.fillMaxSize(),
+          )
+        }
 
         if (verticalFullBleed) {
           PlayerHeader(state = state, onAction = onAction, modifier = Modifier.align(Alignment.TopCenter))

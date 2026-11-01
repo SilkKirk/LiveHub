@@ -26,4 +26,10 @@ release/
 # Misc
 *.log
 
+# Scratch files. A commit message written to disk was swept into a commit once by
+# `git add -A`; keeping the pattern here means it cannot happen again.
+commit_msg.txt
+tmp_*
+.ci-check.py
+
 dist/

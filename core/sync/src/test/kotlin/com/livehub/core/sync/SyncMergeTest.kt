@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class SyncMergeTest {
-
   private fun alive(key: String, hlc: Hlc, device: Long = 1L, value: String = key): SyncRecord<JsonObject> =
     SyncRecord(
       key = key,
@@ -133,6 +132,40 @@ class SyncMergeTest {
     assertEquals(2, SyncMerge.prune(records, emptyList(), Long.MAX_VALUE / 2).size)
     assertEquals(1, SyncMerge.prune(records, listOf(TrustedPeer(2, "p", "s", 0)), Long.MAX_VALUE / 2).size)
   }
+
+  /**
+   * The delta filter must never drop a record the merge would have taken.
+   *
+   * Sending only the delta is safe exactly when "skipped by the sender" implies "the
+   * receiver's copy wins the merge", so this pins that equivalence: for a record the
+   * sender omits, merging the sender's copy into the receiver must leave it unchanged.
+   */
+  @Test
+  fun `a record skipped by the delta rule would lose the merge anyway`() {
+    // Same clock, different devices: the higher device id decides, which is the tie break
+    // the delta filter and the merge both use.
+    val senderVersion = alive("a", Hlc(10, 0), device = 1)
+    val receiverVersion = alive("a", Hlc(10, 0), device = 2)
+
+    assertTrue(senderVersion.version < receiverVersion.version)
+
+    val outcome = SyncMerge.merge(listOf(receiverVersion), listOf(senderVersion))
+    assertEquals(receiverVersion.value, outcome.merged.single().value)
+    assertEquals(0, outcome.remoteWins, "the skipped record must not win on arrival")
+    assertEquals(1, outcome.localWins)
+  }
+
+  /** A tombstone still wins on a newer clock, which is why deletes are not filtered out. */
+  @Test
+  fun `a newer tombstone is not filtered out by the version comparison`() {
+    val liveOnReceiver = alive("a", Hlc(10, 0), device = 2)
+    val deletedOnSender = tombstone("a", Hlc(20, 0), device = 1)
+
+    assertTrue(deletedOnSender.version > liveOnReceiver.version)
+
+    val outcome = SyncMerge.merge(listOf(liveOnReceiver), listOf(deletedOnSender))
+    assertTrue(outcome.merged.single().deleted, "the newer tombstone must win")
+  }
 }
 
 class HlcTest {
@@ -182,39 +215,5 @@ class HlcTest {
     assertEquals(Hlc.ZERO, Hlc.decode(""))
     assertEquals(Hlc.ZERO, Hlc.decode("garbage"))
     assertEquals(Hlc.ZERO, Hlc.decode("1-2-3"))
-  }
-
-  /**
-   * The delta filter must never drop a record the merge would have taken.
-   *
-   * Sending only the delta is safe exactly when "skipped" implies "the peer's copy wins",
-   * so this pins that equivalence: for a record the local side omits, merging the other
-   * way around must leave the peer unchanged.
-   */
-  @Test
-  fun `a record skipped by the delta rule would lose the merge anyway`() {
-    val localVersion = alive("a", Hlc(10, 0), device = 1)
-    val remoteVersion = alive("a", Hlc(10, 0), device = 2)
-
-    // Device 2 holds the higher version, so device 1 may skip sending its copy...
-    assertTrue(localVersion.version < remoteVersion.version)
-
-    // ...and merging device 1's copy into device 2 leaves device 2's value in place.
-    val outcome = SyncMerge.merge(listOf(remoteVersion), listOf(localVersion))
-    assertEquals(remoteVersion.value, outcome.merged.single().value)
-    assertEquals(0, outcome.remoteWins)
-    assertEquals(1, outcome.localWins)
-  }
-
-  /** A tombstone still wins on a newer clock, which is why deletes are not filtered out. */
-  @Test
-  fun `a newer tombstone is not filtered out by the version comparison`() {
-    val liveOnPeer = alive("a", Hlc(10, 0), device = 2)
-    val deletedLocally = tombstone("a", Hlc(20, 0), device = 1)
-
-    assertTrue(deletedLocally.version > liveOnPeer.version)
-
-    val outcome = SyncMerge.merge(listOf(liveOnPeer), listOf(deletedLocally))
-    assertTrue(outcome.merged.single().deleted, "the newer tombstone must win")
   }
 }

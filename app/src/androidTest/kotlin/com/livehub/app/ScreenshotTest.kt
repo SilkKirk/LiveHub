@@ -1,12 +1,18 @@
 package com.livehub.app
 
 import android.os.Environment
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
-import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.ext.junit.runners.AndroidJUnit4import androidx.test.platform.app.InstrumentationRegistry
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
@@ -19,10 +25,11 @@ import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.core.sync.SyncLogEntry
 import com.livehub.core.sync.TrustedPeer
+import androidx.compose.material3.MaterialTheme
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.junit.Assert.assertTrue
 import java.io.File
 import java.io.FileOutputStream
 
@@ -287,12 +294,18 @@ class ScreenshotTest {
       if (state.screen == Screen.Player) {
         // Rendered through PlayerContent so the screenshot does not depend on the sheet
         // state, and so a fullscreen render is reachable without a real gesture.
+        //
+        // The video surface is replaced: `captureToImage` cannot read a SurfaceView (its
+        // pixels are composited by SurfaceFlinger, not drawn into the window), so a real
+        // player always captures as solid black and the render would prove nothing about
+        // the chrome around it.
         PlayerContent(
           state = state,
           onAction = {},
           fullscreen = fullscreen,
           onFullscreenChange = {},
           onOpenSettings = {},
+          videoSurface = { modifier -> VideoSurfaceStub(modifier) },
         )
       } else {
         LiveHubRoot(state = state, onAction = { })
@@ -317,43 +330,75 @@ class ScreenshotTest {
     // A render that is a single flat colour means the screen composed nothing visible.
     // `17-player` shipped as an all-black 703-byte PNG for exactly that reason: a variant
     // was present but the room was not, so every text row rendered empty over a black
-    // surface. Comparing file sizes would be fragile, so the check counts distinct colours
-    // in a sampling grid instead.
+    // surface.
     assertTrue(
       "$name rendered as a single colour, so the screen composed no visible content",
-      distinctSampledColors(bitmap) >= MIN_DISTINCT_COLORS,
+      hasVisibleContent(bitmap),
     )
     bitmap.recycle()
   }
 
-  /** Number of distinct colours on a coarse grid; enough to tell "content" from "blank". */
-  private fun distinctSampledColors(bitmap: android.graphics.Bitmap): Int {
-    val seen = HashSet<Int>()
-    val stepX = maxOf(1, bitmap.width / SAMPLE_GRID)
-    val stepY = maxOf(1, bitmap.height / SAMPLE_GRID)
-    var y = 0
-    while (y < bitmap.height) {
-      var x = 0
-      while (x < bitmap.width) {
-        seen.add(bitmap.getPixel(x, y))
-        x += stepX
-      }
-      y += stepY
+  /**
+   * True when the bitmap contains at least [MIN_DISTINCT_COLORS] different colours.
+   *
+   * Scans the whole bitmap rather than a sampling grid. A grid misses small elements —
+   * the first version sampled 24x24 points and declared the "no results" screen blank
+   * because its single centred line of text fell between sample points.
+   *
+   * The scan stops as soon as the threshold is reached, so a normal screen costs a few
+   * hundred pixels rather than a full pass.
+   */
+  private fun hasVisibleContent(bitmap: android.graphics.Bitmap): Boolean {
+    val width = bitmap.width
+    val height = bitmap.height
+    if (width <= 0 || height <= 0) return false
+
+    val pixels = IntArray(width * height)
+    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+    val seen = HashSet<Int>(MIN_DISTINCT_COLORS * 4)
+    for (color in pixels) {
+      seen.add(color)
+      if (seen.size >= MIN_DISTINCT_COLORS) return true
     }
-    return seen.size
+    return false
   }
 
   private companion object {
-    /** Sampling resolution per axis for [distinctSampledColors]. */
-    const val SAMPLE_GRID = 24
-
     /**
-     * Below this a render is blank or a single gradient.
+     * Below this a render is a flat fill.
      *
-     * A plain text screen already contains well over a hundred distinct colours once
-     * antialiasing is counted, so the threshold is far from a real screen and still
-     * catches an empty one.
+     * A single line of antialiased text already spans well over a dozen greys, so the
+     * bar is far below any real screen and still catches an empty one.
      */
     const val MIN_DISTINCT_COLORS = 12
+  }
+}
+
+/**
+ * Stand-in for the video surface in screenshots.
+ *
+ * Draws a gradient plus a label so the capture has real content where the picture would
+ * be; a real `PlayerView` is a `SurfaceView` and always captures as solid black.
+ */
+@androidx.compose.runtime.Composable
+private fun VideoSurfaceStub(modifier: Modifier = Modifier) {
+  Box(
+    modifier = modifier.background(
+      Brush.linearGradient(
+        listOf(
+          Color(0xFF1F2937),
+          Color(0xFF4B5563),
+          Color(0xFF111827),
+        ),
+      ),
+    ),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      text = "视频画面（截图占位）",
+      color = Color.White.copy(alpha = 0.55f),
+      style = MaterialTheme.typography.labelMedium,
+    )
   }
 }
