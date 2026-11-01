@@ -201,3 +201,54 @@ GitHub Actions 运行 `41240663433` 全部通过：
 - [ ] **两台真机实测**：所有同步验证都跑在 loopback 上，真实 Wi-Fi 下的 mDNS 发现
       与跨网段行为仍未在硬件上验证过
 
+
+---
+
+## 第五轮迭代：ViewModel 与 UI 交互测试
+
+前四轮里，`MainViewModel` 的所有交互逻辑（导航、搜索、关注、同步动作）**只在截图里
+被目视检查过**，没有任何自动化断言。这一轮补上 `MainViewModelTest`（20 个用例）与
+`FollowOrderingTest`（8 个用例），用 Robolectric 在 JVM 上驱动真实的
+`AppContainer` + `DataStore`。
+
+### 这一轮暴露的缺陷
+
+| # | 缺陷 | 后果 |
+| --- | --- | --- |
+| 15 | `LiveHubApplication.onCreate` 直接调用 `WorkManager` 调度 | WorkManager 不可用时（受限配置、单元测试、初始化器被禁用）**应用启动即崩溃** |
+| 16 | `:app` 模块混用 JUnit4 与 JUnit Platform，缺 vintage 引擎 | `testDebugUnitTest` 一个测试都发现不了，`failOnNoDiscoveredTests` 直接判定失败 |
+| 17 | `FollowOrdering.move` 的索引语义未定义 | 拖拽往下移动时落点偏移一格 |
+
+第 15 条是真实的健壮性缺陷：后台刷新只是锦上添花的能力，它失败不该让整个应用起不来。
+修复方式是把调度包在 `runCatching` 里并记录日志。
+
+第 17 条最终确认**原实现是对的**（`toIndex` 是移除后的位置），错的是测试假设。
+但测试本身有价值：它把"落点必须是请求的索引"这条规则固定下来了。
+
+### 覆盖的场景
+
+`MainViewModelTest`：
+
+- 启动落在首页；每个底部导航目标都能到达；返回键回到首页
+- 打开直播间进入播放页、关闭清空弹幕缓冲
+- 输入不触发搜索；空查询提交时给出可读提示
+- 关注/取消关注、重复关注不产生重复项、关注列表跨 ViewModel 实例存活
+- 拖拽排序后 store 与内存状态一致
+- 弹幕开关、屏蔽词规范化（去空白/去重/截断）、平台选择、主题切换都能持久化
+- 同步范围选择持久化；无配对设备时同步给出说明
+- 消息消除后 message 与 error 同时清空
+
+`FollowOrderingTest`：前后移动、边界钳制、空列表、单元素、全排列不丢不重。
+
+### 测试规模
+
+| 模块 | 用例数 |
+| --- | --- |
+| `:app`（Robolectric + 仪器） | 32 |
+| `core:sync` | 54 |
+| `platform:bilibili` | 29 |
+| `platform:douyu` | 45 |
+| `platform:huya` | 34 |
+| `platform:douyin` | 21 |
+| `core:common` | 16 |
+| 合计 | **265 个 JVM 用例 + 24 个仪器用例** |
