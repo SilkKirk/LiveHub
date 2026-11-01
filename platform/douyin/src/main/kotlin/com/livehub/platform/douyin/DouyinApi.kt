@@ -66,9 +66,16 @@ class DouyinApi(private val http: HttpClient) {
    *
    * `webcast/web/partition/detail/room` now answers HTTP 444 (Douyin's anti-bot status)
    * for requests that do not carry a full browser fingerprint, including ones with a
-   * valid `ttwid`. `webcast/feed` still serves JSON to an anonymous client and returns
-   * the same room objects, so it is the list source; the partition id is kept for the
-   * UI but only influences ordering, not the endpoint.
+   * valid `ttwid`. `webcast/feed` still serves JSON to an anonymous client.
+   *
+   * Two hard platform limits follow from that substitution:
+   *  * **No partition filtering.** The feed ignores `partition`, `partition_type` and
+   *    `tag_id`; every combination returns the same rooms.
+   *  * **No pagination.** `offset` is ignored and `count` is capped at 6 items whatever
+   *    value is sent, so the result is always a single page of 6.
+   *
+   * The adapter reports `hasMore = false` rather than letting an infinite-scroll list
+   * spin forever on duplicates.
    */
   suspend fun rooms(categoryId: String, page: Int): Pair<List<Streamer>, Boolean> {
     val params = listOf(
@@ -98,8 +105,10 @@ class DouyinApi(private val http: HttpClient) {
       throw PlatformProtocolException("抖音列表获取失败: status=$status", Platform.DOUYIN)
     }
     val list = root["data"]?.jsonArray ?: JsonArray(emptyList())
+    // `count` is capped at 6 server side, so "did we fill the page" is meaningless;
+    // there is never a second page to request.
     val rooms = list.mapNotNull { parseFeedItem(it) }
-    return rooms to (rooms.size >= PAGE_SIZE)
+    return rooms to false
   }
 
   /**

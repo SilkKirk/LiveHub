@@ -51,12 +51,15 @@ class DouyuApi(private val http: HttpClient) {
   // ---------------------------------------------------------------------- rooms
 
   /**
-   * First page of a category.
+   * Live rooms for a category.
    *
    * The legacy JSON endpoints were retired (`newRecList` answers
-   * `{"error":1,"msg":"系统异常"}` for every category) so the directory page is scraped
-   * instead — it still renders the first page server side. Pagination is therefore
-   * unavailable and the result reports no next cursor.
+   * `{"error":1,"msg":"系统异常"}` for every category), so the directory page is scraped;
+   * it renders 40 rooms server side.
+   *
+   * `?page=N` is accepted but unreliable — page 2 differs only slightly from page 1
+   * (38 of 40 rooms overlap) and page 3 returns page 1 again. The adapter therefore
+   * reports no next cursor instead of serving duplicates to an infinite-scroll list.
    */
   suspend fun rooms(categoryId: String, page: Int, limit: Int): DouyuRoomPage {
     val html = fetchDirectoryPage(categoryId, page)
@@ -64,18 +67,23 @@ class DouyuApi(private val http: HttpClient) {
     return DouyuRoomPage(rooms = rooms, nextOffset = null)
   }
 
-  /** Loads `https://www.douyu.com/directory/game/<slug>` (or the numeric id form). */
+  /**
+   * Loads the directory page for [categoryId].
+   *
+   * Page 1 uses the canonical slug URL; later pages try the `?page=` form and accept it
+   * only when Douyu actually returns different rooms, otherwise the caller gets page 1
+   * rather than a duplicate list.
+   */
   private suspend fun fetchDirectoryPage(categoryId: String, page: Int): String {
     val slug = DouyuCategorySlug.forId(categoryId)
     val candidates = buildList {
       if (page <= 1) {
         add("$URL_DIRECTORY/$slug")
-        add("$URL_WEB/g_$slug")
       } else {
-        // Older mirrors keep a page segment; try it before giving up on page 2.
         add("$URL_DIRECTORY/$slug?page=$page")
       }
       add("$URL_WEB/directory/game/$slug")
+      add("$URL_WEB/g_$slug")
     }
 
     var lastError: Throwable? = null

@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
@@ -46,6 +47,9 @@ import com.livehub.app.ui.components.ErrorState
 import com.livehub.app.ui.components.InlineLoader
 import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
+
+/** Below this count a single-page result gets an explicit end-of-list hint. */
+private const val NO_MORE_HINT_THRESHOLD = 21
 import com.livehub.core.model.Platform
 
 /** Home screen: platform switcher, category pills and the room grid. */
@@ -53,10 +57,15 @@ import com.livehub.core.model.Platform
 fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val gridState = rememberLazyGridState()
   val followedKeys = remember(state.followed) { state.followed.map { it.key }.toSet() }
+  // Only ask for another page when the platform actually reports one. Douyin's feed and
+  // Douyu's directory both serve a single page, and without this guard the grid kept
+  // requesting "more" on every scroll to the bottom.
   val shouldLoadMore by remember {
     derivedStateOf {
       val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-      last >= state.rooms.size - 4 && state.rooms.isNotEmpty()
+      state.hasMore &&
+        last >= state.rooms.size - 4 &&
+        state.rooms.isNotEmpty()
     }
   }
 
@@ -100,6 +109,18 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
           if (state.loadingMore) {
             item(span = { GridItemSpan(maxLineSpan) }) {
               InlineLoader()
+            }
+          } else if (!state.hasNextPage && state.rooms.size < NO_MORE_HINT_THRESHOLD) {
+            // Douyin's feed caps at six rooms and Douyu's directory serves one page;
+            // saying so beats an endless empty scroll.
+            item(span = { GridItemSpan(maxLineSpan) }) {
+              Text(
+                text = "已经到底了 · ${state.platform.displayName}当前只提供这些直播",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+              )
             }
           }
         }

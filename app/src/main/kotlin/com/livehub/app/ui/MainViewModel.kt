@@ -180,7 +180,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       } catch (error: PlatformException) {
         _state.update { it.copy(loading = false, error = error.message) }
       } catch (error: Exception) {
-        _state.update { it.copy(loading = false, error = error.message ?: "加载分区失败") }
+        _state.update { it.copy(loading = false, hasNextPage = false, error = error.message ?: "加载分区失败") }
       }
     }
   }
@@ -210,6 +210,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             rooms = merged.distinctBy { room -> room.key },
             loading = false,
             loadingMore = false,
+            hasNextPage = page.hasMore,
           )
         }
       } catch (error: Exception) {

@@ -46,12 +46,15 @@ data class UiState(
   val discovering: Boolean = false,
   val loading: Boolean = false,
   val loadingMore: Boolean = false,
+  /** Set by the ViewModel from the platform cursor; drives infinite scroll. */
+  val hasNextPage: Boolean = false,
   val error: String? = null,
   val message: String? = null,
   val darkTheme: Boolean = false,
   val bilibiliLogin: com.livehub.app.ui.components.BiliLoginUi = com.livehub.app.ui.components.BiliLoginUi(),
 ) {
-  val hasMore: Boolean get() = !loading && rooms.isNotEmpty()
+  /** True only when the adapter reported a next page for the current list. */
+  val hasMore: Boolean get() = hasNextPage && !loading && rooms.isNotEmpty()
 }
 
 /** User intents handled by [MainViewModel.onAction]. */

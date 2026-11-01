@@ -6,11 +6,18 @@ import com.livehub.core.model.Platform
 /**
  * Douyin live partitions.
  *
- * Douyin exposes a flat partition list; the ids below are the `partition` values the
- * web client sends to `webcast/web/partition/detail/room/`.
+ * Douyin's partition-scoped list endpoint now answers HTTP 444 to anonymous clients, and
+ * the `webcast/feed` endpoint that still works ignores every partition parameter. LiveHub
+ * therefore exposes a **single** category instead of a list of tabs that would all show
+ * the same rooms: a filter that silently does nothing is worse than no filter.
+ *
+ * The partition names are kept in [KNOWN_PARTITIONS] so the mapping can be restored the
+ * moment a working partition endpoint is found.
  */
 object DouyinCategories {
-  private val entries = listOf(
+
+  /** Partition ids accepted by the (currently unreachable) partition endpoint. */
+  val KNOWN_PARTITIONS: List<Pair<String, String>> = listOf(
     "720" to "热门",
     "1" to "游戏",
     "2" to "娱乐",
@@ -28,16 +35,20 @@ object DouyinCategories {
     "14" to "旅行",
   )
 
-  fun all(): List<Category> = entries.mapIndexed { index, (id, name) ->
+  /**
+   * What the UI shows. One tab labelled honestly: the feed is a recommendation stream,
+   * not a browsable catalogue.
+   */
+  fun all(): List<Category> = listOf(
     Category(
       platform = Platform.DOUYIN,
-      id = id,
-      name = name,
+      id = DEFAULT_ID,
+      name = "推荐",
       parentId = "root",
       parentName = "抖音",
-      sortOrder = index,
-    )
-  }
+      sortOrder = 0,
+    ),
+  )
 
   const val DEFAULT_ID = "720"
 }
