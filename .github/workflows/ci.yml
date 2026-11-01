@@ -160,8 +160,11 @@ jobs:
           disable-animations: true
           script: |
             set +e
-            ./gradlew connectedDebugAndroidTest --stacktrace
+            ./gradlew connectedDebugAndroidTest --stacktrace > "$GITHUB_WORKSPACE/instrumented.log" 2>&1
             TEST_EXIT=$?
+            # Surface which test failed: the gradle output alone is unreadable through the
+            # API, and a screenshot-test crash otherwise reports only "exit code 1".
+            python3 .github/scripts/report_instrumented.py || true
             # ScreenshotTest writes the renders into the shared Download folder, so a
             # plain pull works: pull it inside the script, while the device is still up.
             # The emulator-runner action tears the device down as soon as this script ends.
