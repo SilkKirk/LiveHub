@@ -252,3 +252,79 @@ GitHub Actions 运行 `41240663433` 全部通过：
 | `platform:douyin` | 21 |
 | `core:common` | 16 |
 | 合计 | **265 个 JVM 用例 + 24 个仪器用例** |
+
+---
+
+## 第六轮迭代：对着线上接口逐个验证，而不是只读参考代码
+
+前五轮的验证都建立在"代码看起来对"之上。这一轮换了方法：**直接请求线上接口和
+WebSocket，用真实响应判断实现对错**。结果发现前四轮里被认为"已实现"的能力，有
+一批在线上是完全失效的。
+
+### 斗鱼
+
+| # | 缺陷 | 证据 |
+| --- | --- | --- |
+| 18 | **搜索永远返回 0 条** | 线上 `searchUser` 的每个元素是 `{"type":1,"anchorInfo":{…}}`，房间号/昵称/live 标记全在 `anchorInfo` 里。旧代码直接从元素上读 `rid`/`nickName`，实测 20 条里**保留 0 条**。参考实现是下钻 `anchorInfo` 的，因此一直是对的。 |
+| 19 | **`betard` 分类永远为空、观众数永远 0** | 线上 `cate2_name` 字段存在但**值为空字符串**，真实标签是 `second_lvl_name`（根上还有 `game.tag_name`）。观众数根本没有 `hotabit`/`hot_num`，实际是 `room_biz_all.hot`（字符串）。 |
+| 20 | **清晰度切换是空操作** | 探针响应广告 `原画720P30:0 / 超清:3 / 高清:2`，但旧实现只解析选中的那一个 rate，清晰度菜单永远只有 1 个 chip。现在把广告出来的每个 rate 并发解析成 variant，并让 CDN 列表随 `PlaybackSource` 一起返回，线路选择才真正可用。 |
+| 21 | **弹幕发的是 text 帧** | 握手声明 `Sec-WebSocket-Protocol: binary`，但 `loginreq`/`joingroup`/`mrkl` 用 `encodeUtf8()` 发成 opcode-1 文本帧。`DouyuDanmakuProtocol.encode` 就在旁边（而且有单测），却没被调用过。 |
+
+### 虎牙
+
+| # | 缺陷 | 证据 |
+| --- | --- | --- |
+| 22 | **TARS 长度字段编解码都错** | 写方向用裸大端 int32，读方向也按裸 int32 读。TARS 的 SIMPLE_LIST/LIST 长度是 **tag 0 的紧凑整型**。线上实测：用紧凑编码发注册帧，服务端回 **394 字节推送**；用裸 int32 发同一帧，只回两个小帧然后静默。读方向更糟——把长度 head 当数据吃掉，得到 `truncated payload (len=1641489)`，调用方的 `runCatching` 把每一帧都吞了，**虎牙弹幕双向全死**。 |
+| 23 | **心跳帧服务端不认** | 旧实现"重新合成"心跳 `{0:105, 1:{0:10, …}}`。实测线上：参考实现抓到的 111 字节帧会收到 `OnUserHeartBeat`/`tRsp` 回复，合成的 50 字节帧**完全没有回应**。一个被忽略的心跳比没有心跳更糟——看门狗会因此拆掉健康连接。改为直接使用抓包字节。 |
+
+### 抖音
+
+| # | 缺陷 | 证据 |
+| --- | --- | --- |
+| 24 | **protobuf 字段号读错** | `PushFrame.payload` 是字段 **8**（旧代码读 3），`ChatMessage.content` 是字段 **3**（旧代码读 7）。两个字段在真实帧里都不存在，因此 `decodeFrame` 对每一帧都返回空列表。 |
+| 25 | **ack/心跳帧字段号错** | ack 把 logId 写进字段 1（PushFrame 没有字段 1），心跳把 roomId 塞进帧里。改为字段 2/7/8 的合法 PushFrame。 |
+
+### 四个平台共同
+
+| # | 缺陷 | 证据 |
+| --- | --- | --- |
+| 26 | **干净关闭后不再重连** | 四个适配器在 `onClosed` 都发 `willRetry=false` 并停止。四个参考实现都是 `onClosed` **或** `onFailure` 都重连。平台会定期回收空闲 socket，因此这等于"看几分钟后弹幕永久冻结"。 |
+
+### 界面（同一轮，来自与参考实现的逐屏对照）
+
+- **下拉刷新此前完全不存在**（全仓库 0 处），首页/关注/搜索都已补上
+- **屏蔽词只在全屏悬浮层生效**，竖屏列表渲染的是原始 `state.danmaku`，用户在设置里加的屏蔽词在竖屏完全无效
+- **弹幕透明度、横屏字号没有任何入口**（`danmakuOpacity` 有持久化字段但无 setter）
+- **分区订阅没有入口**：`ToggleCategorySubscription` 有 action、有 handler，但没有任何 UI 发出它，订阅只能靠同步从别的设备传过来
+- **主题是两态且不持久化**：`浅色` 无法选中，重启即丢失。改为系统→深色→浅色循环并写入 DataStore
+- **关闭播放器/搜索永远回首页**，从关注列表点进去再退出会丢失位置
+- **视频比例硬编码 16:9**：改为从 Media3 `VideoSize`（含旋转与像素比）学习，竖屏流满幅显示，并补上 IDN 报错时的 https→http 回退
+- **关注列表按手动顺序**，在线的主播被压在离线名字下面；改为在线优先（稳定排序保留手动顺序），并补上"在线边框"和行内取消关注
+
+### 本轮 CI 自身也修了 4 个问题
+
+CI 从一个"看不见原因的红灯"变成了能定位的红灯。期间修掉：
+
+1. lint 报告只写文件不打日志，而读取 job 日志需要管理员权限 → 改为把每条发现输出成 `::error::`/`::warning::` 注解（并按真实 severity 分级，之前把 8 条 warning 也标成 error，掩盖了真正的失败原因）
+2. `PlayerScreen` 插 import 时把 `TextAlign` 和 `TextOverflow` 两行 import 粘成一行 → 顶层语法错误，全模块无法编译
+3. 单测失败只报 `exit code 1` → 增加 JUnit XML → 注解的转换，另加对 `e:` 行的兜底注解
+4. `hexToBytes` helper 写在了另一个测试类里，虎牙测试源集编译失败，导致**一个 JVM 用例都没跑**
+
+### 当前状态（run 107，commit `34c309e`）
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 通过（0 error，仅剩版本提醒与方向性 hint） |
+| JVM 单元测试 | ✅ 通过 |
+| `:app:assembleDebug` / `assembleRelease` | ✅ |
+| 仪器测试（API 34 模拟器） | ✅ 通过 |
+| debug APK 产物 | ✅ 27.1 MB |
+
+### 仍未解决 / 下一轮
+
+- **抖音弹幕连不上**：WS URL 仍是裸地址，没有参考实现那套约 30 个 query 参数、`signature`、`room_id` 和 Cookie；而且从未解析过 `room.id_str`。这是本轮唯一确认"完全不可用"的能力，需要按 `DouyinDanmakuClientAndroid.kt:281-328` 移植。
+- **抖音签名不一致**：`rooms()` 用 `DouyinABogus.aBogus`（与参考实现逐字节一致），但 `search`/`roomInfo`/`findInFeed` 用的是 `DouyinSigner.aBogus`（自造的 md5 方案），三个接口必然验签失败。
+- **抖音 HTTP 风控画像缺失**：`headers()` 没有 Cookie，`msToken` 传空串，`browser_version` 与 UA 和参考实现不一致。
+- **斗鱼清晰度还没走标签路径**：`DouyuQuality.resolveRate`（原画/高清/标清、蓝光8M、bit 兜底）仍是死代码，`playback()` 只接受 `Int?`。
+- **虎牙列表分页**：参考实现"本页没有新 id 就停"，本项目用"本页条数 ≥ pageSize"，遇到重复页会一直加载。
+- **未做真机验证**：以上都是本机 HTTP/WebSocket 探针 + 单测的结论，真实设备上的 mDNS、CDN 可达性仍未验证。
