@@ -128,14 +128,38 @@ CI 步骤：
 
 产物在 Actions 的 **Artifacts → livehub-debug-apk** 下载。
 
-### Release 签名
+### 发布正式版（Release）
 
-`app/build.gradle.kts` 会在仓库根目录存在 `keystore.properties` 且其中的
-`storeFile` 指向的文件确实存在时启用 release 签名；否则 release 变体不签名，
-CI 仍然可以完成 `assembleRelease` 的编译与混淆校验。
+推一个 `vMAJOR.MINOR.PATCH` 标签即可发布，版本号不需要手工改：
+
+```bash
+git tag -a v0.9.1 -m "LiveHub 0.9.1"
+git push origin v0.9.1
+```
+
+`.github/workflows/release.yml` 会从标签推导 `versionName`（`v0.9.1` → `0.9.1`）与
+`versionCode`（`MAJOR*10000 + MINOR*100 + PATCH`），构建签名 APK 并附到 GitHub Release。
+标签格式不合法时任务会直接失败，而不是产出一个版本号错误的包。
+
+**签名密钥**保存在仓库的 Actions secrets 中（`RELEASE_KEYSTORE_BASE64`、
+`RELEASE_STORE_PASSWORD`、`RELEASE_KEY_ALIAS`、`RELEASE_KEY_PASSWORD`）。Android 要求
+覆盖安装的包签名一致，所以**这把密钥不能换**：换了就必须先卸载再装，用户数据随之丢失。
+`versionCode` 必须单调递增，否则新包会被当作降级包拒绝安装——上面那套推导保证它不会
+倒退。
+
+发布步骤会用 `apksigner` 打印证书，并在 release 包被 debug 密钥签名时让任务失败。
+
+> 本次会话之前的 `v0.1.0`–`v0.8.0` 是没有密钥时构建的 **debug** 包
+> （`applicationId` 带 `.debug` 后缀、`versionCode` 恒为 1），与正式包包名不同，
+> 因此可以并存，互不干扰升级链。
+
+### 本地构建（可选）
+
+`app/build.gradle.kts` 在仓库根目录存在 `keystore.properties` 时启用 release 签名；
+否则 release 变体不签名，CI 仍能完成 `assembleRelease` 的编译与混淆校验。
 
 ```properties
-storeFile=release.jks
+storeFile=../livehub-release.jks
 storePassword=******
 keyAlias=livehub
 keyPassword=******
