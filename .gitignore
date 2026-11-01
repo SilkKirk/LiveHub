@@ -33,3 +33,4 @@ tmp_*
 .ci-check.py
 
 dist/
+tag_msg.txt
