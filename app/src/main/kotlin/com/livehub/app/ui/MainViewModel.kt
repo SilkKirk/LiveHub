@@ -396,6 +396,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       it.copy(screen = Screen.Player, room = streamer, variants = emptyList(), selectedVariant = null, loading = true)
     }
     playbackJob = viewModelScope.launch {
+      // Danmaku is independent of playback: a chat stream must keep working even when
+      // the video URL cannot be resolved, otherwise a failed stream shows "正在连接弹幕"
+      // forever.
+      startDanmaku(streamer)
       try {
         val source = container.platformRepository.playback(streamer.platform, streamer.roomId)
         val preferred = source.defaultVariant
@@ -407,7 +411,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             loading = false,
           )
         }
-        startDanmaku(streamer)
       } catch (error: Exception) {
         _state.update {
           it.copy(loading = false, error = error.message ?: "无法播放该直播间")
