@@ -97,6 +97,8 @@ object DouyuParser {
         parentName = parentId?.let { parents[it] },
         iconUrl = obj.string("icon"),
         sortOrder = id.toIntOrNull() ?: Int.MAX_VALUE,
+        // `shortName` is the real directory slug; without it the list cannot load.
+        slug = obj.string("shortName"),
       )
     }
   }

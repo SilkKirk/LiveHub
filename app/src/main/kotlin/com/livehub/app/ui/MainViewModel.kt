@@ -202,6 +202,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           platform = platform,
           categoryId = category.id,
           cursor = if (reset) null else nextCursor,
+          slug = category.slug,
         )
         nextCursor = page.nextCursor
         _state.update {

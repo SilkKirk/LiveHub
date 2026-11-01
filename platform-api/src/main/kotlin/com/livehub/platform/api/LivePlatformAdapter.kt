@@ -32,8 +32,11 @@ interface LivePlatformAdapter {
    *
    * @param cursor opaque cursor previously returned by [RoomPage.nextCursor];
    *   null requests the first page.
+   * @param slug the platform's own URL slug for the category, when it publishes one
+   *   (Douyu `shortName`). Passed through so adapters never have to guess it from the
+   *   numeric id — Douyu's `/directory/game/<cate2Id>` answers 404.
    */
-  suspend fun rooms(categoryId: String, cursor: String? = null): RoomPage
+  suspend fun rooms(categoryId: String, cursor: String? = null, slug: String? = null): RoomPage
 
   /** Searches live rooms by keyword. */
   suspend fun search(keyword: String, cursor: String? = null): RoomPage

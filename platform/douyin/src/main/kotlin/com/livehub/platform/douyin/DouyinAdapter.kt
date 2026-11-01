@@ -42,7 +42,7 @@ class DouyinAdapter(
 
   override suspend fun categories(): List<Category> = api.categories()
 
-  override suspend fun rooms(categoryId: String, cursor: String?): RoomPage {
+  override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
     val (rooms, hasMore) = api.rooms(categoryId, page)
     return RoomPage(rooms = rooms, nextCursor = if (hasMore) (page + 1).toString() else null)

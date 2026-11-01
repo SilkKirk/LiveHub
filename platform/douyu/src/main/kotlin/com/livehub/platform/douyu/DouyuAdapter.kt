@@ -47,11 +47,11 @@ class DouyuAdapter(
 
   override suspend fun categories(): List<Category> = api.categories()
 
-  override suspend fun rooms(categoryId: String, cursor: String?): RoomPage {
+  override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
     // Douyu's directory page only renders the first page server side, so a missing
     // cursor legitimately means "we are done"; the adapter must not pretend otherwise.
-    val result = api.rooms(categoryId = categoryId, page = page, limit = PAGE_SIZE)
+    val result = api.rooms(categoryId = categoryId, page = page, limit = PAGE_SIZE, slug = slug)
     val fallback = if (result.rooms.isEmpty() && page == 1) {
       runCatching { api.directory(categoryId, page = 1, limit = PAGE_SIZE).rooms }
         .getOrDefault(emptyList())

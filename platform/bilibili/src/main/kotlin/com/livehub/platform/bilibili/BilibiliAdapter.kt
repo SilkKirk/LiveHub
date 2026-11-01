@@ -41,7 +41,7 @@ class BilibiliAdapter(
 
   override suspend fun categories(): List<Category> = api.categories()
 
-  override suspend fun rooms(categoryId: String, cursor: String?): RoomPage {
+  override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
     val area = BilibiliArea.decode(categoryId)
     val (rooms, hasMore) = api.rooms(area = area, page = page, pageSize = PAGE_SIZE)

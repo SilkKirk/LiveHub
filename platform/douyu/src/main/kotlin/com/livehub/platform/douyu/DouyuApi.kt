@@ -61,8 +61,17 @@ class DouyuApi(private val http: HttpClient) {
    * (38 of 40 rooms overlap) and page 3 returns page 1 again. The adapter therefore
    * reports no next cursor instead of serving duplicates to an infinite-scroll list.
    */
-  suspend fun rooms(categoryId: String, page: Int, limit: Int): DouyuRoomPage {
-    val html = fetchDirectoryPage(categoryId, page)
+  /**
+   * @param slug the category's real directory slug (`shortName` from `cate/list`).
+   *   Required: the numeric `cate2Id` is not a valid URL segment and 404s.
+   */
+  suspend fun rooms(
+    categoryId: String,
+    page: Int,
+    limit: Int,
+    slug: String? = null,
+  ): DouyuRoomPage {
+    val html = fetchDirectoryPage(categoryId, page, slug)
     val rooms = DouyuHtmlParser.roomsFromDirectory(html, limit)
     return DouyuRoomPage(rooms = rooms, nextOffset = null)
   }
@@ -74,16 +83,20 @@ class DouyuApi(private val http: HttpClient) {
    * only when Douyu actually returns different rooms, otherwise the caller gets page 1
    * rather than a duplicate list.
    */
-  private suspend fun fetchDirectoryPage(categoryId: String, page: Int): String {
-    val slug = DouyuCategorySlug.forId(categoryId)
+  private suspend fun fetchDirectoryPage(categoryId: String, page: Int, slug: String?): String {
+    val resolved = DouyuCategorySlug.forId(categoryId, slug)
+      ?: throw PlatformOfflineException(
+        "该分区暂不支持浏览，请选择其他分区",
+        Platform.DOUYU,
+      )
     val candidates = buildList {
       if (page <= 1) {
-        add("$URL_DIRECTORY/$slug")
+        add("$URL_DIRECTORY/$resolved")
       } else {
-        add("$URL_DIRECTORY/$slug?page=$page")
+        add("$URL_DIRECTORY/$resolved?page=$page")
       }
-      add("$URL_WEB/directory/game/$slug")
-      add("$URL_WEB/g_$slug")
+      add("$URL_WEB/directory/game/$resolved")
+      add("$URL_WEB/g_$resolved")
     }
 
     var lastError: Throwable? = null

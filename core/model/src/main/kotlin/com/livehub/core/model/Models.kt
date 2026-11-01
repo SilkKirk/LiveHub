@@ -75,6 +75,14 @@ data class Category(
   val parentName: String? = null,
   val iconUrl: String? = null,
   val sortOrder: Int = 0,
+  /**
+   * The platform's own URL slug for this category, when it publishes one.
+   *
+   * Douyu's directory pages are keyed by a slug (`LOL`, `wzry`, `yqk`) that is **not**
+   * derivable from `cate2Id` — the numeric id 404s. The category endpoint returns it as
+   * `shortName`, so it has to travel with the model instead of being guessed.
+   */
+  val slug: String? = null,
 ) {
   val key: String get() = "${platform.id}:$id"
 }

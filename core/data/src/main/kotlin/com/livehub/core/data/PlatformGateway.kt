@@ -50,8 +50,12 @@ class PlatformGateway(private val registry: PlatformRegistry) {
   suspend fun categories(platform: Platform): List<Category> =
     requireAdapter(platform).categories()
 
-  suspend fun rooms(platform: Platform, categoryId: String, cursor: String? = null): RoomPage =
-    requireAdapter(platform).rooms(categoryId, cursor)
+  suspend fun rooms(
+    platform: Platform,
+    categoryId: String,
+    cursor: String? = null,
+    slug: String? = null,
+  ): RoomPage = requireAdapter(platform).rooms(categoryId, cursor, slug)
 
   suspend fun search(platform: Platform, keyword: String, cursor: String? = null): RoomPage =
     requireAdapter(platform).search(keyword, cursor)

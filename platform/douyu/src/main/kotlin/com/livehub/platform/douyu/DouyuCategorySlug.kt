@@ -3,98 +3,58 @@ package com.livehub.platform.douyu
 /**
  * Maps a Douyu `cate2Id` to the slug used by `www.douyu.com/directory/game/<slug>`.
  *
- * The directory page is keyed by a human readable slug (`LOL`, `DNF`, …) rather than
- * the numeric category id returned by `/api/cate/list`. Only the popular categories are
- * mapped explicitly; anything else falls back to the numeric id, which Douyu also
- * accepts and which redirects to the right slug.
+ * ## Why this is no longer a hand-written table
+ *
+ * The first version guessed slugs (`"86" to "LOL"`, `"2" to "WZRY"`, …) from a handful of
+ * known categories and fell back to the numeric id for everything else. Two things were
+ * wrong with that:
+ *
+ *  * the numeric id is **not** a valid slug — `/directory/game/86` answers 404, so every
+ *    unmapped category failed with a network error;
+ *  * several guesses were simply wrong (`cate2Id 1` is 英雄联盟, not 86).
+ *
+ * The category endpoint already publishes the real slug as `shortName`
+ * (`英雄联盟 -> "LOL"`, `王者荣耀 -> "wzry"`, `一起看 -> "yqk"`), verified against 12
+ * categories across four parent groups. [DouyuParser.categories] therefore carries the
+ * slug through, and this object only holds the static fallbacks needed when a slug is
+ * missing — for example the hand-built list used before categories have loaded.
  */
 object DouyuCategorySlug {
 
-  private val slugs = mapOf(
+  /**
+   * Fallbacks for the categories the UI can open before `cate/list` has been fetched.
+   *
+   * Keys are real `cate2Id` values; values are the slug Douyu publishes as `shortName`.
+   */
+  private val fallbacks = mapOf(
     "1" to "LOL",
-    "2" to "WZRY",
-    "3" to "DNF",
-    "4" to "PUBG",
-    "5" to "How",
-    "6" to "yz",
-    "7" to "Blizzard",
-    "8" to "mobilegame",
-    "9" to "Stand-alone",
-    "10" to "warcraft3",
-    "13" to "Dota2",
-    "14" to "CF",
-    "17" to "fifa",
-    "22" to "nba2k",
-    "26" to "qqfeiche",
-    "28" to "mszb",
-    "31" to "lscs",
-    "33" to "qhyp",
-    "36" to "csgo",
-    "40" to "Game",
-    "55" to "lol",
-    "65" to "music",
-    "66" to "talk",
-    "70" to "yz",
-    "81" to "yanzhi",
-    "86" to "LOL",
-    "88" to "wzry",
-    "101" to "hy",
-    "110" to "jdqs",
-    "113" to "mhxy",
-    "116" to "zhw",
-    "120" to "cq",
-    "124" to "hszb",
-    "131" to "hxcq",
-    "159" to "wzq",
-    "166" to "h5game",
-    "174" to "sp",
     "181" to "wzry",
-    "203" to "pd",
-    "208" to "txjh",
-    "217" to "dhxy",
-    "220" to "huwai",
-    "233" to "yys",
-    "237" to "esport",
-    "250" to "lscs",
-    "259" to "yhk",
-    "270" to "tx3",
-    "274" to "cqyx",
-    "283" to "danji",
-    "288" to "acg",
-    "295" to "hy",
-    "309" to "yule",
-    "320" to "hearthstone",
-    "322" to "nz",
-    "331" to "star",
-    "340" to "jdqs",
-    "346" to "zhibo",
-    "355" to "self",
-    "371" to "radio",
-    "387" to "root",
-    "416" to "cf",
-    "429" to "yz",
-    "451" to "hy",
-    "461" to "wzry",
-    "480" to "jdqs",
-    "508" to "hearthstone",
-    "520" to "huwai",
-    "532" to "yqk",
-    "575" to "lscs",
-    "658" to "ys",
-    "712" to "hy",
-    "800" to "lscs",
-    "910" to "lscs",
-    "978" to "yyjj",
-    "1092" to "DNFmobile",
-    "1145" to "yz",
-    "1256" to "lscs",
-    "2793" to "hepingjingying",
+    "1920" to "LOLM",
+    "1092" to "mdnf",
+    "3" to "DNF",
+    "194" to "ms",
+    "208" to "yqk",
+    "725" to "DMC",
+    "375" to "qqfcdy",
+    "1166" to "fkjy",
+    "1174" to "yxl",
+    "1140" to "RichMan",
   )
 
-  /** Slug for [categoryId], or the id itself when unmapped. */
-  fun forId(categoryId: String): String = slugs[categoryId] ?: categoryId
+  /**
+   * Slug for [categoryId].
+   *
+   * @param knownSlug the `shortName` from `cate/list`, which always wins.
+   * @return the real slug, or null when nothing usable is known — callers should then
+   *   report a readable error instead of requesting a URL that is guaranteed to 404.
+   */
+  fun forId(categoryId: String, knownSlug: String? = null): String? {
+    val trimmed = knownSlug?.trim().orEmpty()
+    if (trimmed.isNotEmpty()) return trimmed
+    return fallbacks[categoryId]
+  }
 
-  /** Reverse lookup used when a page reports its own slug. */
+  /** Reverse lookup used by tests and diagnostics. */
   fun idFor(slug: String): String? =
-    slugs.entries.firstOrNull { it.value.equals(slug, ignoreCase = true) }?.key
+    fallbacks.entries.firstOrNull { it.value.equals(slug, ignoreCase = true) }?.key
 }

@@ -30,8 +30,12 @@ class ResilientPlatformRepository(
     return categoryCache.getOrPut(key) { gateway.categories(platform) }
   }
 
-  suspend fun rooms(platform: Platform, categoryId: String, cursor: String? = null): RoomPage =
-    withRetry { gateway.rooms(platform, categoryId, cursor) }
+  suspend fun rooms(
+    platform: Platform,
+    categoryId: String,
+    cursor: String? = null,
+    slug: String? = null,
+  ): RoomPage = withRetry { gateway.rooms(platform, categoryId, cursor, slug) }
 
   suspend fun search(platform: Platform, keyword: String, cursor: String? = null): RoomPage =
     withRetry { gateway.search(platform, keyword, cursor) }
