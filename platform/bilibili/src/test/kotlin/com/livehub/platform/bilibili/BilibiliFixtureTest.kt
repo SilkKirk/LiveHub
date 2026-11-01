@@ -2,6 +2,7 @@ package com.livehub.platform.bilibili
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -85,15 +86,21 @@ class BilibiliFixtureTest {
   }
 
   @Test
-  fun `live status uses 1 for live rooms`() {
+  fun `the hot tab uses a boolean status field instead of live_status`() {
     val modules = indexList["data"]!!.jsonObject["room_list"]!!.jsonArray
-    val statuses = modules.flatMap { module ->
-      ((module as? JsonObject)?.get("list")?.jsonArray ?: emptyList())
-        .mapNotNull { (it as? JsonObject)?.get("live_status")?.jsonPrimitive?.intOrNull }
+    val rooms = modules.flatMap { module ->
+      ((module as? JsonObject)?.get("list")?.jsonArray ?: emptyList()).mapNotNull { it as? JsonObject }
     }
 
-    assertTrue(statuses.isNotEmpty(), "live_status must be present so offline rooms can be filtered")
-    assertTrue(statuses.all { it == 1 }, "the hot tab should only carry live rooms")
+    // Captured reality: the hot tab carries `status: true` and no `live_status` at all.
+    // The adapter must therefore understand both shapes or every room is filtered out.
+    assertTrue(
+      rooms.none { it.containsKey("live_status") },
+      "the hot tab is expected to omit live_status",
+    )
+    val statuses = rooms.mapNotNull { it["status"]?.jsonPrimitive?.booleanOrNull }
+    assertEquals(rooms.size, statuses.size, "every room should expose a boolean status")
+    assertTrue(statuses.all { it }, "the hot tab should only carry live rooms")
   }
 
   @Test

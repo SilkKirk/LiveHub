@@ -25,7 +25,9 @@ class DouyuHtmlFixtureTest {
   @Test
   fun `the fixture is present and non-trivial`() {
     assertTrue(html.length > 5_000, "fixture length was ${html.length}")
-    assertTrue(html.contains("/directory/game"), "fixture should be a directory page")
+    // The fixture is a slice of the page, so it need not contain the URL itself; it must
+    // contain room cards.
+    assertTrue(html.contains("target=\"_blank\""), "fixture should contain room anchors")
   }
 
   @Test

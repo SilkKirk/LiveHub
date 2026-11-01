@@ -14,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -389,12 +390,31 @@ class BilibiliApi(
     return base + joiner + extra
   }
 
+  /**
+   * Maps one room object from either list endpoint.
+   *
+   * The two endpoints use **different** live flags, which a captured hot-tab response
+   * made obvious: `second/getList` sends `live_status` (int, 1 = live) while the hot tab
+   * sends `status` (boolean) and no `live_status` at all. Reading only `live_status`
+   * meant every hot-tab room fell through the filter, and a future `status = false`
+   * room would have been shown as live.
+   */
   private fun parseRoom(element: JsonElement): Streamer? {
     val obj = element as? JsonObject ?: return null
     val roomId = obj.str("roomid") ?: obj.str("room_id") ?: obj.str("roomId") ?: return null
+
     val liveStatus = obj["live_status"]?.jsonPrimitive?.intOrNull
       ?: obj["liveStatus"]?.jsonPrimitive?.intOrNull
-    if (liveStatus != null && liveStatus != 1) return null
+    val booleanStatus = obj["status"]?.jsonPrimitive?.booleanOrNull
+
+    val isLive = when {
+      liveStatus != null -> liveStatus == 1
+      booleanStatus != null -> booleanStatus
+      // Neither flag present: assume live rather than hiding the whole list.
+      else -> true
+    }
+    if (!isLive) return null
+
     val viewers = obj["watched_show"]?.jsonObject?.get("num")?.jsonPrimitive?.contentOrNull
       ?.toLongOrNull()
       ?: obj["online"]?.jsonPrimitive?.longOrNull
