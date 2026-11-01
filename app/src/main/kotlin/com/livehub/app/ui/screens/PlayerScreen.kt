@@ -93,9 +93,46 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
-  val variant: StreamVariant? = state.selectedVariant
   var fullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
+
+  BackHandler(enabled = fullscreen) { fullscreen = false }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    PlayerContent(
+      state = state,
+      onAction = onAction,
+      fullscreen = fullscreen,
+      onFullscreenChange = { fullscreen = it },
+      onOpenSettings = { showSettings = true },
+    )
+  }
+
+  if (showSettings) {
+    ModalBottomSheet(onDismissRequest = { showSettings = false }) {
+      PlayerSettings(state = state, variant = state.selectedVariant, onAction = onAction)
+    }
+  }
+}
+
+/**
+ * The player body, without the sheet that [PlayerScreen] owns.
+ *
+ * Split out so the layout can be composed on its own — the instrumented screenshots render
+ * every screen without a real decoder, and the previous single composable could not be
+ * rendered without going through the full-screen path.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PlayerContent(
+  state: UiState,
+  onAction: (UiAction) -> Unit,
+  fullscreen: Boolean,
+  onFullscreenChange: (Boolean) -> Unit,
+  onOpenSettings: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val variant: StreamVariant? = state.selectedVariant
   var controlsVisible by remember { mutableStateOf(true) }
   /** Pause is view-local: leaving the screen always resumes, so it never sticks. */
   var paused by remember(state.room?.key) { mutableStateOf(false) }
@@ -106,8 +143,6 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var httpFallbackUrl by remember(state.room?.key) { mutableStateOf<String?>(null) }
   // Set when Media3 gives up after its one automatic retry.
   var playerError by remember(state.room?.key) { mutableStateOf<String?>(null) }
-
-  BackHandler(enabled = fullscreen) { fullscreen = false }
 
   val isPlaying = variant != null && !state.loading
   LaunchedEffect(controlsVisible, variant?.url, isPlaying, fullscreen) {
@@ -125,7 +160,9 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   // with the top and bottom of the picture outside the frame.
   val verticalFullBleed = !fullscreen && isVerticalVideo
 
-  Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+  Box(
+    modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+  ) {
     Column(modifier = Modifier.fillMaxSize()) {
       if (!fullscreen && !verticalFullBleed) {
         PlayerHeader(state = state, onAction = onAction, modifier = Modifier.fillMaxWidth())
@@ -163,7 +200,7 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
         if (fullscreen && controlsVisible) {
           FullscreenBar(
             state = state,
-            onExit = { fullscreen = false },
+            onExit = { onFullscreenChange(false) },
             onAction = onAction,
             modifier = Modifier.align(Alignment.TopCenter),
           )
@@ -221,10 +258,10 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
           SideControls(
             fullscreen = fullscreen,
             onToggleFullscreen = {
-              fullscreen = !fullscreen
+              onFullscreenChange(!fullscreen)
               controlsVisible = true
             },
-            onOpenSettings = { showSettings = true },
+            onOpenSettings = onOpenSettings,
             onReload = { state.room?.let { onAction(UiAction.OpenRoom(it)) } },
             modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
           )
@@ -252,12 +289,6 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         DanmakuPanel(state = state, modifier = Modifier.weight(1f).fillMaxWidth())
       }
-    }
-  }
-
-  if (showSettings) {
-    ModalBottomSheet(onDismissRequest = { showSettings = false }) {
-      PlayerSettings(state = state, variant = variant, onAction = onAction)
     }
   }
 }
@@ -492,6 +523,22 @@ private fun VideoSurface(
         )
         Spacer(Modifier.height(12.dp))
         PillButton(label = "返回", filled = false) { onAction(UiAction.ClosePlayer) }
+      }
+
+      // Nothing to play and nothing to report: the resolve has not finished yet. Falling
+      // through to the error branch here made a live room render as "无法播放该直播间" for the
+      // moment between opening it and the first variant arriving — and left it there when
+      // the resolve reported progress through `loading` only.
+      playerError == null && state.error == null -> Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
+        Spacer(Modifier.height(10.dp))
+        Text(
+          text = "正在解析播放地址…",
+          color = Color.White.copy(alpha = 0.75f),
+          style = MaterialTheme.typography.labelMedium,
+        )
       }
 
       else -> Column(

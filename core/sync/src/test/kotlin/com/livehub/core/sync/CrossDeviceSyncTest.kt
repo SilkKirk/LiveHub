@@ -457,6 +457,60 @@ class CrossDeviceSyncTest {
     assertTrue(outcomes.isEmpty())
   }
 
+  // -------------------------------------------------------------------- delta ---
+
+  /**
+   * Records only the peer is missing still reach it, even though the push is a delta.
+   *
+   * The pull an exchange starts with brings the *peer's* records local, so the delta sent
+   * back is what the peer lacks. A naive "skip everything the peer knows" implementation
+   * that forgot the local-only records would converge to an empty list here.
+   */
+  @Test
+  fun `delta exchange converges both ways in one run`() = kotlinx.coroutines.test.runTest {
+    phone.pairWith(tablet)
+
+    // Each device owns one room the other has never seen.
+    phone.follow("111")
+    tablet.follow("222")
+
+    phone.syncWith(tablet)
+
+    assertEquals(listOf("111", "222"), phone.followedIds())
+    assertEquals(listOf("111", "222"), tablet.followedIds())
+  }
+
+  /**
+   * A second exchange sends nothing.
+   *
+   * The payload count is what proves the delta works: after the first sync both sides hold
+   * identical versions, so the coordinator must stop after the pull.
+   */
+  @Test
+  fun `a second exchange transfers no records`() = kotlinx.coroutines.test.runTest {
+    phone.pairWith(tablet)
+    phone.follow("111")
+    phone.syncWith(tablet)
+
+    val second = SyncCoordinator(phone.engine, phone.transport).syncWith(phone.peers.first())
+
+    assertTrue(second.all { it.success })
+    assertEquals(0, second.sumOf { it.pushed }, "nothing should be sent once both sides agree")
+  }
+
+  /** A scope larger than the per-payload cap survives the split without losing records. */
+  @Test
+  fun `a follow list past the payload cap syncs completely`() = kotlinx.coroutines.test.runTest {
+    phone.pairWith(tablet)
+    // More records than one payload carries at the default cap.
+    repeat(SyncPayload.MAX_RECORDS_PER_PAYLOAD + 37) { index -> phone.follow("r$index") }
+
+    phone.syncWith(tablet)
+
+    assertEquals(phone.followedIds(), tablet.followedIds())
+    assertEquals(SyncPayload.MAX_RECORDS_PER_PAYLOAD + 37, tablet.followedIds().size)
+  }
+
   private companion object {
     const val PAIRING_CODE = "482913"
     const val BASE_TIME = 1_700_000_000_000L

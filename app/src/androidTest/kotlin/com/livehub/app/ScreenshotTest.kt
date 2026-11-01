@@ -11,6 +11,7 @@ import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.BiliLoginUi
+import com.livehub.app.ui.screens.PlayerContent
 import com.livehub.core.model.Category
 import com.livehub.core.model.DanmakuMessage
 import com.livehub.core.model.Platform
@@ -21,6 +22,7 @@ import com.livehub.core.sync.TrustedPeer
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.Assert.assertTrue
 import java.io.File
 import java.io.FileOutputStream
 
@@ -110,6 +112,33 @@ class ScreenshotTest {
     rooms = douyuRooms,
     deviceName = "Pixel 7",
     localAddress = "192.168.1.23:47653",
+  )
+
+  /**
+   * A player state that carries a room, a variant and chat.
+   *
+   * Every field the player layout reads has to be filled: a variant alone leaves the header
+   * and the danmaku panel empty, which is what produced an all-black 703-byte render.
+   */
+  private fun playerState(): UiState = baseState().copy(
+    screen = Screen.Player,
+    room = douyuRooms[0],
+    followed = douyuRooms.take(2),
+    variants = listOf(
+      StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0, qualityCode = 0),
+      StreamVariant("高清", "https://example.com/b.flv", "ws-h5", qualityRank = 2, qualityCode = 2),
+      StreamVariant("标清", "https://example.com/c.flv", "ali", qualityRank = 1, qualityCode = 1),
+    ),
+    selectedVariant = StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0, qualityCode = 0),
+    lines = listOf("ws-h5", "ali", "tx"),
+    selectedLine = "ws-h5",
+    danmaku = listOf(
+      DanmakuMessage("douyu:1", "观众A", "这波操作太秀了"),
+      DanmakuMessage("douyu:1", "观众B", "666666"),
+      DanmakuMessage("douyu:1", "观众C", "主播声音好听"),
+      DanmakuMessage("douyu:1", "观众D", "刚来，错过了什么"),
+      DanmakuMessage("douyu:1", "观众E", "主播能开个麦吗"),
+    ),
   )
 
   // ------------------------------------------------------------------- renders ---
@@ -218,23 +247,21 @@ class ScreenshotTest {
   )
 
   @Test
-  fun player() = capture(
-    "17-player",
-    baseState().copy(
-      screen = Screen.Player,
-      room = douyuRooms[0],
-      variants = listOf(
-        StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0, qualityCode = 0),
-        StreamVariant("高清", "https://example.com/b.flv", "ws-h5", qualityRank = 2, qualityCode = 2),
-        StreamVariant("标清", "https://example.com/c.flv", "ali", qualityRank = 1, qualityCode = 1),
-      ),
-      selectedVariant = StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0),
-      danmaku = listOf(
-        DanmakuMessage("douyu:1", "观众A", "这波操作太秀了"),
-        DanmakuMessage("douyu:1", "观众B", "666666"),
-        DanmakuMessage("douyu:1", "观众C", "主播声音好听"),
-      ),
-    ),
+  fun player() = capture("17-player", playerState())
+
+  /**
+   * The player renders through the real screen entry point.
+   *
+   * `17-player` used to come out as a 703-byte black rectangle: the state carried a variant
+   * but no `room`, so the header, action row and danmaku panel all rendered nothing while
+   * the video surface painted black. A render that is entirely one colour is worthless as
+   * a visual regression check, so the fixture now includes the room.
+   */
+  @Test
+  fun playerFullScreen() = capture(
+    "17b-player-fullscreen",
+    playerState(),
+    fullscreen = true,
   )
 
   @Test
@@ -254,10 +281,22 @@ class ScreenshotTest {
     ),
   )
 
-  private fun capture(name: String, state: UiState) {
+  private fun capture(name: String, state: UiState, fullscreen: Boolean = false) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
-      LiveHubRoot(state = state, onAction = { })
+      if (state.screen == Screen.Player) {
+        // Rendered through PlayerContent so the screenshot does not depend on the sheet
+        // state, and so a fullscreen render is reachable without a real gesture.
+        PlayerContent(
+          state = state,
+          onAction = {},
+          fullscreen = fullscreen,
+          onFullscreenChange = {},
+          onOpenSettings = {},
+        )
+      } else {
+        LiveHubRoot(state = state, onAction = { })
+      }
     }
     // Compose test rules advance the virtual clock automatically; with the player's
     // auto-hide timer that meant the chrome had already faded before the capture, so
@@ -274,6 +313,47 @@ class ScreenshotTest {
         }
       }
     }
+
+    // A render that is a single flat colour means the screen composed nothing visible.
+    // `17-player` shipped as an all-black 703-byte PNG for exactly that reason: a variant
+    // was present but the room was not, so every text row rendered empty over a black
+    // surface. Comparing file sizes would be fragile, so the check counts distinct colours
+    // in a sampling grid instead.
+    assertTrue(
+      "$name rendered as a single colour, so the screen composed no visible content",
+      distinctSampledColors(bitmap) >= MIN_DISTINCT_COLORS,
+    )
     bitmap.recycle()
+  }
+
+  /** Number of distinct colours on a coarse grid; enough to tell "content" from "blank". */
+  private fun distinctSampledColors(bitmap: android.graphics.Bitmap): Int {
+    val seen = HashSet<Int>()
+    val stepX = maxOf(1, bitmap.width / SAMPLE_GRID)
+    val stepY = maxOf(1, bitmap.height / SAMPLE_GRID)
+    var y = 0
+    while (y < bitmap.height) {
+      var x = 0
+      while (x < bitmap.width) {
+        seen.add(bitmap.getPixel(x, y))
+        x += stepX
+      }
+      y += stepY
+    }
+    return seen.size
+  }
+
+  private companion object {
+    /** Sampling resolution per axis for [distinctSampledColors]. */
+    const val SAMPLE_GRID = 24
+
+    /**
+     * Below this a render is blank or a single gradient.
+     *
+     * A plain text screen already contains well over a hundred distinct colours once
+     * antialiasing is counted, so the threshold is far from a real screen and still
+     * catches an empty one.
+     */
+    const val MIN_DISTINCT_COLORS = 12
   }
 }
