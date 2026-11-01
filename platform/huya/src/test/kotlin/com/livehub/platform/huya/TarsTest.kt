@@ -235,11 +235,16 @@ class TarsTest {
     // Either a short read or an exception is acceptable; hanging is not.
     assertTrue(value.isSuccess || value.isFailure)
   }
-
-  /** Decodes a hex string into bytes; used to embed captured network frames verbatim. */
-  private fun hexToBytes(hex: String): ByteArray =
-    hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
+
+/**
+ * Decodes a hex string into bytes.
+ *
+ * File scope rather than a member, because both test classes below embed captured network
+ * frames verbatim and each needs it.
+ */
+private fun hexToBytes(hex: String): ByteArray =
+  hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
 class HuyaDanmakuProtocolTest {
 
@@ -268,6 +273,36 @@ class HuyaDanmakuProtocolTest {
     val chat = HuyaDanmakuProtocol.decodeChat(chatFrame("小明", "主播好"))
     assertEquals("小明", chat?.first)
     assertEquals("主播好", chat?.second)
+  }
+
+  /**
+   * A frame captured off the live socket, decoded by the shipped reader.
+   *
+   * `chatFrame` above builds its input with this codebase's own writer, so it round-trips
+   * even when the length encoding is wrong — which is exactly how the raw-int32 bug survived
+   * for four rounds. This frame came from `wss://cdnws.api.huya.com` in room 660000 after a
+   * register with the room's real ayyuid (1346609715), and the assertion is the text the
+   * server sent: 威仔zzz: 只有凌晨是直播.
+   *
+   * Measured side by side during the capture: the tagged length reader decoded 5 of 51
+   * frames, while the raw int32 reader failed on all 51 with "unknown type".
+   */
+  @Test
+  fun `a captured live frame decodes with the shipped reader`() {
+    val hex = "00071d000100f700051105782d000100d00a03000001174a1e18261c2609e5a881e4bb947a7a7a" +
+      "3c46005c6a0c1c0b76203061376431386134316438343133363734343031653131646532316434333936" +
+      "86009c0b1c2c3615e58faae69c89e5878ce699a8e698afe79bb4e692ad4c5a00ff10042c30ff40ff50ff" +
+      "0b6a00ff10042c30014c5a0c1c20ff306440ff5064660070ff80ff0b6900010200ffffff7c80ff0b7c89" +
+      "0c990ca90cb25043a233c90cd600ecf90f0cf9100cfa110c1c2c0bfa120c16002d000c0bfc13f6141332" +
+      "3037343139323134313534313938313138343002460f636861743a31333436363039373135531cc902c3" +
+      "70d3bc006c2c36004c5c6600"
+    val frame = hexToBytes(hex)
+
+    val chat = HuyaDanmakuProtocol.decodeChat(frame)
+
+    assertNotNull(chat, "the captured frame must decode, not be dropped")
+    assertEquals("威仔zzz", chat!!.first)
+    assertEquals("只有凌晨是直播", chat.second)
   }
 
   @Test
