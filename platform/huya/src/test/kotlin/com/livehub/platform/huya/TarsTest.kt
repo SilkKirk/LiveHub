@@ -100,8 +100,8 @@ class TarsTest {
    * Pins the `SIMPLE_LIST` length to the tagged encoding the server accepts.
    *
    * Huya writes a SIMPLE_LIST as `head(SIMPLE_LIST) + head(BYTE, tag 0) + writeInt(size)` +
-   * data, where `writeInt` is TARS's *compact* encoding: `0x0C` for zero, `0x00`+byte for
-   * BYTE, `0x01`+2 bytes for SHORT, `0x02`+4 bytes for INT.
+   * data. `writeInt` is TARS's *compact* encoding, so 105 becomes `0x00 0x69`
+   * (BYTE head + value), not a 4-byte big-endian int.
    *
    * Verified against the live socket (`wss://cdnws.api.huya.com`): with this encoding the
    * server answers a register with a 394-byte push; with the raw big-endian int32 this code
@@ -115,17 +115,18 @@ class TarsTest {
       writeBytes(1, payload)
     }.toByteArray()
 
-    // head(INT, tag 0) = 0x02, then the big-endian value.
-    assertEquals(0x02.toByte(), frame[0])
+    // writeInt32(0, 105): 105 fits in a signed byte, so TARS writes head(BYTE, tag 0) = 0x00
+    // followed by the value itself. A raw int32 would have produced 0x02 0x00 0x00 0x00 0x69.
+    assertEquals(0x00.toByte(), frame[0])
     assertEquals(105, frame[1].toInt() and 0xFF)
-    // head(SIMPLE_LIST, tag 1) = 0x1D, then head(BYTE, tag 0) = 0x00.
-    assertEquals(0x1D.toByte(), frame[5])
-    assertEquals(0x00.toByte(), frame[6])
+    // head(SIMPLE_LIST, tag 1) = 0x1D, then the element head(BYTE, tag 0) = 0x00.
+    assertEquals(0x1D.toByte(), frame[2])
+    assertEquals(0x00.toByte(), frame[3])
     // The captured reference frame carries `0x00 0x69` here: a BYTE-tagged length of 105.
-    assertEquals(0x00.toByte(), frame[7])
-    assertEquals(0x69.toByte(), frame[8])
-    assertEquals(0x41.toByte(), frame[9])
-    assertEquals(9 + 105, frame.size)
+    assertEquals(0x00.toByte(), frame[4])
+    assertEquals(0x69.toByte(), frame[5])
+    assertEquals(0x41.toByte(), frame[6])
+    assertEquals(6 + 105, frame.size)
   }
 
   /**
