@@ -107,6 +107,9 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # Runs *inside* the emulator script: the runner tears the device down as soon as
+      # this script exits, so the screenshots must be pulled while it is still alive.
+      # `|| true` keeps a screenshot failure from masking a real test failure.
       - name: Run instrumented tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -114,19 +117,20 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew connectedDebugAndroidTest --stacktrace
-
-      # The ScreenshotTest writes one PNG per screen into the app's external files dir.
-      # Pulling them out of the emulator is what lets a reviewer actually *see* the UI.
-      - name: Collect UI screenshots
-        if: always()
-        run: |
-          set -euo pipefail
-          DEST="$GITHUB_WORKSPACE/ui-screenshots"
-          mkdir -p "$DEST"
-          adb shell run-as com.livehub.app.debug ls /sdcard/Android/data/com.livehub.app.debug/files/screenshots 2>/dev/null || true
-          adb pull /sdcard/Android/data/com.livehub.app.debug/files/screenshots "$DEST" || true
-          ls -la "$DEST" || true
+          script: |
+            set +e
+            ./gradlew connectedDebugAndroidTest --stacktrace
+            TEST_EXIT=$?
+            mkdir -p "$GITHUB_WORKSPACE/ui-screenshots"
+            # The app's external files dir is only readable through run-as, so copy the
+            # renders into the shared Download folder first and pull them from there.
+            adb shell run-as com.livehub.app.debug ls \
+              /sdcard/Android/data/com.livehub.app.debug/files/screenshots
+            adb shell run-as com.livehub.app.debug cp -r \
+              /sdcard/Android/data/com.livehub.app.debug/files/screenshots /sdcard/Download/livehub-shots
+            adb pull /sdcard/Download/livehub-shots "$GITHUB_WORKSPACE/ui-screenshots"
+            ls -la "$GITHUB_WORKSPACE/ui-screenshots"
+            exit $TEST_EXIT
 
       - name: Upload UI screenshots
         if: always()
