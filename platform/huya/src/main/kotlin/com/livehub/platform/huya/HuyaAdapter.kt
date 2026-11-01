@@ -146,9 +146,14 @@ class HuyaAdapter(
             }
           }
 
+          /** A clean close must reconnect too: Huya ends idle sockets routinely. */
           override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             if (closedByUs) return
-            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = false))
+            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = true))
+            launch {
+              backoff.sleepNext()
+              if (!closedByUs) connect()
+            }
           }
         },
       )

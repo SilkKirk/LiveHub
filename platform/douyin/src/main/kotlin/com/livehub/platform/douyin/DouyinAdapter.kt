@@ -137,7 +137,7 @@ class DouyinAdapter(
             heartbeatJob = launch {
               while (true) {
                 delay(DouyinDanmakuProtocol.HEARTBEAT_INTERVAL_MILLIS)
-                webSocket.send(buildHeartbeat(roomId).toByteString())
+                webSocket.send(buildHeartbeat().toByteString())
               }
             }
             ackJob?.cancel()
@@ -190,11 +190,16 @@ class DouyinAdapter(
             }
           }
 
+          /** A clean close must reconnect: Douyin rotates sockets server-side regularly. */
           override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             heartbeatJob?.cancel()
             ackJob?.cancel()
             if (closedByUs) return
-            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = false))
+            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = true))
+            launch {
+              backoff.sleepNext()
+              if (!closedByUs) connect()
+            }
           }
         },
       )
@@ -215,12 +220,14 @@ class DouyinAdapter(
    * Douyin's heartbeat is a `PushFrame` with `payloadType = "hb"`; the server replies
    * with the same type and expects the client to keep sending them.
    */
-  private fun buildHeartbeat(roomId: String): ByteArray {
-    val out = ByteArrayOutputStream()
-    DouyinProto.writeBytesField(1, "hb".toByteArray(Charsets.UTF_8), out)
-    DouyinProto.writeBytesField(2, roomId.toByteArray(Charsets.UTF_8), out)
-    return out.toByteArray()
-  }
+  /**
+   * Douyin's heartbeat reply, built by the protocol object.
+   *
+   * The old local builder wrote `"hb"` to field 1 and the room id to field 2. Neither is a
+   * `PushFrame` field that exists: `payloadType` is field 7 and the payload is field 8, so
+   * the server saw a frame with no recognizable type.
+   */
+  private fun buildHeartbeat(): ByteArray = DouyinDanmakuProtocol.heartbeatFrame()
 
   companion object {
     const val DANMAKU_URL = "wss://webcast5-ws-web-lf.douyin.com/webcast/im/push/v2/"

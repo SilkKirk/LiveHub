@@ -306,12 +306,61 @@ private fun PairDialog(
  *
  * Only peers the user has not already paired with are offered, so the list stays
  * actionable instead of repeating the paired-device section below it.
+ *
+ * Each sighting gets a real 配对 button. The action and its handler already existed
+ * (`UiAction.PairDiscovered`), but nothing emitted it, so the discovered list was a
+ * dead end: the address was printed as plain text and had to be retyped by hand into
+ * the dialog directly underneath.
  */
 @Composable
 private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
   val pairedIds = remember(state.peers) { state.peers.map { it.deviceId }.toSet() }
   val candidates = remember(state.discoveredPeers, pairedIds) {
     state.discoveredPeers.filterNot { pairedIds.contains(it.deviceId) }
+  }
+  var pendingPeer by remember { mutableStateOf<com.livehub.core.sync.DiscoveredPeer?>(null) }
+  var code by remember { mutableStateOf("") }
+
+  if (pendingPeer != null) {
+    val peer = pendingPeer!!
+    AlertDialog(
+      onDismissRequest = { pendingPeer = null; code = "" },
+      title = { Text("与 ${peer.deviceName} 配对") },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            text = "${peer.host}:${peer.port}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Text(
+            text = "在对方设备上打开同步页并读出六位配对码，输入后两台设备即可互相同步。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          OutlinedTextField(
+            value = code,
+            onValueChange = { code = it.filter(Char::isDigit).take(6) },
+            label = { Text("六位配对码") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+          )
+        }
+      },
+      confirmButton = {
+        TextButton(
+          enabled = code.length == 6,
+          onClick = {
+            onAction(UiAction.PairDiscovered(peer, code))
+            pendingPeer = null
+            code = ""
+          },
+        ) { Text("配对") }
+      },
+      dismissButton = {
+        TextButton(onClick = { pendingPeer = null; code = "" }) { Text("取消") }
+      },
+    )
   }
 
   Card(modifier = Modifier.fillMaxWidth()) {
@@ -354,15 +403,13 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
-            Text(
-              text = "待配对",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.primary,
-            )
+            TextButton(onClick = { pendingPeer = peer; code = "" }) {
+              Text("配对")
+            }
           }
         }
         Text(
-          text = "在对方设备上生成配对码后，点击「配对设备」并填写该地址即可完成配对。",
+          text = "点击「配对」并输入对方设备上显示的六位配对码即可完成配对。",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

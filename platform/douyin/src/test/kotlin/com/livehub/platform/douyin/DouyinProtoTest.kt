@@ -70,12 +70,15 @@ class DouyinDanmakuProtocolTest {
 
   private fun chatMessage(nick: String, text: String): ByteArray {
     val user = ByteArrayOutputStream().also { out ->
-      DouyinProto.writeBytesField(3, nick.toByteArray(), out)
+      // User.nickname is field 3.
+      DouyinProto.writeBytesField(DouyinDanmakuProtocol.FIELD_USER_NICK, nick.toByteArray(), out)
     }.toByteArray()
 
     return ByteArrayOutputStream().also { out ->
-      DouyinProto.writeBytesField(2, user, out)
-      DouyinProto.writeBytesField(7, text.toByteArray(), out)
+      // ChatMessage.user is field 2 and ChatMessage.content is field 3 — content is *not*
+      // field 7, which is where an earlier revision looked and why nothing ever decoded.
+      DouyinProto.writeBytesField(DouyinDanmakuProtocol.FIELD_CHAT_USER, user, out)
+      DouyinProto.writeBytesField(DouyinDanmakuProtocol.FIELD_CHAT_CONTENT, text.toByteArray(), out)
     }.toByteArray()
   }
 
@@ -91,10 +94,19 @@ class DouyinDanmakuProtocolTest {
     }.toByteArray()
 
     return ByteArrayOutputStream().also { out ->
-      DouyinProto.writeBytesField(1, "msg".toByteArray(), out)
-      DouyinProto.writeVarint((2L shl 3) or 0, out)
+      // PushFrame: payloadType field 7, logId field 2, payload field 8.
+      DouyinProto.writeBytesField(
+        DouyinDanmakuProtocol.FIELD_PAYLOAD_TYPE,
+        "msg".toByteArray(),
+        out,
+      )
+      DouyinProto.writeVarint((DouyinDanmakuProtocol.FIELD_LOG_ID.toLong() shl 3) or 0, out)
       DouyinProto.writeVarint(logId, out)
-      DouyinProto.writeBytesField(3, gzip(response), out)
+      DouyinProto.writeBytesField(
+        DouyinDanmakuProtocol.FIELD_PUSH_PAYLOAD,
+        gzip(response),
+        out,
+      )
     }.toByteArray()
   }
 
@@ -145,21 +157,45 @@ class DouyinDanmakuProtocolTest {
   @Test
   fun `payload type is read from the push frame`() {
     val hb = ByteArrayOutputStream().also { out ->
-      DouyinProto.writeBytesField(7, "hb".toByteArray(), out)
+      DouyinProto.writeBytesField(
+        DouyinDanmakuProtocol.FIELD_PAYLOAD_TYPE,
+        "hb".toByteArray(),
+        out,
+      )
     }.toByteArray()
     assertEquals("hb", DouyinDanmakuProtocol.payloadType(hb))
   }
 
+  /**
+   * The ack must be a `PushFrame`: logId in field 2, `payloadType = "ack"` in field 7 and
+   * the routing token in field 8.
+   *
+   * The previous shape wrote logId to field 1 and the token to field 2, so the server could
+   * not recognise the frame at all. Field 1 does not exist on a PushFrame.
+   */
   @Test
-  fun `ack frame echoes the log id`() {
+  fun `ack frame is a push frame with the log id in field 2`() {
     val ack = DouyinDanmakuProtocol.ackFrame(logId = 5, internalExt = "")
-    assertEquals(5L, DouyinProto.longField(ack, 1))
+    assertEquals(5L, DouyinProto.longField(ack, DouyinDanmakuProtocol.FIELD_LOG_ID))
+    assertEquals("ack", DouyinDanmakuProtocol.payloadType(ack))
+    assertNull(DouyinProto.longField(ack, 1), "field 1 is not a PushFrame field")
   }
 
   @Test
-  fun `ack frame carries the routing token when provided`() {
+  fun `ack frame carries the routing token in the payload field`() {
     val ack = DouyinDanmakuProtocol.ackFrame(logId = 5, internalExt = "ext")
-    assertEquals("ext", DouyinProto.stringField(ack, 2))
+    assertEquals(
+      "ext",
+      DouyinProto.stringField(ack, DouyinDanmakuProtocol.FIELD_PUSH_PAYLOAD),
+    )
+  }
+
+  @Test
+  fun `heartbeat frame declares the hb payload type and no room id`() {
+    val hb = DouyinDanmakuProtocol.heartbeatFrame()
+    assertEquals("hb", DouyinDanmakuProtocol.payloadType(hb))
+    // The room is scoped by the socket URL; leaking it into the frame is wrong.
+    assertNull(DouyinProto.stringField(hb, 2))
   }
 
   @Test

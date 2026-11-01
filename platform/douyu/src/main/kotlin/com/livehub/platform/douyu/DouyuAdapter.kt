@@ -124,6 +124,20 @@ class DouyuAdapter(
     var socket: WebSocket? = null
     var closedByUs = false
 
+    /**
+     * Sends [payload] as a **binary** frame.
+     *
+     * Douyu's protocol is binary only: every message must carry the little-endian
+     * header (declared length twice, type 689, two zero bytes) and a NUL terminator.
+     * This used to call `websocket.send(text)`, which OkHttp transmits as an opcode-1
+     * text frame; the server ignores those, so `loginreq`/`joingroup` never registered
+     * and a room silently produced zero chat messages while `DouyuDanmakuProtocol.encode`
+     * sat unused next to it.
+     */
+    fun sendPayload(target: WebSocket, payload: String) {
+      target.send(ByteString.of(*DouyuDanmakuProtocol.encode(payload)))
+    }
+
     fun connect() {
       val request = Request.Builder()
         .url(DANMAKU_URL)
@@ -135,8 +149,8 @@ class DouyuAdapter(
         request,
         object : WebSocketListener() {
           override fun onOpen(webSocket: WebSocket, response: Response) {
-            webSocket.send(DouyuDanmakuProtocol.loginRequest(roomId).encodeUtf8())
-            webSocket.send(DouyuDanmakuProtocol.joinGroup(roomId).encodeUtf8())
+            sendPayload(webSocket, DouyuDanmakuProtocol.loginRequest(roomId))
+            sendPayload(webSocket, DouyuDanmakuProtocol.joinGroup(roomId))
             trySend(DanmakuEvent.Connected)
             backoff.reset()
           }
@@ -170,9 +184,24 @@ class DouyuAdapter(
             }
           }
 
+          /**
+           * A clean close also has to reconnect.
+           *
+           * Douyu closes idle sockets after a few minutes; treating that as final left the
+           * chat panel frozen on its last message with no error and no retry.
+           */
           override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             if (closedByUs) return
-            trySend(DanmakuEvent.Disconnected(reason = reason.ifBlank { "连接已关闭" }, willRetry = false))
+            trySend(
+              DanmakuEvent.Disconnected(
+                reason = reason.ifBlank { "连接已关闭" },
+                willRetry = true,
+              ),
+            )
+            launch {
+              backoff.sleepNext()
+              if (!closedByUs) connect()
+            }
           }
         },
       )
@@ -183,7 +212,7 @@ class DouyuAdapter(
     val heartbeatJob = launch {
       while (true) {
         delay(DouyuDanmakuProtocol.HEARTBEAT_INTERVAL_MILLIS)
-        socket?.send(DouyuDanmakuProtocol.heartbeat().encodeUtf8())
+        socket?.let { sendPayload(it, DouyuDanmakuProtocol.heartbeat()) }
       }
     }
 

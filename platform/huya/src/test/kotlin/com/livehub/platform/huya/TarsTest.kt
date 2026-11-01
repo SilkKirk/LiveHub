@@ -96,6 +96,73 @@ class TarsTest {
     assertEquals(7, reader.readInt32(2))
   }
 
+  /**
+   * Pins the `SIMPLE_LIST` length to the tagged encoding the server accepts.
+   *
+   * Huya writes a SIMPLE_LIST as `head(SIMPLE_LIST) + head(BYTE, tag 0) + writeInt(size)` +
+   * data, where `writeInt` is TARS's *compact* encoding: `0x0C` for zero, `0x00`+byte for
+   * BYTE, `0x01`+2 bytes for SHORT, `0x02`+4 bytes for INT.
+   *
+   * Verified against the live socket (`wss://cdnws.api.huya.com`): with this encoding the
+   * server answers a register with a 394-byte push; with the raw big-endian int32 this code
+   * used to write, the same register produced only the two small frames and then silence.
+   */
+  @Test
+  fun `simple list length uses the tagged encoding the server accepts`() {
+    val payload = ByteArray(105) { 0x41 }
+    val frame = Tars.Writer().apply {
+      writeInt32(0, 105)
+      writeBytes(1, payload)
+    }.toByteArray()
+
+    // head(INT, tag 0) = 0x02, then the big-endian value.
+    assertEquals(0x02.toByte(), frame[0])
+    assertEquals(105, frame[1].toInt() and 0xFF)
+    // head(SIMPLE_LIST, tag 1) = 0x1D, then head(BYTE, tag 0) = 0x00.
+    assertEquals(0x1D.toByte(), frame[5])
+    assertEquals(0x00.toByte(), frame[6])
+    // The captured reference frame carries `0x00 0x69` here: a BYTE-tagged length of 105.
+    assertEquals(0x00.toByte(), frame[7])
+    assertEquals(0x69.toByte(), frame[8])
+    assertEquals(0x41.toByte(), frame[9])
+    assertEquals(9 + 105, frame.size)
+  }
+
+  /**
+   * The reader must consume that tagged length, not reinterpret it as payload.
+   *
+   * Reading a raw int32 here consumed the length head as data and produced a bogus
+   * 7-digit length, which is what made every inbound Huya chat frame throw
+   * "truncated payload" and get dropped.
+   */
+  @Test
+  fun `simple list length is read back as a tagged int`() {
+    val payload = ByteArray(105) { 0x42 }
+    val frame = Tars.Writer().apply {
+      writeInt32(0, 105)
+      writeBytes(1, payload)
+    }.toByteArray()
+
+    val decoded = Tars.Reader(frame).readBytes(1)
+    assertEquals(105, decoded.size)
+    assertTrue(decoded.all { it == 0x42.toByte() })
+  }
+
+  @Test
+  fun `a real captured push frame decodes without throwing`() {
+    // A live frame from wss://cdnws.api.huya.com, answering the register: outer tag 0 = 4,
+    // tag 1 = a 68-byte body. The reader used to reject this outright.
+    val captured = hexToBytes(
+      "00041d0000440000004410032c3c4c56086f6e6c696e657569660f4f6e55736572486561" +
+        "7274426561747d00001708000206001d0000010c0604745273701d0000030a0c0b8c98" +
+        "0ca80c2c36126666303733643430386566653764366432324c5c6600",
+    )
+    val reader = Tars.Reader(captured)
+    assertEquals(4, reader.readInt32(0))
+    val body = reader.readBytes(1)
+    assertTrue(body.size > 0, "the 68-byte body must be decoded, not treated as a raw length")
+  }
+
   @Test
   fun `register frame embeds both channel names`() {
     val frame = Tars.registerFrame("12345")
@@ -106,39 +173,39 @@ class TarsTest {
     assertTrue(inner.toString(Charsets.UTF_8).contains("live:12345"))
   }
 
+  /**
+   * The heartbeat is the captured frame, not a re-synthesis.
+   *
+   * Rebuilding it from `{0:105, 1:{0:10, …}}` produced a 50-byte frame that the live
+   * server answered with complete silence, while the captured 111-byte frame is answered
+   * with a `OnUserHeartBeat`/`tRsp` reply. The structure below is what the capture
+   * actually contains: outer tag 0 is a BYTE holding 3, and the body nests
+   * `1 -> 2 -> 2 -> 2` rather than the flat `{0:10, 1..4}` shape.
+   */
   @Test
-  fun `heartbeat frame carries the documented inner payload`() {
+  fun `heartbeat is the captured frame the server answers`() {
     val frame = Tars.heartbeatFrame()
 
+    assertEquals(111, frame.size, "the captured heartbeat is 111 bytes")
     val reader = Tars.Reader(frame)
-    assertEquals(Tars.HEARTBEAT_OUTER_TYPE, reader.readInt32(0))
+    assertEquals(3, reader.readInt32(0))
     val inner = reader.readBytes(1)
+    assertEquals(105, inner.size)
 
-    val body = Tars.Reader(inner)
-    assertEquals(Tars.HEARTBEAT_INNER_TYPE, body.readInt32(0))
-    assertEquals("OnUserHeartBeat", body.readString(1))
-    assertEquals("tReq", body.readString(2))
-    assertEquals("adr_wap", body.readString(3))
-    assertEquals("onlineui", body.readString(4))
+    // The body starts with tag 1 = 60 and reaches the literal "OnUserHeartBeat".
+    assertTrue(inner.toString(Charsets.UTF_8).contains("OnUserHeartBeat"))
+    assertTrue(inner.toString(Charsets.UTF_8).contains("adr_wap"))
+    assertTrue(inner.toString(Charsets.UTF_8).contains("tReq"))
   }
 
   @Test
-  fun `heartbeat frame is stable and self consistent`() {
+  fun `heartbeat frame is stable and reproducible`() {
     val a = Tars.heartbeatFrame()
     val b = Tars.heartbeatFrame()
     assertTrue(a.contentEquals(b), "heartbeat must be reproducible")
-
-    // The OUTER envelope is `{ 0: int32, 1: simple-list bytes }`. A simple list stores
-    // an explicit int32 length, so the frame is only accepted when that length equals
-    // the real body size. Decode it through the reader instead of guessing offsets.
-    val inner = Tars.Reader(a).readBytes(1)
-    val declared = inner.size
-    assertTrue(declared > 0, "heartbeat body must not be empty")
-
-    // And the decoded body must itself parse as a struct.
-    val body = Tars.Reader(inner)
-    assertEquals(Tars.HEARTBEAT_INNER_TYPE, body.readInt32(0))
-    assertEquals("OnUserHeartBeat", body.readString(1))
+    // A copy, so a caller cannot mutate the shared capture.
+    a[0] = 0x7f
+    assertTrue(Tars.heartbeatFrame()[0] != 0x7f.toByte(), "heartbeat must be defensive copied")
   }
 
   @Test
@@ -253,4 +320,8 @@ class HuyaDanmakuProtocolTest {
   fun `decodeText handles empty input`() {
     assertEquals("", HuyaDanmakuProtocol.decodeText(ByteArray(0)))
   }
+
+  /** Decodes a hex string into bytes; used to embed captured network frames verbatim. */
+  private fun hexToBytes(hex: String): ByteArray =
+    hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

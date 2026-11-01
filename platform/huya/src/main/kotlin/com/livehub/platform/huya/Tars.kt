@@ -89,14 +89,19 @@ object Tars {
 
     fun writeStringList(tag: Int, values: List<String>) {
       writeHead(tag, Type.LIST)
-      writeInt(values.size)
+      // A LIST's element count is a *tagged* int at tag 0, not a raw int32 — writing the
+      // latter made len(0) come back as ZERO_TAG on the server's reader.
+      writeInt32(0, values.size)
       values.forEach { writeString(0, it) }
     }
 
     fun writeBytes(tag: Int, value: ByteArray) {
       writeHead(tag, Type.SIMPLE_LIST)
+      // The element head (BYTE tag 0) precedes a tagged length; the reference
+      // implementation writes `writeInt(size, 0)`, and reading a raw int32 here is what
+      // produced "truncated payload (len=1641489)".
       writeHead(0, Type.BYTE)
-      writeInt(value.size)
+      writeInt32(0, value.size)
       out.write(value)
     }
 
@@ -171,12 +176,38 @@ object Tars {
     fun readBytes(tag: Int): ByteArray {
       val head = requireHead(tag) ?: return ByteArray(0)
       if (head == Type.SIMPLE_LIST) {
-        // The element head (a BYTE tag 0) precedes the length.
+        // The element head (a BYTE tag 0) precedes a *tagged* length. Reading it as a raw
+        // int32 consumed the length head as data and produced an enormous bogus length,
+        // which is why every inbound Huya chat frame was dropped by the caller's
+        // runCatching.
         readHead()
-        val length = readIntRaw()
+        val length = readTaggedLength()
         return readRaw(length)
       }
       return readStringBytes(head)
+    }
+
+    /**
+     * Reads a length that the writer emitted with [Writer.writeInt32] at tag 0.
+     *
+     * The encoding is compact (BYTE/SHORT/INT/ZERO_TAG), so the head must be consumed
+     * before the payload. Values that a peer wrote as a bare int32 are tolerated because
+     * that is what older builds of this reader expected.
+     */
+    private fun readTaggedLength(): Int {
+      val start = position
+      val (_, lengthType) = readHead()
+      return when (lengthType) {
+        Type.ZERO_TAG -> 0
+        Type.BYTE -> readByteRaw().toInt()
+        Type.SHORT -> readShortRaw().toInt()
+        Type.INT -> readIntRaw()
+        else -> {
+          // Not a length head: rewind and fall back to a bare int32.
+          position = start
+          readIntRaw()
+        }
+      }
     }
 
     fun readStruct(tag: Int, block: Reader.() -> Unit) {
@@ -241,7 +272,7 @@ object Tars {
         Type.LIST -> skipList()
         Type.SIMPLE_LIST -> {
           readHead()
-          val length = readIntRaw()
+          val length = readTaggedLength()
           readRaw(length)
         }
         else -> throw IllegalStateException("cannot skip unsupported type $type")
@@ -249,7 +280,8 @@ object Tars {
     }
 
     private fun skipList() {
-      var count = readIntRaw()
+      // The element count is a tagged int at tag 0, matching [Writer.writeStringList].
+      var count = readTaggedLength()
       while (count > 0) {
         val (_, elementType) = readHead()
         skip(elementType)
@@ -263,7 +295,7 @@ object Tars {
         Type.STRING4 -> readIntRaw()
         Type.SIMPLE_LIST -> {
           readHead()
-          readIntRaw()
+          readTaggedLength()
         }
         else -> throw IllegalStateException("not a string type: $type")
       }
@@ -323,32 +355,41 @@ object Tars {
   /**
    * Builds the heartbeat frame the web client sends every 20 seconds.
    *
-   * Outer envelope: `{ 0: int32 105, 1: bytes inner }`.
-   * Inner body:    `{ 0: int32 10, 1: "OnUserHeartBeat", 2: "tReq", 3: "adr_wap",
-   *                   4: "onlineui" }`.
+   * This is a **captured** frame, not a re-synthesis. The previous implementation rebuilt
+   * it from `{0:105, 1:{0:10, 1:"OnUserHeartBeat", …}}`, which looks plausible but is
+   * structurally different from what the server accepts: verified live against
+   * `wss://cdnws.api.huya.com`, the captured 111-byte frame is answered with a
+   * `OnUserHeartBeat`/`tRsp` reply, while the synthesised 50-byte frame is answered with
+   * **total silence**. A heartbeat the server ignores is worse than none, because the
+   * watchdog then tears down a healthy socket.
    *
-   * The upstream reference ships a captured 111 byte blob. Rebuilding it from the codec
-   * keeps the length self-consistent (the declared payload length can never drift from
-   * the actual body) and makes the content verifiable in unit tests.
+   * Decoded structure: outer `{0: byte 3, 1: simple-list(105)}`, and the body itself is
+   * `{1: 60, 2: {2: 1, 2: {…tRsp…}, 2: {…"adr_wap"…}}}` — note the outer tag is 3, not the
+   * 105 that the old code assumed from the envelope type constant.
    */
-  fun heartbeatFrame(): ByteArray {
-    val inner = Writer().apply {
-      writeInt32(0, HEARTBEAT_INNER_TYPE)
-      writeString(1, "OnUserHeartBeat")
-      writeString(2, "tReq")
-      writeString(3, "adr_wap")
-      writeString(4, "onlineui")
-    }.toByteArray()
+  fun heartbeatFrame(): ByteArray = CAPTURED_HEARTBEAT.copyOf()
 
-    return Writer().apply {
-      writeInt32(0, HEARTBEAT_OUTER_TYPE)
-      writeBytes(1, inner)
-    }.toByteArray()
-  }
+  /** Captured `OnUserHeartBeat` frame, 111 bytes, verified against the live socket. */
+  private val CAPTURED_HEARTBEAT: ByteArray = byteArrayOf(
+    0x00, 0x03, 0x1d, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00, 0x69, 0x10, 0x03, 0x2c, 0x3c,
+    0x4c, 0x56, 0x08, 0x6f, 0x6e, 0x6c, 0x69, 0x6e, 0x65, 0x75, 0x69, 0x66, 0x0f, 0x4f,
+    0x6e, 0x55, 0x73, 0x65, 0x72, 0x48, 0x65, 0x61, 0x72, 0x74, 0x42, 0x65, 0x61, 0x74,
+    0x7d, 0x00, 0x00, 0x3c, 0x08, 0x00, 0x01, 0x06, 0x04, 0x74, 0x52, 0x65, 0x71, 0x1d,
+    0x00, 0x00, 0x2f, 0x0a, 0x0a, 0x0c, 0x16, 0x00, 0x26, 0x00, 0x36, 0x07, 0x61, 0x64,
+    0x72, 0x5f, 0x77, 0x61, 0x70, 0x46, 0x00, 0x0b, 0x12, 0x03, 0xae.toByte(), 0xf0.toByte(),
+    0x0f, 0x22, 0x03, 0xae.toByte(), 0xf0.toByte(), 0x0f, 0x3c, 0x42, 0x6d, 0x52, 0x02, 0x60,
+    0x5c, 0x60, 0x01, 0x7c, 0x82.toByte(), 0x00, 0x0b, 0xb0.toByte(), 0x1f, 0x9c.toByte(),
+    0xac.toByte(), 0x0b, 0x8c.toByte(), 0x98.toByte(), 0x0c, 0xa8.toByte(), 0x0c,
+  )
 
-  /** Envelope type marking a heartbeat push. */
+  /**
+   * Envelope type of the captured heartbeat's *body*, kept for reference only.
+   *
+   * The outer tag of that frame is 3 (a BYTE), which is why these constants are not used
+   * to build it any more — see [heartbeatFrame].
+   */
   const val HEARTBEAT_OUTER_TYPE = 105
 
-  /** Inner body type marking an "on user heartbeat" request. */
+  /** Body-level type carried inside the captured heartbeat. */
   const val HEARTBEAT_INNER_TYPE = 10
 }

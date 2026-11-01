@@ -51,7 +51,19 @@ jobs:
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
       - name: Static checks
-        run: ./gradlew :app:lintDebug --stacktrace
+        run: |
+          set -o pipefail
+          # Lint otherwise writes a report and prints only a one-line failure, leaving the
+          # offending rule and file unreadable from the job log. Echo the report to stdout.
+          ./gradlew :app:lintDebug --stacktrace 2>&1 | tee lint.log || LINT_EXIT=$?
+          echo "=== lint report ==="
+          if [ -f app/build/reports/lint-results-debug.txt ]; then
+            cat app/build/reports/lint-results-debug.txt
+          fi
+          if [ -f app/build/reports/lint-results-debug.xml ]; then
+            grep -E '<issue|message=|file=' app/build/reports/lint-results-debug.xml | head -n 200
+          fi
+          exit "${LINT_EXIT:-0}"
 
       - name: JVM unit tests
         run: ./gradlew test --stacktrace

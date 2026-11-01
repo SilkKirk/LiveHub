@@ -182,10 +182,22 @@ class BilibiliAdapter(
             }
           }
 
+          /**
+           * A clean close must reconnect, and must rotate to the next endpoint.
+           *
+           * Bilibili closes a socket that has been idle for a while and expects the client
+           * to come back; stopping here left the chat panel permanently dead. Rotating the
+           * endpoint on every reconnect also means a single bad node cannot pin the session.
+           */
           override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             heartbeatJob?.cancel()
             if (closedByUs) return
-            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = false))
+            endpointIndex++
+            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = true))
+            launch {
+              delay(RECONNECT_DELAY_MILLIS.milliseconds)
+              if (!closedByUs) connect()
+            }
           }
         },
       )
