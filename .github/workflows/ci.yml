@@ -198,7 +198,14 @@ jobs:
       # here also leaves `connectedDebugAndroidTest` with nothing to do but install and
       # run, which keeps the device's uptime to the part that actually needs a device.
       - name: Build app and test APKs
-        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+        run: |
+          set -o pipefail
+          # :app:assembleRelease is built here too, and launched on the emulator below.
+          # Every other check in this workflow exercises the debug build, which has minification
+          # off — so an R8-only failure (a stripped class, a broken keep rule) was invisible
+          # until a user installed a release APK and it crashed on launch with no dialog.
+          ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease \
+            --stacktrace
 
       - name: Enable KVM
         run: |
@@ -244,6 +251,49 @@ jobs:
             adb shell ls -la /sdcard/Download/livehub-shots || true
             adb pull /sdcard/Download/livehub-shots "$GITHUB_WORKSPACE/ui-screenshots" || true
             ls -la "$GITHUB_WORKSPACE/ui-screenshots" || true
+
+            # --- release smoke test -------------------------------------------------
+            # Instrumented tests only ever run the debug APK. The release build is minified
+            # and resource-shrunk, so it can fail at startup in ways the debug build cannot
+            # show — which is how v0.9.0 shipped, installed, and died on launch with no
+            # dialog. Installing and launching the real release APK here is the only check
+            # that would have caught it.
+            echo "=== release smoke test ==="
+            RELEASE_APK="$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk"
+            SMOKE_EXIT=0
+            if [ -f "$RELEASE_APK" ]; then
+              adb install -r "$RELEASE_APK" || SMOKE_EXIT=1
+              adb logcat -c || true
+              adb shell am start -W -n com.livehub.app/.MainActivity || SMOKE_EXIT=1
+              sleep 15
+              mkdir -p "$GITHUB_WORKSPACE/release-smoke"
+              adb logcat -d > "$GITHUB_WORKSPACE/release-smoke/logcat.txt" || true
+              if grep -q "FATAL EXCEPTION" "$GITHUB_WORKSPACE/release-smoke/logcat.txt"; then
+                echo "=== release APK crashed on launch ==="
+                grep -A 40 "FATAL EXCEPTION" "$GITHUB_WORKSPACE/release-smoke/logcat.txt" | head -n 60
+                SMOKE_EXIT=1
+              fi
+              # A process that died without a FATAL line (native abort, low memory) still
+              # means the release build is unusable, so liveness is checked separately.
+              if ! adb shell pidof com.livehub.app > /dev/null; then
+                echo "=== release APK is not running after 15s ==="
+                adb shell dumpsys activity processes | grep -i livehub | head -n 20 || true
+                SMOKE_EXIT=1
+              else
+                echo "release APK is alive after 15s"
+                adb exec-out screencap -p > "$GITHUB_WORKSPACE/release-smoke/launch.png" || true
+              fi
+              adb shell am force-stop com.livehub.app || true
+            else
+              echo "::error::release APK was not produced"
+              SMOKE_EXIT=1
+            fi
+
+            # The smoke result must not hide instrumentation failures, and vice versa.
+            if [ "$SMOKE_EXIT" != "0" ]; then
+              echo "::error::release smoke test failed (see release-smoke artifact)"
+              exit 1
+            fi
             exit $TEST_EXIT
 
       - name: Upload UI screenshots
@@ -254,6 +304,15 @@ jobs:
           path: ui-screenshots/**
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Upload release smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke
+          path: release-smoke/**
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload instrumentation reports
         if: always()

@@ -60,13 +60,21 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            if (hasReleaseKeystore) {
-                signingConfig = signingConfigs.create("release") {
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.create("release") {
                     storeFile = file(keystoreProperties.getProperty("storeFile"))
                     storePassword = keystoreProperties.getProperty("storePassword")
                     keyAlias = keystoreProperties.getProperty("keyAlias")
                     keyPassword = keystoreProperties.getProperty("keyPassword")
                 }
+            } else {
+                // Fall back to the debug key so the *minified* build is still installable.
+                // Without this the release APK is unsigned and no CI job can launch it, which
+                // is exactly how a startup crash caused only by R8 reached a user: every
+                // automated check exercised the unminified debug build instead.
+                // The release workflow refuses to publish a debug-signed release, so this
+                // cannot leak into a real release.
+                signingConfigs.getByName("debug")
             }
         }
     }
