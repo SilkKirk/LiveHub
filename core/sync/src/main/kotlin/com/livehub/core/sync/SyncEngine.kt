@@ -286,6 +286,12 @@ class SyncEngine(
     remoteSecret: String? = null,
     issuedSecret: String? = null,
   ): Result<TrustedPeer> {
+    // An empty expected code must never match: callers that have not generated a code yet
+    // pass "", and `"" == ""` would otherwise pair any device that also sent nothing, which
+    // is both a security hole and a confusing "it worked but nothing syncs" state.
+    if (expectedCode.isBlank()) {
+      return Result.failure(IllegalStateException("本机尚未生成配对码"))
+    }
     if (!code.equals(expectedCode, ignoreCase = false)) {
       return Result.failure(IllegalArgumentException("配对码不正确"))
     }

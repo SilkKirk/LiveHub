@@ -266,7 +266,10 @@ private fun PairDialog(
   onConfirm: (String, String, String) -> Unit,
 ) {
   var name by remember { mutableStateOf("") }
-  var address by remember { mutableStateOf(state.localAddress) }
+  // Deliberately empty. This used to default to `state.localAddress`, which is *this* device's
+  // address — so tapping 配对 without editing the field sent the handshake back to the phone
+  // itself and failed with a misleading error. The expected shape is the placeholder.
+  var address by remember { mutableStateOf("") }
   var code by remember { mutableStateOf("") }
 
   AlertDialog(

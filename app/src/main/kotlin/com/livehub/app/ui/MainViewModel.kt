@@ -889,11 +889,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun pair(peerName: String, address: String, code: String) {
     viewModelScope.launch {
       _state.update { it.copy(syncing = true) }
-      val result = runCatching { container.syncController.pair(peerName, address, code) }
-        .getOrElse { Result.failure(it) }
+      // `finally` rather than a plain sequence: if anything inside the block throws — including
+      // the state reads after the handshake — `syncing` stayed true forever and the screen
+      // showed 立即同步 permanently greyed out with no way to retry.
+      val result = try {
+        runCatching { container.syncController.pair(peerName, address, code) }
+          .getOrElse { Result.failure(it) }
+      } finally {
+        _state.update { it.copy(syncing = false) }
+      }
       _state.update {
         it.copy(
-          syncing = false,
           peers = container.preferences.trustedPeers(),
           message = result.fold(
             onSuccess = { name -> "已与 $name 配对" },
