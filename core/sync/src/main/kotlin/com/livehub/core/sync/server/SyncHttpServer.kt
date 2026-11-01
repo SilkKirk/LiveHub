@@ -36,8 +36,18 @@ class SyncHttpServer(
     /** Validates a peer that is trying to pair, returning the accepted secret. */
     fun onPair(envelope: SyncEnvelope, remoteAddress: String): Pair<String, TrustedPeer>?
 
-    /** Returns what this device knows about [scope], or null when it is disabled. */
-    fun onPull(envelope: SyncEnvelope, scope: SyncScope, peer: TrustedPeer?): SyncPayload?
+    /**
+     * Returns one part of what this device knows about [scope], or null when it is disabled.
+     *
+     * [chunkIndex] is 0 for the first (and, for most scopes, only) part. The returned
+     * payload carries `chunkCount`/`chunkIndex` so the caller knows whether to ask again.
+     */
+    fun onPull(
+      envelope: SyncEnvelope,
+      scope: SyncScope,
+      peer: TrustedPeer?,
+      chunkIndex: Int,
+    ): SyncPayload?
 
     /** Applies a payload pushed by a peer; returns this device's payload in exchange. */
     fun onPush(envelope: SyncEnvelope, payload: SyncPayload, peer: TrustedPeer?): SyncPayload?
@@ -177,7 +187,12 @@ class SyncHttpServer(
     }
     val scope = request.query["scope"]?.let { SyncScope.fromWireName(it) }
       ?: return Response(400, errorBody("bad scope"))
-    val payload = handler.onPull(envelope, scope, peer)
+    // A scope larger than one payload is fetched piecewise: the caller passes `chunk`, gets
+    // back that part plus its `chunkCount`, and repeats while `hasMoreChunks` holds. The
+    // older single-shot form (no `chunk`) returns part 0, so an app that has not been
+    // updated still works — it simply sees the first page.
+    val chunkIndex = request.query["chunk"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+    val payload = handler.onPull(envelope, scope, peer, chunkIndex)
       ?: return Response(404, errorBody("scope disabled"))
 
     return Response(

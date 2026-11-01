@@ -47,7 +47,12 @@ class SyncHttpServerTest {
           return peer.sharedSecret to peer
         }
 
-        override fun onPull(envelope: SyncEnvelope, scope: SyncScope, peer: TrustedPeer?): SyncPayload? {
+        override fun onPull(
+          envelope: SyncEnvelope,
+          scope: SyncScope,
+          peer: TrustedPeer?,
+          chunkIndex: Int,
+        ): SyncPayload? {
           pullCalls++
           return SyncPayload(
             scope = scope.wireName,
@@ -55,6 +60,8 @@ class SyncHttpServerTest {
             sequence = 1,
             createdAt = 0,
             entries = "[]",
+            chunkIndex = chunkIndex,
+            chunkCount = 1,
           )
         }
 

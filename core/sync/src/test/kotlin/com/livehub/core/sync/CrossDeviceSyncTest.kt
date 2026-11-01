@@ -89,7 +89,8 @@ class CrossDeviceSyncTest {
             envelope: SyncEnvelope,
             scope: SyncScope,
             peer: TrustedPeer?,
-          ): SyncPayload? = engine.buildPayload(scope)
+            chunkIndex: Int,
+          ): SyncPayload? = engine.buildPullPayload(scope, chunkIndex)
 
           override fun onPush(
             envelope: SyncEnvelope,
@@ -520,6 +521,42 @@ class CrossDeviceSyncTest {
 
     assertEquals(phone.followedIds(), tablet.followedIds())
     assertEquals(SyncPayload.MAX_RECORDS_PER_PAYLOAD + 37, tablet.followedIds().size)
+  }
+
+  /**
+   * A pull of a scope past the cap fetches every part.
+   *
+   * The direction matters: the test above pushes from a full phone to an empty tablet, so
+   * the tablet's *push* is what carried the split. Here the tablet is the one with the data
+   * and the phone starts empty, so the whole transfer happens in the pull — the path that
+   * used to return one unbounded document and now pages through `chunk`.
+   */
+  @Test
+  fun `a pull past the payload cap returns every part`() = kotlinx.coroutines.test.runTest {
+    phone.pairWith(tablet)
+    repeat(SyncPayload.MAX_RECORDS_PER_PAYLOAD + 12) { index -> tablet.follow("p$index") }
+    assertTrue("the phone must start empty", phone.followedIds().isEmpty())
+
+    phone.syncWith(tablet)
+
+    assertEquals(SyncPayload.MAX_RECORDS_PER_PAYLOAD + 12, phone.followedIds().size)
+    assertEquals(tablet.followedIds(), phone.followedIds())
+  }
+
+  /** Asking for a part beyond the end is clamped rather than treated as an error. */
+  @Test
+  fun `buildPullPayload clamps an out of range chunk`() = kotlinx.coroutines.test.runTest {
+    repeat(3) { index -> phone.follow("c$index") }
+
+    val first = phone.engine.buildPullPayload(SyncScope.FOLLOWS, 0)
+    val far = phone.engine.buildPullPayload(SyncScope.FOLLOWS, 99)
+
+    assertNotNull(first)
+    assertNotNull(far)
+    // Three records fit in one part, so both requests describe the same single chunk.
+    assertEquals(1, first!!.chunkCount)
+    assertEquals(1, far!!.chunkCount)
+    assertEquals(3, SyncCodec.decodeRecords(far.entries).size)
   }
 
   private companion object {

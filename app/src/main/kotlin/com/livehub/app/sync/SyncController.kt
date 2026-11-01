@@ -108,8 +108,15 @@ class SyncController(
           return selfSecret() to peer
         }
 
-        override fun onPull(envelope: SyncEnvelope, scope: SyncScope, peer: TrustedPeer?): SyncPayload? =
-          engine.buildPayload(scope)
+        // One part per request: the caller pages through them with `chunk`. Sending the
+        // whole scope in one response meant a large follow list produced a single unbounded
+        // document, which is the same problem the push path already solved by chunking.
+        override fun onPull(
+          envelope: SyncEnvelope,
+          scope: SyncScope,
+          peer: TrustedPeer?,
+          chunkIndex: Int,
+        ): SyncPayload? = engine.buildPullPayload(scope, chunkIndex)
 
         override fun onPush(envelope: SyncEnvelope, payload: SyncPayload, peer: TrustedPeer?): SyncPayload? {
           val scope = payload.parsedScope ?: return null

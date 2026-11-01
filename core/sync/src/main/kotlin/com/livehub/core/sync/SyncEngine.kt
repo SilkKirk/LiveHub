@@ -106,6 +106,20 @@ class SyncEngine(
     }
   }
 
+  /**
+   * Builds one part of the payloads needed to bring [scope] up to date with a peer.
+   *
+   * Used by the LAN server, which returns one part per request: [chunkIndex] is clamped to
+   * the available range, and the returned payload reports `chunkCount` so the caller knows
+   * whether to ask for another. Note this deliberately uses the default record cap — the
+   * pull path is the one place where a scope really can exceed a single response.
+   */
+  fun buildPullPayload(scope: SyncScope, chunkIndex: Int): SyncPayload? {
+    val payloads = buildPayloads(scope)
+    if (payloads.isEmpty()) return null
+    return payloads[chunkIndex.coerceIn(0, payloads.lastIndex)]
+  }
+
   /** Builds one payload per enabled scope. */
   fun buildAllPayloads(): List<SyncPayload> =
     targets.enabledScopes().mapNotNull { buildPayload(it) }

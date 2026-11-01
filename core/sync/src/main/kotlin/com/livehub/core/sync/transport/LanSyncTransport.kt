@@ -2,13 +2,16 @@ package com.livehub.core.sync.transport
 
 import com.livehub.core.sync.DiscoveredPeer
 import com.livehub.core.sync.SyncEnvelope
+import com.livehub.core.sync.SyncCodec
 import com.livehub.core.sync.SyncHttpTransport
 import com.livehub.core.sync.SyncPayload
+import com.livehub.core.sync.SyncRecord
 import com.livehub.core.sync.SyncScope
 import com.livehub.core.sync.SyncTransport
 import com.livehub.core.sync.SyncTransportException
 import com.livehub.core.sync.SyncFailureReason
 import com.livehub.core.sync.TrustedPeer
+import kotlinx.serialization.json.JsonObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.InputStream
@@ -37,27 +40,67 @@ class LanSyncTransport(
   private val localPort: Int = 0,
 ) : SyncTransport {
 
+  /**
+   * Fetches what [peer] knows for [scope], paging through the parts.
+   *
+   * The server returns one part per request because a scope can exceed a single response.
+   * The parts are concatenated here so the rest of the system keeps seeing one payload per
+   * scope — only this method and the server know the transfer is piecewise.
+   *
+   * **Consistency note.** Each part is built from a fresh snapshot, so a record inserted or
+   * removed *between* two part requests can shift where the next part starts. A shifted
+   * record may then be delivered twice (harmless — the merge is idempotent per key) or
+   * missed. A miss is repaired by the next sync, and this only applies to scopes past
+   * [SyncPayload.MAX_RECORDS_PER_PAYLOAD], which in practice means a follow list of several
+   * hundred rooms being edited during a transfer that takes milliseconds. Making it strictly
+   * atomic would need a snapshot token on the wire, which is not worth the protocol surface
+   * for a case this narrow.
+   */
   override suspend fun pull(peer: TrustedPeer, scope: SyncScope): SyncPayload? {
     val address = addressProvider(peer) ?: throw SyncTransportException(
       SyncFailureReason.REFUSED,
       "${peer.deviceName} 不在线",
     )
-    val envelope = SyncEnvelope(
-      deviceId = deviceId,
-      deviceName = deviceName,
-      // Present our own secret: the peer stored exactly this during pairing.
-      secret = localSecret,
-      preferredPort = localPort,
+
+    var allRecords = mutableListOf<SyncRecord<JsonObject>>()
+    var lastPayload: SyncPayload? = null
+    var chunkIndex = 0
+    while (true) {
+      val response = call(
+        peer = peer,
+        host = address.host,
+        port = address.port,
+        path = "${SyncEnvelope.PATH_PULL}?scope=${scope.wireName}&chunk=$chunkIndex",
+        envelope = SyncEnvelope(
+          deviceId = deviceId,
+          deviceName = deviceName,
+          // Present our own secret: the peer stored exactly this during pairing.
+          secret = localSecret,
+          preferredPort = localPort,
+        ),
+      )
+      response.error?.let { throw SyncTransportException(SyncFailureReason.PROTOCOL, it) }
+      val part = response.payload ?: return null
+
+      lastPayload = part
+      allRecords += SyncCodec.decodeRecords(part.entries)
+      if (!part.hasMoreChunks) break
+      chunkIndex += 1
+      // Guard against a peer that keeps reporting more parts than it can possibly have.
+      if (chunkIndex > MAX_PULL_CHUNKS) {
+        throw SyncTransportException(SyncFailureReason.PROTOCOL, "同步分片数量异常")
+      }
+    }
+
+    val base = lastPayload ?: return null
+    // The caller merges on `(hlc, deviceId)`, so the concatenation is order independent and
+    // the sequence number only has to be uniform across the parts of one pull.
+    val merged = base.copy(
+      entries = SyncCodec.encodeRecords(allRecords),
+      chunkIndex = 0,
+      chunkCount = 1,
     )
-    val response = call(
-      peer = peer,
-      host = address.host,
-      port = address.port,
-      path = "${SyncEnvelope.PATH_PULL}?scope=${scope.wireName}",
-      envelope = envelope,
-    )
-    response.error?.let { throw SyncTransportException(SyncFailureReason.PROTOCOL, it) }
-    return response.payload
+    return merged
   }
 
   override suspend fun push(peer: TrustedPeer, payload: SyncPayload): SyncPayload? {
@@ -201,6 +244,15 @@ class LanSyncTransport(
 
   companion object {
     const val DEFAULT_TIMEOUT_MILLIS = 8_000
+
+    /**
+     * Upper bound on parts fetched for one scope in a single pull.
+     *
+     * 500 records per part is the engine's cap, so this admits 500,000 records — far beyond
+     * any real scope. It exists only to stop a misbehaving peer from making the client
+     * loop forever.
+     */
+    private const val MAX_PULL_CHUNKS = 1_000
   }
 }
 
