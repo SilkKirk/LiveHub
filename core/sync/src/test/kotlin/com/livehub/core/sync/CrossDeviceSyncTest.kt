@@ -435,16 +435,27 @@ class CrossDeviceSyncTest {
     assertEquals("一条小团团 🎮", name)
   }
 
+  /**
+   * A peer that cannot be reached is reported, not hung on.
+   *
+   * `tablet.stop()` alone was not enough to make this deterministic: closing a listening
+   * socket does not guarantee the next connect is refused, so the test passed or failed
+   * depending on how the OS had reaped the port — it failed on CI while passing locally.
+   * Forgetting the address makes the transport take its "peer is offline" path, which is
+   * the branch the assertion is actually about, and it cannot race.
+   */
   @Test
   fun `a disconnected peer reports a failure instead of hanging`() =
     kotlinx.coroutines.test.runTest {
       phone.pairWith(tablet)
       tablet.stop()
+      phone.addressBook.forget(tablet.id)
 
       val outcomes = SyncCoordinator(phone.engine, phone.transport)
         .syncWith(phone.peers.first())
 
-      assertTrue(outcomes.any { !it.success }, "an unreachable peer must be reported")
+      assertTrue(outcomes.isNotEmpty(), "every enabled scope must report an outcome")
+      assertTrue(outcomes.all { !it.success }, "an unreachable peer must be reported")
     }
 
   @Test
