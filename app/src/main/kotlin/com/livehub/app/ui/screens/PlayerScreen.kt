@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,8 +28,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -95,6 +98,10 @@ import kotlinx.coroutines.delay
 fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var fullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
+  // In landscape the bottom sheet has only the height of a landscape window to work with,
+  // and the settings list is taller than that. A left-hand drawer uses the axis that has
+  // room instead — the same reason the reference client switches to a drawer there.
+  val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
   BackHandler(enabled = fullscreen) { fullscreen = false }
 
@@ -106,11 +113,54 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
       onFullscreenChange = { fullscreen = it },
       onOpenSettings = { showSettings = true },
     )
+
+    if (showSettings && isLandscape) {
+      PlayerSettingsDrawer(onDismiss = { showSettings = false }) {
+        PlayerSettings(state = state, variant = state.selectedVariant, onAction = onAction)
+      }
+    }
   }
 
-  if (showSettings) {
+  if (showSettings && !isLandscape) {
     ModalBottomSheet(onDismissRequest = { showSettings = false }) {
       PlayerSettings(state = state, variant = state.selectedVariant, onAction = onAction)
+    }
+  }
+}
+
+/**
+ * Side drawer holding the player settings in landscape.
+ *
+ * A `ModalBottomSheet` in landscape is capped at a fraction of an already short window, so
+ * most of the options (everything below 清晰度 once 线路 and the danmaku rows are counted)
+ * were simply unreachable — there was no scrolling either, so they could not even be
+ * dragged into view. The drawer takes height from the long axis instead.
+ */
+@Composable
+private fun PlayerSettingsDrawer(
+  onDismiss: () -> Unit,
+  content: @Composable () -> Unit,
+) {
+  Box(modifier = Modifier.fillMaxSize()) {
+    // Scrim: tapping anywhere outside the drawer closes it, as in the reference client.
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.45f))
+        .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+    )
+    Surface(
+      modifier = Modifier
+        .fillMaxHeight()
+        .fillMaxWidth(0.42f)
+        .widthIn(max = 320.dp)
+        .align(Alignment.CenterStart),
+      shape = RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp),
+      color = MaterialTheme.colorScheme.surface,
+      tonalElevation = 2.dp,
+      shadowElevation = 6.dp,
+    ) {
+      content()
     }
   }
 }
@@ -688,9 +738,16 @@ private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
 
 // ---------------------------------------------------------------- settings ---
 
+/**
+ * Quality, line and danmaku settings.
+ *
+ * Internal rather than private so a test can compose it at a landscape size and prove the
+ * lower sections are reachable; a private composable can only be reached through the full
+ * screen, which on a device needs a real rotation.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PlayerSettings(
+internal fun PlayerSettings(
   state: UiState,
   variant: StreamVariant?,
   onAction: (UiAction) -> Unit,
@@ -701,6 +758,11 @@ private fun PlayerSettings(
   Column(
     modifier = Modifier
       .fillMaxWidth()
+      // Scrollable because the content is taller than the space a bottom sheet gets on a
+      // phone in landscape: quality, line, on/off, area, size, opacity and the landscape
+      // size row together do not fit, and without this they were unreachable rather than
+      // merely off-screen.
+      .verticalScroll(rememberScrollState())
       .padding(horizontal = 16.dp)
       .padding(bottom = 24.dp),
     verticalArrangement = Arrangement.spacedBy(10.dp),
