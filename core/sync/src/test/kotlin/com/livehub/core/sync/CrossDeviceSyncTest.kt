@@ -217,16 +217,17 @@ class CrossDeviceSyncTest {
     // The phone invited, so it stores the secret the tablet issued...
     assertEquals(1, phone.peers.size)
     assertEquals(tablet.id, phone.peers.first().deviceId)
-    assertEquals("secret-2", phone.peers.first().sharedSecret)
+    // completePairing strips dashes so the secret is URL/QR friendly.
+    assertEquals("secret2", phone.peers.first().sharedSecret)
 
     // ...and the tablet stores the phone as a peer with the secret the phone issued.
     assertEquals(1, tablet.peers.size)
     assertEquals(phone.id, tablet.peers.first().deviceId)
-    assertEquals("secret-1", tablet.peers.first().sharedSecret)
+    assertEquals("secret1", tablet.peers.first().sharedSecret)
 
     // Each side's stored secret is exactly what the other side will present, which is
     // what makes authenticate() succeed in both directions.
-    assertEquals(phone.peers.first().sharedSecret, "secret-2")
+    assertEquals("secret2", phone.peers.first().sharedSecret)
   }
 
   @Test
