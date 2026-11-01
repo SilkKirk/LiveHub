@@ -322,6 +322,34 @@ class MainViewModelTest {
     assertEquals(com.livehub.core.designsystem.ThemeMode.Light, state.themeMode)
   }
 
+  /**
+   * Picking a quality must be remembered per platform.
+   *
+   * `UserPreferences.preferredQuality` and its setter existed from the start, but nothing
+   * ever wrote or read them: every room reopened at the platform default, so the selector
+   * felt broken even after it started actually re-resolving.
+   */
+  @Test
+  fun `selecting a quality is remembered for the next room on that platform`() {
+    // There is no live room in this test, so drive the preference through the same path the
+    // UI uses: a selected variant carries the quality code.
+    viewModel.onAction(UiAction.OpenRoom(streamer("1", "主播")))
+    idle()
+    viewModel.onAction(
+      UiAction.SelectVariant(
+        com.livehub.core.model.StreamVariant(
+          qualityLabel = "高清",
+          url = "https://example.com/a.flv",
+          lineName = "ws-h5",
+          qualityCode = 2,
+        ),
+      ),
+    )
+    idle()
+
+    assertEquals(2, container.preferences.settings.preferredQuality[Platform.DOUYU.id])
+  }
+
   // ----------------------------------------------------------------------- sync ---
 
   @Test

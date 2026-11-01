@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -78,6 +79,17 @@ class HuyaApi(private val http: HttpClient) {
 
   // ---------------------------------------------------------------------- rooms
 
+  /**
+   * One page of a category.
+   *
+   * `iPageSize` is **ignored** by the server: verified live, requesting 10, 20, 30 or 60 all
+   * return 120 rooms and report `iPageSize: 120`. Pagination therefore has to come from the
+   * metadata the response actually carries — `iPageNo`, `iTotal` and `iTotalPage` — instead
+   * of guessing from the row count. The previous `rooms.size >= pageSize` test was always
+   * true for the first five pages and only stopped because page 6 happens to be empty.
+   *
+   * @return the page's rooms and whether another page exists.
+   */
   suspend fun rooms(gid: String, page: Int, pageSize: Int): Pair<List<Streamer>, Boolean> {
     val url = "$URL_LIVE_LIST?iGid=$gid&iPageNo=$page&iPageSize=$pageSize"
     val response = http.get(url, headers = mapOf("User-Agent" to HttpClients.UA_SIMPLE))
@@ -86,8 +98,38 @@ class HuyaApi(private val http: HttpClient) {
       ?: (root["data"]?.jsonObject?.get("vList") as? JsonArray)
       ?: JsonArray(emptyList())
     val rooms = list.mapNotNull { parseListRoom(it) }
-    return rooms to (rooms.size >= pageSize)
+    return rooms to hasMorePages(root, rooms.size, page)
   }
+
+  /**
+   * Decides whether another page exists, from the metadata in [root].
+   *
+   * Extracted so the rule is testable without a network round trip, and documented here
+   * because getting it wrong is invisible: the previous implementation compared the row
+   * count against the requested `pageSize`, which Huya ignores.
+   */
+  internal fun hasMorePages(root: JsonObject, roomCount: Int, requestedPage: Int): Boolean {
+    if (roomCount == 0) return false
+    val total = root.long("iTotal") ?: -1
+    val totalPages = root.int("iTotalPage") ?: -1
+    val reportedPage = root.int("iPageNo") ?: requestedPage
+    return when {
+      // An exhausted category answers iTotal = 0 with iTotalPage = 1, so the page count is
+      // only meaningful when there is something in it.
+      totalPages > 0 && total > 0 -> reportedPage < totalPages
+      // Fall back to the total when the page count is missing; never to the row count,
+      // which is a fixed 120 regardless of what was asked for.
+      total > 0 -> reportedPage.toLong() * roomCount < total
+      else -> false
+    }
+  }
+
+  /** Reads an int field, tolerating both numeric and string encodings. */
+  private fun JsonObject.int(key: String): Int? =
+    (this[key] as? JsonElement)?.jsonPrimitive?.let { it.intOrNull ?: it.contentOrNull?.toIntOrNull() }
+
+  private fun JsonObject.long(key: String): Long? =
+    (this[key] as? JsonElement)?.jsonPrimitive?.let { it.longOrNull ?: it.contentOrNull?.toLongOrNull() }
 
   // --------------------------------------------------------------------- search
 

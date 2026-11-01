@@ -493,7 +493,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       // forever.
       startDanmaku(streamer)
       try {
-        val source = container.platformRepository.playback(streamer.platform, streamer.roomId)
+        // Open at the quality the user last picked on this platform. The preference is
+        // advisory: an adapter that does not offer it falls back to its own default.
+        val remembered = container.preferences.settings.preferredQuality[streamer.platform.id]
+        val source = container.platformRepository.playback(
+          platform = streamer.platform,
+          roomId = streamer.roomId,
+          preferredQuality = remembered,
+        )
         val preferred = source.defaultVariant
         _state.update {
           it.copy(
@@ -528,7 +535,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val nextLine = line ?: current.selectedLine
 
     if (quality == null && line == null) return
-    // Picking a variant that is already resolved needs no network round trip.
+
+    // Remember the choice per platform, so the next room opens at the quality the user
+    // picked instead of resetting to 原画 every time. The preference map existed with a
+    // setter but nothing ever wrote or read it.
+    if (quality != null) {
+      container.preferences.setPreferredQuality(room.platform, quality)
+    }
+
+    // Picking a variant that is already resolved needs no network round trip, unless the
+    // platform also publishes a separate line axis (Douyu), where the line has to match too.
     if (line == null && nextQuality != null) {
       current.variants.firstOrNull { it.qualityCode == nextQuality }?.let { resolved ->
         if (current.lines.isEmpty()) {
@@ -652,6 +668,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * list of resolved URLs for platforms that publish them, e.g. Bilibili and Huya).
    */
   private fun selectVariant(variant: StreamVariant) {
+    // Remember it for the next room on the same platform, matching what selectQuality does
+    // for the platforms that resolve one URL per rate.
+    val platform = _state.value.room?.platform
+    val code = variant.qualityCode
+    if (platform != null && code != null) {
+      container.preferences.setPreferredQuality(platform, code)
+    }
     _state.update { it.copy(selectedVariant = variant) }
   }
 
