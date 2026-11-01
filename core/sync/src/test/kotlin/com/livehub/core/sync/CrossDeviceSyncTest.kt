@@ -332,6 +332,8 @@ class CrossDeviceSyncTest {
 
     assertEquals(listOf("111"), phone.followedIds())
     assertEquals(listOf("111"), tablet.followedIds())
+    // One live record, no echo and no tombstone: after the first exchange both devices hold
+    // the same version, so the delta is empty and the second sync has nothing to send.
     assertEquals(1, tablet.store.records().size)
   }
 

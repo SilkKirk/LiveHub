@@ -36,8 +36,22 @@ data class SyncPayload(
   val createdAt: Long,
   /** JSON document; the format depends on [scope]. */
   val entries: String,
+  /**
+   * Position of this payload inside a multi-part transfer, starting at 0.
+   *
+   * A scope with more records than [MAX_RECORDS_PER_PAYLOAD] is split so a single HTTP
+   * response never has to hold an unbounded document. Every part carries its own
+   * [sequence], so the receiver's de-duplication guard works per part and a retry after a
+   * partial transfer is still accepted.
+   */
+  val chunkIndex: Int = 0,
+  /** Number of parts in this transfer; 1 for the common single-payload case. */
+  val chunkCount: Int = 1,
 ) {
   val parsedScope: SyncScope? get() = SyncScope.fromWireName(scope)
+
+  /** True when this payload is not the last part of a split transfer. */
+  val hasMoreChunks: Boolean get() = chunkIndex + 1 < chunkCount
 
   /**
    * How many records this payload carries.
@@ -54,6 +68,15 @@ data class SyncPayload(
   companion object {
     /** Bump whenever the JSON layout of any scope changes incompatibly. */
     const val SCHEMA: Int = 1
+
+    /**
+     * Upper bound on the records carried by one payload.
+     *
+     * The follow list is the only scope that can realistically grow past this, but the
+     * limit applies to all of them so no scope can produce a response that is slow to
+     * serialise or too large to read in one buffered request.
+     */
+    const val MAX_RECORDS_PER_PAYLOAD: Int = 500
   }
 }
 

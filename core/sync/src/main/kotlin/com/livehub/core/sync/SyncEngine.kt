@@ -49,11 +49,82 @@ class SyncEngine(
     lastHlc = lastHlc.merge(remote, clock())
   }
 
-  /** Builds the payload describing everything this device knows about [scope]. */
-  fun buildPayload(scope: SyncScope): SyncPayload? {
-    val target = targets.targetFor(scope) ?: return null
-    val records = target.snapshot().map { record ->
-      SyncRecord(
+  /**
+   * Builds the payload describing everything this device knows about [scope].
+   *
+   * @param peerKnown what the peer already holds for this scope. Anything the peer has at
+   *   the same or a newer version is left out: it would lose the merge on their side and
+   *   is therefore pure traffic. Pass the payload a peer just returned from `pull` to turn
+   *   a full resend into a delta.
+   */
+  fun buildPayload(
+    scope: SyncScope,
+    peerKnown: Collection<SyncRecord<JsonObject>> = emptyList(),
+  ): SyncPayload? = buildPayloads(scope, peerKnown, maxRecordsPerPayload = Int.MAX_VALUE)
+    .firstOrNull()
+
+  /**
+   * Builds the payloads needed to bring [scope] up to date with a peer.
+   *
+   * Returns an empty list when the local scope is disabled. Otherwise the result is never
+   * empty: an up-to-date peer still gets one (record-less) payload so the exchange keeps
+   * its single request/response shape and the log can report "nothing to send".
+   */
+  fun buildPayloads(
+    scope: SyncScope,
+    peerKnown: Collection<SyncRecord<JsonObject>> = emptyList(),
+    maxRecordsPerPayload: Int = SyncPayload.MAX_RECORDS_PER_PAYLOAD,
+  ): List<SyncPayload> {
+    require(maxRecordsPerPayload > 0) { "maxRecordsPerPayload must be positive" }
+    val target = targets.targetFor(scope) ?: return emptyList()
+    val pending = pendingRecords(target, peerKnown)
+
+    val chunkSize = maxRecordsPerPayload
+    // `pending.size + chunkSize - 1` overflows when the caller passes Int.MAX_VALUE to mean
+    // "no limit" (which buildPayload does), so the comparison comes first.
+    val chunkCount = when {
+      pending.isEmpty() -> 1
+      pending.size <= chunkSize -> 1
+      else -> (pending.size + chunkSize - 1) / chunkSize
+    }
+    return (0 until chunkCount).map { index ->
+      val slice = if (pending.isEmpty()) {
+        emptyList()
+      } else {
+        pending.subList(index * chunkSize, minOf((index + 1) * chunkSize, pending.size))
+      }
+      sequence += 1
+      SyncCodec.buildPayload(
+        scope = scope,
+        records = slice,
+        deviceId = deviceId,
+        sequence = sequence,
+        now = clock(),
+        chunkIndex = index,
+        chunkCount = chunkCount,
+      )
+    }
+  }
+
+  /** Builds one payload per enabled scope. */
+  fun buildAllPayloads(): List<SyncPayload> =
+    targets.enabledScopes().mapNotNull { buildPayload(it) }
+
+  /**
+   * Local records the peer still needs.
+   *
+   * The comparison is exactly the one [SyncMerge] applies, so a record is skipped only
+   * when the peer's copy would win the merge anyway. Tombstones go through the same rule,
+   * which keeps "unfollow on the tablet" propagating to a phone that has never heard of it.
+   */
+  private fun pendingRecords(
+    target: SyncTarget,
+    peerKnown: Collection<SyncRecord<JsonObject>>,
+  ): List<SyncRecord<JsonObject>> {
+    val known: Map<String, SyncRecord<JsonObject>> =
+      if (peerKnown.isEmpty()) emptyMap() else peerKnown.associateBy { it.key }
+    return target.snapshot().mapNotNull { record ->
+      val local = SyncRecord(
         key = record.key,
         value = record.value as? JsonObject,
         deleted = record.deleted,
@@ -61,20 +132,10 @@ class SyncEngine(
         deviceId = record.deviceId,
         updatedAt = record.updatedAt,
       )
+      val peerRecord = known[local.key]
+      if (peerRecord == null || local.version > peerRecord.version) local else null
     }
-    sequence += 1
-    return SyncCodec.buildPayload(
-      scope = scope,
-      records = records,
-      deviceId = deviceId,
-      sequence = sequence,
-      now = clock(),
-    )
   }
-
-  /** Builds one payload per enabled scope. */
-  fun buildAllPayloads(): List<SyncPayload> =
-    targets.enabledScopes().mapNotNull { buildPayload(it) }
 
   /**
    * Applies a payload received from [peer].

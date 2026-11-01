@@ -54,28 +54,49 @@ class SyncCoordinator(
         }
       }
 
-      val local = engine.buildPayload(scope)
+      // The pull above told us exactly what the peer holds, so only the records it is
+      // missing (or where our version wins the merge) have to travel back. Before this,
+      // every sync re-sent the whole scope in both directions regardless of the delta.
+      val peerKnown = remote?.let { SyncCodec.decodeRecords(it.entries) }.orEmpty()
+      val payloads = engine.buildPayloads(scope, peerKnown)
+
       var pushed = 0
-      if (local != null) {
-        val response = try {
-          transport.push(peer, local)
-        } catch (error: Exception) {
-          outcomes += ScopeOutcome(scope, pulled = pulled, pushed = 0, error = error.message ?: "推送失败")
-          engine.recordPush(peer, scope, itemCount = 0, success = false, note = error.message)
+      var pushError: String? = null
+      for (payload in payloads) {
+        if (payload.recordCount == 0) {
+          // Nothing to send: skip the round trip instead of pushing an empty document.
           continue
+        }
+        val response = try {
+          transport.push(peer, payload)
+        } catch (error: Exception) {
+          pushError = error.message ?: "推送失败"
+          engine.recordPush(peer, scope, itemCount = pushed, success = false, note = pushError)
+          break
         }
         if (response != null) {
           val applied = engine.applyPayload(response, peer)
           pulled += applied.added
         }
-        // The record count, not the payload sequence. `local.sequence` is a counter that only
-        // ever grows, so showing it as "sent N items" made the sync summary report numbers
-        // unrelated to what was transferred — and the de-duplication guard means the same
-        // sequence is never re-sent anyway.
-        pushed = local.recordCount
-        engine.recordPush(peer, scope, itemCount = pushed, success = true, note = "发送 $pushed 条")
+        pushed += payload.recordCount
       }
 
+      if (pushError != null) {
+        outcomes += ScopeOutcome(scope, pulled = pulled, pushed = pushed, error = pushError)
+        continue
+      }
+
+      // The record count, not the payload sequence. `sequence` is a counter that only ever
+      // grows, so showing it as "sent N items" made the sync summary report numbers
+      // unrelated to what was transferred — and the de-duplication guard means the same
+      // sequence is never re-sent anyway.
+      engine.recordPush(
+        peer = peer,
+        scope = scope,
+        itemCount = pushed,
+        success = true,
+        note = if (pushed == 0) "无需发送" else "发送 $pushed 条",
+      )
       outcomes += ScopeOutcome(scope, pulled = pulled, pushed = pushed)
     }
 

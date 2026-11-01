@@ -3,6 +3,7 @@ package com.livehub.core.sync
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -66,11 +67,39 @@ class SyncCoordinatorTest {
       TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
     )
     val engine = engine(listOf(target), peers)
+    target.apply(
+      listOf(
+        SyncRecord(key = "douyu:1", value = SyncCodec.stringValue("a"), hlc = Hlc(1, 1), deviceId = 1, updatedAt = now),
+      ),
+    )
     val transport = FakeTransport()
 
     SyncCoordinator(engine, transport).syncWith(peers.first())
 
     assertEquals(listOf("pull:follows", "push:follows"), transport.calls)
+  }
+
+  /**
+   * A scope with nothing to send costs one request, not two.
+   *
+   * The push used to happen unconditionally, and it carried the entire scope even when the
+   * peer already had every record — the pull result is proof of what the peer holds, so an
+   * empty delta means the round trip cannot change anything.
+   */
+  @Test
+  fun `an up to date peer is not sent an empty payload`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    val transport = FakeTransport()
+
+    val outcomes = SyncCoordinator(engine, transport).syncWith(peers.first())
+
+    assertEquals(listOf("pull:follows"), transport.calls, "an empty delta must not be pushed")
+    assertEquals(0, outcomes.first().pushed)
+    assertTrue(outcomes.first().success)
   }
 
   /**
@@ -170,7 +199,126 @@ class SyncCoordinatorTest {
     val results = SyncCoordinator(engine, transport).syncAll()
 
     assertEquals(2, results.size)
-    assertEquals(4, transport.calls.size)
+    // One pull per peer; the push is skipped because an empty local scope has no delta.
+    assertEquals(listOf("pull:follows", "pull:follows"), transport.calls)
+  }
+
+  /**
+   * The push only carries what the peer is missing.
+   *
+   * The peer's pull response is proof of its contents, so a record both sides hold at the
+   * same version is not sent again. Before this, a sync of two mostly-identical devices
+   * moved the entire scope in both directions on every run.
+   */
+  @Test
+  fun `only records the peer lacks are pushed`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    val shared = SyncRecord(
+      key = "douyu:1",
+      value = SyncCodec.stringValue("common"),
+      hlc = Hlc(1, 0),
+      deviceId = 2,
+      updatedAt = 1,
+    )
+    target.apply(
+      listOf(
+        shared,
+        SyncRecord(key = "douyu:2", value = SyncCodec.stringValue("local-only"), hlc = Hlc(2, 0), deviceId = 1, updatedAt = 2),
+      ),
+    )
+    val remote = SyncPayload(
+      scope = "follows",
+      sourceDeviceId = 2,
+      sequence = 1,
+      createdAt = now,
+      entries = SyncCodec.encodeRecords(listOf(shared)),
+    )
+    val sent = mutableListOf<SyncPayload>()
+    val transport = object : SyncTransport {
+      override suspend fun pull(peer: TrustedPeer, scope: SyncScope) = remote
+      override suspend fun push(peer: TrustedPeer, payload: SyncPayload): SyncPayload? {
+        sent += payload
+        return null
+      }
+      override suspend fun probe(peer: TrustedPeer) = true
+    }
+
+    SyncCoordinator(engine, transport).syncWith(peers.first())
+
+    assertEquals(1, sent.size)
+    val keys = SyncCodec.decodeRecords(sent.single().entries).map { it.key }
+    assertEquals(listOf("douyu:2"), keys, "the shared record must not be echoed back")
+  }
+
+  /** A scope larger than the per-payload cap is split, and every part is applied. */
+  @Test
+  fun `a large scope is split into payloads under the cap`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    target.apply(
+      (1..12).map { index ->
+        SyncRecord(
+          key = "douyu:$index",
+          value = SyncCodec.stringValue("r$index"),
+          hlc = Hlc(index.toLong(), 0),
+          deviceId = 1,
+          updatedAt = index.toLong(),
+        )
+      },
+    )
+
+    val payloads = engine.buildPayloads(SyncScope.FOLLOWS, maxRecordsPerPayload = 5)
+
+    assertEquals(3, payloads.size)
+    assertEquals(listOf(5, 5, 2), payloads.map { it.recordCount })
+    assertEquals(listOf(0, 1, 2), payloads.map { it.chunkIndex })
+    assertTrue(payloads.all { it.chunkCount == 3 })
+    assertTrue(payloads[0].hasMoreChunks, "the first of three parts still has more to follow")
+    assertFalse(payloads.last().hasMoreChunks, "the final part must be marked as last")
+    // Every part gets its own sequence so the peer's de-duplication guard works per part.
+    assertEquals(3, payloads.map { it.sequence }.toSet().size)
+  }
+
+  /** The default cap is used when the caller does not ask for a specific one. */
+  @Test
+  fun `a scope under the default cap stays a single payload`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    target.apply(
+      listOf(SyncRecord(key = "a", value = SyncCodec.stringValue("1"), hlc = Hlc(1, 0), deviceId = 1, updatedAt = 1)),
+    )
+
+    val payloads = engine.buildPayloads(SyncScope.FOLLOWS)
+
+    assertEquals(1, payloads.size)
+    assertEquals(1, payloads.single().chunkCount)
+    assertEquals(1, payloads.single().recordCount)
+  }
+
+  /** A disabled scope produces no payloads at all, not an empty one. */
+  @Test
+  fun `a disabled scope produces no payloads`() = runTest {
+    val engine = SyncEngine(
+      targets = MapSyncTargets(emptyMap()),
+      deviceIdProvider = { 1 },
+      deviceNameProvider = { "phone" },
+      peersProvider = { emptyList() },
+      peersWriter = {},
+      clock = { now },
+    )
+
+    assertTrue(engine.buildPayloads(SyncScope.FOLLOWS).isEmpty())
+    assertNull(engine.buildPayload(SyncScope.FOLLOWS))
   }
 
   @Test

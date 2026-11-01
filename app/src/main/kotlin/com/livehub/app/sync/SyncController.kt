@@ -3,6 +3,7 @@ package com.livehub.app.sync
 import com.livehub.app.di.FollowStore
 import com.livehub.app.di.UserPreferences
 import com.livehub.core.sync.DiscoveredPeer
+import com.livehub.core.sync.SyncCodec
 import com.livehub.core.sync.SyncCoordinator
 import com.livehub.core.sync.SyncEnvelope
 import com.livehub.core.sync.SyncPayload
@@ -111,8 +112,16 @@ class SyncController(
           engine.buildPayload(scope)
 
         override fun onPush(envelope: SyncEnvelope, payload: SyncPayload, peer: TrustedPeer?): SyncPayload? {
+          val scope = payload.parsedScope ?: return null
           engine.applyPayload(payload, peer)
-          return engine.buildPayload(payload.parsedScope ?: return null)
+          // Answer with the delta only: the peer provably holds every record it just sent,
+          // so echoing those back would double the traffic for no gain. Anything else this
+          // device knows still has to travel, otherwise a record the peer lacks would never
+          // reach it — the push carries what *we* were missing, not what they are.
+          return engine.buildPayload(
+            scope = scope,
+            peerKnown = SyncCodec.decodeRecords(payload.entries),
+          )
         }
 
         override fun peerById(deviceId: Long): TrustedPeer? =

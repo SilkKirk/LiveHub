@@ -73,6 +73,8 @@ object SyncCodec {
     deviceId: Long,
     sequence: Long,
     now: Long,
+    chunkIndex: Int = 0,
+    chunkCount: Int = 1,
   ): SyncPayload = SyncPayload(
     scope = scope.wireName,
     schema = SyncPayload.SCHEMA,
@@ -80,6 +82,8 @@ object SyncCodec {
     sequence = sequence,
     createdAt = now,
     entries = encodeRecords(records),
+    chunkIndex = chunkIndex,
+    chunkCount = chunkCount,
   )
 
   /** Convenience builder for a scalar string value. */
