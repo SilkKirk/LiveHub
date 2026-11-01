@@ -85,6 +85,15 @@ jobs:
           if [ -n "${TEST_EXIT:-}" ]; then
             echo "=== test log tail ==="
             tail -n 40 test.log
+            # The reporter above only covers real assertion failures. A compile error or a
+            # missing report file would otherwise stay invisible, so always annotate the
+            # cause as well.
+            SUMMARY="$(grep -E '^e: |There were failing tests|FAILURE:|What went wrong|error:' test.log \
+              | head -n 25 | tr '\n' ' ' | tr -s ' ' | cut -c1-6000)"
+            if [ -z "$SUMMARY" ]; then
+              SUMMARY="$(tail -n 20 test.log | tr '\n' ' ' | tr -s ' ' | cut -c1-6000)"
+            fi
+            echo "::error title=unit tests failed::${SUMMARY}"
           fi
           exit "${TEST_EXIT:-0}"
 
