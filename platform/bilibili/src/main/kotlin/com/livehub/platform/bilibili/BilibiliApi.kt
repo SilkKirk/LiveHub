@@ -85,8 +85,11 @@ class BilibiliApi(
   private suspend fun areaRooms(area: BilibiliArea, page: Int): Pair<List<Streamer>, Boolean> {
     val first = requestAreaPage(area, page, accessId())
     if (first["code"]?.jsonPrimitive?.intOrNull == RISK_CONTROL_CODE) {
+      // Drop both halves of the session: a stale access_id alone is not enough, because
+      // the pair (cookie, access_id) is what the server risk-checks.
       cachedAccessId = null
       accessIdFetchedAt = 0
+      cookieStore.clear()
       val retry = requestAreaPage(area, page, accessId())
       ensureSuccess(retry, "B站分区列表获取失败")
       return parseAreaPage(retry)
@@ -117,7 +120,7 @@ class BilibiliApi(
       headers = mapOf(
         "User-Agent" to UA_MOBILE,
         "Referer" to "https://www.bilibili.com/",
-        "Cookie" to "buvid3=i;",
+        "Cookie" to cookieStore.header().ifBlank { PLACEHOLDER_COOKIE },
       ),
     )
     return response.requireSuccess().let { parseObject(it.body, "second/getList") }
@@ -358,12 +361,18 @@ class BilibiliApi(
     if (cached != null && System.currentTimeMillis() - accessIdFetchedAt < ACCESS_ID_TTL_MILLIS) {
       return cached
     }
+    // The access_id is a session-scoped JWT. Fetching it without the cookie the list
+    // request later sends makes the two disagree, and the server answers the list with
+    // code -352. Verified: the same signed query returns 40 rooms with `buvid3=i;` and
+    // -352 with no cookie at all.
+    val cookie = cookieStore.header().ifBlank { PLACEHOLDER_COOKIE }
     val html = runCatching {
       http.get(
         "https://live.bilibili.com/lol",
         headers = mapOf(
           "User-Agent" to UA_MOBILE,
           "Referer" to "https://www.bilibili.com/",
+          "Cookie" to cookie,
         ),
       ).requireSuccess().body
     }.getOrNull().orEmpty()
@@ -527,6 +536,12 @@ class BilibiliApi(
 
     /** Bilibili answers this when the `w_webid` is risk-controlled. */
     const val RISK_CONTROL_CODE = -352
+
+    /**
+     * Cookie the list endpoint needs. Bilibili answers `-352` when the request carries no
+     * cookie at all, so this placeholder is used until a real buvid is negotiated.
+     */
+    const val PLACEHOLDER_COOKIE = "buvid3=i;"
 
     // Stable fallbacks: used only when the live endpoints are unreachable so the
     // feature degrades instead of failing outright.
