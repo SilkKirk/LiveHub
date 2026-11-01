@@ -122,11 +122,13 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
  * every screen without a real decoder, and the previous single composable could not be
  * rendered without going through the full-screen path.
  *
- * @param videoSurface replaces the real Media3 surface. `captureToImage` cannot read a
- *   `SurfaceView`'s contents (they are composited by SurfaceFlinger, not drawn into the
- *   window), so a screenshot of a live `LivePlayer` is a black rectangle no matter what
- *   the surrounding layout does. The screenshot harness supplies a labelled placeholder
+ * @param videoSurface replaces the real Media3 surface for a **playing** room. `captureToImage`
+ *   cannot read a `SurfaceView`'s contents (they are composited by SurfaceFlinger, not drawn
+ *   into the window), so a screenshot of a live `LivePlayer` is a black rectangle no matter
+ *   what the surrounding layout does. The screenshot harness supplies a labelled placeholder
  *   so the render still proves the chrome around the video laid out correctly.
+ *   Loading, offline and error states ignore it, because in those states there is no video
+ *   and their own content is what the user must see.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -181,7 +183,7 @@ internal fun PlayerContent(
       }
 
       Box(modifier = videoModifier.background(Color.Black)) {
-        if (videoSurface != null) {
+        if (videoSurface != null && isPlaying && playerError == null && effectiveVariant != null) {
           videoSurface(Modifier.fillMaxSize())
         } else {
           VideoSurface(

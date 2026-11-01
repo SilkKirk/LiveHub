@@ -3,6 +3,7 @@ package com.livehub.app
 import android.os.Environment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,7 +27,6 @@ import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.core.sync.SyncLogEntry
 import com.livehub.core.sync.TrustedPeer
-import androidx.compose.material3.MaterialTheme
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -38,12 +38,12 @@ import java.io.FileOutputStream
  * Renders every screen with representative data and writes a PNG for each.
  *
  * The APK cannot be launched interactively in CI, so these renders are the visual
- * regression harness: each run produces a folder of screenshots that a reviewer opens
- * and compares. They also fail the build if a screen throws while composing, which
- * catches layout crashes a plain unit test cannot see.
+ * regression harness: each run produces a folder of screenshots that a reviewer opens and
+ * compares. They also fail the build if a screen throws while composing, which catches
+ * layout crashes a plain unit test cannot see.
  *
- * One test per screen is required because a Compose test rule may only call
- * `setContent` once.
+ * One test per screen is required because a Compose test rule may only call `setContent`
+ * once.
  */
 @RunWith(AndroidJUnit4::class)
 class ScreenshotTest {
@@ -123,10 +123,10 @@ class ScreenshotTest {
   )
 
   /**
-   * A player state that carries a room, a variant and chat.
+   * A player state that carries every field the layout reads.
    *
-   * Every field the player layout reads has to be filled: a variant alone leaves the header
-   * and the danmaku panel empty, which is what produced an all-black 703-byte render.
+   * A variant alone leaves the header and the danmaku panel empty, which is what produced
+   * an all-black 703-byte render.
    */
   private fun playerState(): UiState = baseState().copy(
     screen = Screen.Player,
@@ -137,7 +137,9 @@ class ScreenshotTest {
       StreamVariant("高清", "https://example.com/b.flv", "ws-h5", qualityRank = 2, qualityCode = 2),
       StreamVariant("标清", "https://example.com/c.flv", "ali", qualityRank = 1, qualityCode = 1),
     ),
-    selectedVariant = StreamVariant("原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0, qualityCode = 0),
+    selectedVariant = StreamVariant(
+      "原画", "https://example.com/a.flv", "ws-h5", qualityRank = 0, qualityCode = 0,
+    ),
     lines = listOf("ws-h5", "ali", "tx"),
     selectedLine = "ws-h5",
     danmaku = listOf(
@@ -257,27 +259,38 @@ class ScreenshotTest {
   @Test
   fun player() = capture("17-player", playerState())
 
+  @Test
+  fun playerFullScreen() = capture("17b-player-fullscreen", playerState(), fullscreen = true)
+
   /**
-   * The player renders through the real screen entry point.
+   * The loading, offline and error renders must differ from the playing one.
    *
-   * `17-player` used to come out as a 703-byte black rectangle: the state carried a variant
-   * but no `room`, so the header, action row and danmaku panel all rendered nothing while
-   * the video surface painted black. A render that is entirely one colour is worthless as
-   * a visual regression check, so the fixture now includes the room.
+   * They used to be byte-identical to it: the harness hands `PlayerContent` a stand-in for
+   * the video surface, and that stand-in was drawn unconditionally, so the state-specific
+   * content (spinner, "主播未开播", error text) never appeared. Passing the stub must not
+   * disable the states that exist precisely because there is no video.
    */
   @Test
-  fun playerFullScreen() = capture(
-    "17b-player-fullscreen",
-    playerState(),
-    fullscreen = true,
+  fun playerLoading() = capture(
+    "18-player-loading",
+    baseState().copy(screen = Screen.Player, room = douyuRooms[0], loading = true),
   )
 
   @Test
-  fun playerLoading() = capture("18-player-loading", baseState().copy(screen = Screen.Player, loading = true))
+  fun playerError() = capture(
+    "19-player-error",
+    baseState().copy(screen = Screen.Player, room = douyuRooms[0], error = "主播未开播"),
+  )
 
   @Test
-  fun playerError() =
-    capture("19-player-error", baseState().copy(screen = Screen.Player, error = "主播未开播"))
+  fun playerOffline() = capture(
+    "19b-player-offline",
+    baseState().copy(
+      screen = Screen.Player,
+      room = douyuRooms[0].copy(isLive = false),
+      danmakuEnabled = false,
+    ),
+  )
 
   @Test
   fun huyaHome() = capture(
@@ -289,6 +302,24 @@ class ScreenshotTest {
     ),
   )
 
+  @Test
+  fun bilibiliHome() = capture(
+    "21-bilibili-home",
+    baseState().copy(
+      platform = Platform.BILIBILI,
+      rooms = listOf(
+        streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
+        streamer(Platform.BILIBILI, "21", "老番茄", "新视频首发", 88_000),
+      ),
+      categories = listOf(
+        Category(Platform.BILIBILI, "1", "虚拟主播", "热门", "热门", sortOrder = 0),
+        Category(Platform.BILIBILI, "2", "英雄联盟", "网游", "网游", sortOrder = 1),
+      ),
+    ),
+  )
+
+  // -------------------------------------------------------------------- helpers ---
+
   private fun capture(name: String, state: UiState, fullscreen: Boolean = false) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
@@ -299,14 +330,16 @@ class ScreenshotTest {
         // The video surface is replaced: `captureToImage` cannot read a SurfaceView (its
         // pixels are composited by SurfaceFlinger, not drawn into the window), so a real
         // player always captures as solid black and the render would prove nothing about
-        // the chrome around it.
+        // the chrome around it. PlayerContent only substitutes it for a room that is
+        // actually playing, so the loading / offline / error states still render their own
+        // content.
         PlayerContent(
           state = state,
           onAction = {},
           fullscreen = fullscreen,
           onFullscreenChange = {},
           onOpenSettings = {},
-          videoSurface = { modifier -> VideoSurfaceStub(modifier) },
+          videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
         )
       } else {
         LiveHubRoot(state = state, onAction = { })
