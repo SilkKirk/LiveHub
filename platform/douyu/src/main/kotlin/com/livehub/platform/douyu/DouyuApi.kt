@@ -28,7 +28,14 @@ import kotlinx.serialization.json.longOrNull
  * Splitting this from [DouyuAdapter] makes every mapping unit-testable offline:
  * tests feed recorded JSON and assert on the resulting models.
  */
-class DouyuApi(private val http: HttpClient) {
+class DouyuApi(
+  private val http: HttpClient,
+  /**
+   * Evaluates the site signing script. The app supplies it because it owns the JS engine
+   * and the bundled crypto library; tests leave it null and exercise the fallback.
+   */
+  private val scriptSigner: DouyuScriptSigner? = null,
+) {
 
   // ------------------------------------------------------------------ categories
 
@@ -227,11 +234,39 @@ class DouyuApi(private val http: HttpClient) {
       DouyuQuality.variants(probe, DouyuQuality.select(probe, null))
     }
   }
-
-  /** Computes the `signData` blob (`key=value&...`) for a room. */
+  /**
+   * Computes the `signData` blob (`key=value&...`) for a room.
+   *
+   * Douyu rotates the signature algorithm, and the fixed digest computed here used to be
+   * accepted and is now rejected with HTTP 403. When a [scriptSigner] is available the
+   * site script is evaluated instead, which keeps working across rotations; the pure
+   * Kotlin formula remains as the fallback so signing still succeeds without a JS engine.
+   */
   internal suspend fun sign(roomId: String, nowSeconds: Long = System.currentTimeMillis() / 1000): String {
     val realRoomId = betard(roomId).realRoomId
+    val signer = scriptSigner
+    if (signer != null) {
+      val script = runCatching { homeH5EncScript(realRoomId) }.getOrNull()
+      if (!script.isNullOrBlank()) {
+        val signed = runCatching {
+          signer.sign(
+            script = script,
+            roomId = realRoomId,
+            did = DouyuSigner.DEFAULT_DID,
+            tsSeconds = nowSeconds,
+          )
+        }.getOrNull()
+        if (!signed.isNullOrBlank()) return signed
+      }
+    }
     return DouyuSigner.sign(realRoomId = realRoomId, did = DouyuSigner.DEFAULT_DID, tt = nowSeconds)
+  }
+
+  /** Fetches the current signing script source for [realRoomId]. */
+  private suspend fun homeH5EncScript(realRoomId: String): String? {
+    val response = http.get("$URL_HOME_H5_ENC?rids=$realRoomId")
+    val root = DouyuResponseRules.requireJson(response.body, response.code, "homeH5Enc")
+    return DouyuSigner.parseEncSource(root, realRoomId)
   }
 
   private suspend fun requestPlay(
@@ -276,6 +311,7 @@ class DouyuApi(private val http: HttpClient) {
     const val WEB_VERSION = "Douyu_223061205"
     const val URL_WEB = "https://www.douyu.com"
     const val URL_CATEGORIES = "https://m.douyu.com/api/cate/list"
+    const val URL_HOME_H5_ENC = "https://www.douyu.com/swf_api/homeH5Enc"
     /** Prefix marking a category id as a level-3 sub-category rather than a cate2. */
     const val SUB_CATEGORY_PREFIX = "c3:"
     const val URL_MIX_LIST = "https://www.douyu.com/gapi/rkc/directory/mixListV1"

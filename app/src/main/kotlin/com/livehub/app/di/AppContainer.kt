@@ -71,7 +71,11 @@ class AppContainer(
 
   val adapters: List<LivePlatformAdapter> by lazy {
     listOf(
-      DouyuAdapter(http = httpClient, webSocketClient = webSocketClient),
+      DouyuAdapter(
+        http = httpClient,
+        webSocketClient = webSocketClient,
+        scriptSigner = com.livehub.app.sync.DouyuRhinoSigner.from(applicationContext),
+      ),
       HuyaAdapter(http = httpClient, webSocketClient = webSocketClient, assets = assetReader),
       DouyinAdapter(http = httpClient, webSocketClient = webSocketClient, assets = assetReader),
       BilibiliAdapter(

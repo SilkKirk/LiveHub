@@ -40,7 +40,12 @@ import okio.ByteString.Companion.encodeUtf8
 class DouyuAdapter(
   private val http: HttpClient,
   private val webSocketClient: OkHttpClient,
-  private val api: DouyuApi = DouyuApi(http),
+  /**
+   * Evaluates the site signing script. Supplied by the app, which owns the JS engine and
+   * the bundled crypto library; null in tests, which exercise the formula fallback.
+   */
+  scriptSigner: com.livehub.platform.douyu.DouyuScriptSigner? = null,
+  private val api: DouyuApi = DouyuApi(http, scriptSigner),
 ) : LivePlatformAdapter {
 
   override val platform: Platform = Platform.DOUYU

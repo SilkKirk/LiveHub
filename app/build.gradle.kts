@@ -104,6 +104,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
+    // Douyu signs playback requests by running the site's own JS; the signature
+    // algorithm changes without notice, so the script is evaluated rather than
+    // reimplemented.
+    implementation("org.mozilla:rhino:1.7.14")
     implementation(libs.androidx.work.runtime)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
