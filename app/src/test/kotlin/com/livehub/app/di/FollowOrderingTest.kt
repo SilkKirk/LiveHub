@@ -62,8 +62,10 @@ class FollowOrderingTest {
     val a = streamer("1")
     val b = streamer("2")
 
+    // Negative clamps to the front.
     assertEquals(listOf(b.key, a.key), FollowOrdering.move(listOf(a, b), b, -5))
-    assertEquals(listOf(a.key, b.key), FollowOrdering.move(listOf(a, b), a, 99))
+    // Past the end clamps to the last slot, which for the first item means it stays put.
+    assertEquals(listOf(b.key, a.key), FollowOrdering.move(listOf(a, b), a, 99))
   }
 
   @Test

@@ -105,17 +105,29 @@ class CategorySyncTarget(
 /** Helpers for reordering the follow list while keeping sync metadata intact. */
 object FollowOrdering {
   /**
-   * Reorders [ordered] so that [moved] sits at [toIndex].
+   * Reorders [ordered] so that [moved] ends up at index [toIndex].
    *
-   * Returns the new order as a list of streamer keys; the caller re-stamps each record
-   * so the new order wins over a concurrent reorder from another device.
+   * [toIndex] is an index into the **final** list, which is what a drag gesture
+   * produces ("drop this row where row N currently is"). Removing the moved item first
+   * shifts everything after it down by one, so a naive `without.add(toIndex)` puts the
+   * row one slot too far when dragging downwards — the bug this function had.
+   *
+   * Returns the new order as streamer keys; the caller re-stamps each record so the new
+   * order wins over a concurrent reorder from another device.
    */
   fun move(ordered: List<Streamer>, moved: Streamer, toIndex: Int): List<String> {
     if (ordered.isEmpty()) return emptyList()
+    val fromIndex = ordered.indexOfFirst { it.key == moved.key }
+    if (fromIndex < 0) return ordered.map { it.key }
+
     val without = ordered.filterNot { it.key == moved.key }
-    val target = toIndex.coerceIn(0, without.size)
+    val target = toIndex.coerceIn(0, ordered.size - 1)
+
+    // Dropping below the original position lands one slot earlier once the item is
+    // lifted out of the list.
+    val insertAt = if (target > fromIndex) target - 1 else target
     val result = without.toMutableList()
-    result.add(target, moved)
+    result.add(insertAt.coerceIn(0, without.size), moved)
     return result.map { it.key }
   }
 }
