@@ -641,3 +641,70 @@ README 的"已知限制"里写着"斗鱼只有一页、没有三级分类"，这
 - **播放页逐项对照**：把参考实现的 `ScrollingDanmakuOverlay`（全屏横向滚动弹幕）与
   LiveHub 的 `DanmakuOverlay` 逐行比对，确认轨道分配与避让策略一致。
 - **同步**：`pull` 仍是整包返回，可以考虑同样的分片，但目前关注列表规模下不是瓶颈。
+
+---
+
+## 第十一轮迭代：弹幕层的两个真实缺陷
+
+上一轮的"下一轮"里写着"逐行比对弹幕浮层"。真去读了才发现两个缺陷，都只在**运行中的
+弹幕层**里才看得到——截图冻结了时钟所以什么都还没动，纯 JVM 测试又根本不组合 UI。
+这就是它们能活过九轮的原因。
+
+### 缺陷一：新弹幕会把整个缓冲区重新加一遍
+
+```kotlin
+LaunchedEffect(messages) {
+  if (messages.isEmpty()) return@LaunchedEffect
+  messages.forEach { message -> flying.add(...) }   // ← 全量
+}
+```
+
+`messages` 不是"新到的那条"，而是 ViewModel 的整个滚动缓冲（上限 200）。每来一条
+弹幕，列表身份就变，effect 重跑，把**已有内容全部再加一次**。三条消息时：`a` 被加
+3 次、`b` 2 次、`c` 1 次。真实直播间里几秒钟屏幕就糊成一片，`laneCursor` 也在不停
+回绕。
+
+修法是记一个 `consumedCount` 偏移，只处理新尾部；当缓冲区从头部被裁剪（列表比偏移
+短）时把偏移归零。参考实现同样用 `lastCount` 做了这件事。
+
+### 缺陷二：每条弹幕都是满屏宽
+
+```kotlin
+Modifier.offset(...).fillMaxSize()   // ← Text 测量成整个浮层宽
+```
+
+三个字的弹幕一开始就顶在右边缘，左移动画读起来像是"气泡在滑"而不是"文字在滚"。
+去掉 `fillMaxSize()` 后按内容自然宽度排布。
+
+### 这一轮的教训：怎么才能测到它
+
+两次尝试都失败，值得记下来：
+
+1. **只冻结时钟不够**。每条弹幕跑 8 秒 `Animatable`，结束即 `onFinished` 删除自己；
+   `autoAdvance` 默认开着时 `waitForIdle()` 会把动画跑完，断言看到的是空浮层。
+   → 先 `mainClock.autoAdvance = false`。
+2. **推进一帧也不够**。状态变化后要跑完"重组 → 重新启动 effect → effect 派发 →
+   列表变更再组合"这条链，`advanceTimeByFrame()` 只走了第一步，新加的 `c` 始终没有
+   节点。→ 改成 `advanceTimeBy(500)`，仍在 8 秒飞行内，弹幕处于屏幕中间。
+
+最终 `DanmakuOverlayTest` 用 Robolectric + Compose 测试规则在 JVM 上跑了三条断言：
+新增不重复、关闭时不渲染、屏蔽词不进浮层。为此把 `compose-ui-test-junit4` 加进了
+`testImplementation`。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（含新的浮层测试） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+CI run 14006998 全绿。
+
+### 下一轮
+
+- **抖音推荐流分页**：`webcast/feed` 忽略 `offset` 且服务端把 `count` 压到 6。
+- **全屏弹幕轨道避让**：当前是 round-robin 分配轨道，同轨道两条弹幕在长文本下仍可能
+  重叠；参考实现用 `laneAvailableAt` 按估算宽度计算"该轨道何时空出"，值得移植。
+- **同步**：`pull` 仍是整包返回。
