@@ -211,51 +211,75 @@ class DouyinDanmakuProtocolTest {
   }
 }
 
+/**
+ * Tests for the one `a_bogus` implementation the module ships.
+ *
+ * The previous suite asserted on a locally invented `xBogus`/`aBogus` pair that was not the
+ * algorithm Douyin uses, so it could pass while every signed request was rejected. Those
+ * functions are deleted; these tests cover the real transcription in [DouyinABogus] and the
+ * query assembly in [DouyinSigner].
+ */
 class DouyinSignerTest {
 
   @Test
-  fun `x-bogus is deterministic for the same seed`() {
-    val a = DouyinSigner.xBogus("a=1&b=2", "ua", timestamp = 1_700_000_000, randomSeed = 7)
-    val b = DouyinSigner.xBogus("a=1&b=2", "ua", timestamp = 1_700_000_000, randomSeed = 7)
+  fun `a-bogus is deterministic for the same query and ua`() {
+    val a = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val b = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
     assertEquals(a, b)
     assertTrue(a.isNotEmpty())
   }
 
   @Test
-  fun `x-bogus changes with the query`() {
-    val a = DouyinSigner.xBogus("a=1", "ua", 1_700_000_000, 7)
-    val b = DouyinSigner.xBogus("a=2", "ua", 1_700_000_000, 7)
-    assertTrue(a != b)
+  fun `a-bogus changes with the query`() {
+    val a = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val b = DouyinABogus.aBogus("aid=6383&count=21", DouyinSigner.USER_AGENT)
+    assertTrue(a != b, "a different query must produce a different signature")
   }
 
   @Test
   fun `a-bogus is url safe`() {
-    val value = DouyinSigner.aBogus("aid=6383&count=20", "ua", 1_700_000_000, 7)
+    val value = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
     assertTrue(value.isNotEmpty())
     assertTrue(value.none { it == '+' || it == '/' || it == '=' }, "value was $value")
-    assertTrue(value.all { it.isLetterOrDigit() || it == '-' || it == '_' }, "value was $value")
-  }
-
-  @Test
-  fun `a-bogus does not overflow on any hex digest prefix`() {
-    // Regression: parsing an 8 char md5 prefix with toInt(16) overflowed for any value
-    // above 0x7FFFFFFF. Every seed must now be accepted.
-    repeat(64) { seed ->
-      val value = DouyinSigner.aBogus("q=$seed", "ua", 1_700_000_000L + seed, seed)
-      assertTrue(value.isNotEmpty(), "seed $seed produced an empty signature")
-    }
-  }
-
-  @Test
-  fun `sign appends both signature parameters and preserves order`() {
-    val signed = DouyinSigner.sign(
-      orderedParams = listOf("aid" to "6383", "count" to "20"),
-      userAgent = "ua",
-      timestamp = 1_700_000_000_000,
+    assertTrue(
+      value.all { it.isLetterOrDigit() || it == '-' || it == '_' },
+      "value was $value",
     )
+  }
 
-    val keys = signed.params.keys.toList()
-    assertEquals(listOf("aid", "count", "X-Bogus", "a_bogus"), keys)
-    assertTrue(signed.queryString().contains("aid=6383"))
+  /** The signature is parameter-order sensitive, which is why callers must not sort. */
+  @Test
+  fun `a-bogus depends on parameter order`() {
+    val a = DouyinABogus.aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
+    val b = DouyinABogus.aBogus("count=20&aid=6383", DouyinSigner.USER_AGENT)
+    assertTrue(a != b, "reordering the query must change the signature")
+  }
+
+  @Test
+  fun `signQuery appends a_bogus and preserves the parameter order`() {
+    val query = DouyinSigner.signQuery(listOf("aid" to "6383", "count" to "20"))
+
+    assertTrue(query.startsWith("aid=6383&count=20&"), "order changed: $query")
+    assertTrue(query.contains("&a_bogus="), "missing signature: $query")
+    assertTrue(!query.contains("X-Bogus"), "the invented X-Bogus must not be sent")
+  }
+
+  @Test
+  fun `signQuery percent-encodes values`() {
+    val query = DouyinSigner.signQuery(listOf("keyword" to "英雄 联盟"))
+    assertTrue(query.startsWith("keyword=%E8%8B%B1%E9%9B%84%20%E8%81%94%E7%9B%9F"), query)
+  }
+
+  @Test
+  fun `the default msToken has the documented length and alphabet`() {
+    val token = DouyinSigner.randomMsToken()
+    assertEquals(DouyinSigner.MS_TOKEN_LENGTH, token.length)
+    assertTrue(token.all { it.isLetterOrDigit() }, "unexpected characters: $token")
+    assertTrue(token != DouyinSigner.randomMsToken(), "tokens must not repeat")
+  }
+
+  @Test
+  fun `the default cookie carries ttwid`() {
+    assertTrue(DouyinSigner.DEFAULT_COOKIE.startsWith("ttwid="))
   }
 }

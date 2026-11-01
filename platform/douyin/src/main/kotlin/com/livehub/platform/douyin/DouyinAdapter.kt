@@ -28,7 +28,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
-import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.milliseconds
 
 /** Douyin live integration. */
@@ -38,6 +37,11 @@ class DouyinAdapter(
   private val api: DouyinApi = DouyinApi(http),
   /** Supplies the bundled category table; empty in tests. */
   private val assets: com.livehub.platform.api.AssetReader = com.livehub.platform.api.AssetReader.Empty,
+  /**
+   * Signs the danmaku handshake. Supplied by the app, which owns the JS engine and the
+   * bundled `webmssdk.js`; null in tests, where the socket is never opened.
+   */
+  private val msdkSigner: DouyinMsdkSigner? = null,
 ) : LivePlatformAdapter {
 
   override val platform: Platform = Platform.DOUYIN
@@ -110,53 +114,88 @@ class DouyinAdapter(
     return PlaybackSource(room = room, variants = ordered, defaultVariant = ordered.firstOrNull())
   }
 
+  /**
+   * Opens the danmaku socket.
+   *
+   * The handshake needs a real URL: Douyin rejects a bare `webcast/im/push/v2/` connection.
+   * Each attempt therefore resolves the room's numeric id and `user_unique_id` from the room
+   * page, builds the ~30 parameter query, and asks [msdkSigner] for the `signature` the
+   * server checks. A blank signature means the JS engine is missing (JVM tests) or the
+   * bundle failed, in which case the flow reports a readable failure instead of silently
+   * retrying a socket that cannot ever open.
+   */
   override fun danmaku(roomId: String): Flow<DanmakuEvent> = callbackFlow {
     val backoff = BackoffPolicy(1_000.milliseconds, 30_000.milliseconds)
     var socket: WebSocket? = null
     var closedByUs = false
     var heartbeatJob: Job? = null
-    var ackJob: Job? = null
     var lastExt = ""
-    var lastLogId = 0L
+    var baseIndex = 0
 
-    fun connect() {
+    suspend fun resolveInit(): DouyinDanmakuHandshake.RoomInit? {
+      val html = runCatching { api.roomPageHtml(roomId) }.getOrNull().orEmpty()
+      val userUniqueId = DouyinDanmakuHandshake.extractUserUniqueId(html)
+        .ifBlank { DouyinDanmakuHandshake.randomUserUniqueId() }
+      val numericRoomId = DouyinDanmakuHandshake.extractRoomId(html)
+        .ifBlank { runCatching { api.roomInfo(roomId).roomId }.getOrNull().orEmpty() }
+        .ifBlank { roomId }
+      if (numericRoomId.isBlank()) return null
+      return DouyinDanmakuHandshake.RoomInit(
+        roomId = numericRoomId,
+        userUniqueId = userUniqueId,
+        cookieHeader = DouyinSigner.DEFAULT_COOKIE,
+      )
+    }
+
+    /**
+     * One connection attempt.
+     *
+     * @return true when the socket opened; the caller then waits on [sessionEnded] before
+     *   trying again, so a live socket is never duplicated.
+     */
+    suspend fun connectOnce(sessionEnded: kotlinx.coroutines.CompletableDeferred<Unit>): Boolean {
+      val init = resolveInit() ?: return false
+      val signature = msdkSigner?.signature(
+        roomId = init.roomId,
+        userUniqueId = init.userUniqueId,
+        webcastSdkVersion = DouyinDanmakuHandshake.WEBCAST_SDK_VERSION,
+        userAgent = DouyinSigner.USER_AGENT,
+      )
+      val base = DouyinDanmakuHandshake.WS_BASES[baseIndex % DouyinDanmakuHandshake.WS_BASES.size]
+      baseIndex++
+      val url = DouyinDanmakuHandshake.buildUrl(base, init, signature) ?: return false
+
       val request = Request.Builder()
-        .url(DANMAKU_URL)
+        .url(url)
         .header("User-Agent", DouyinSigner.USER_AGENT)
         .header("Origin", "https://live.douyin.com")
         .header("Referer", "https://live.douyin.com/")
+        .header("Cookie", init.cookieHeader)
         .build()
 
+      val opened = java.util.concurrent.CountDownLatch(1)
+      // Written from OkHttp's reader thread, read from this coroutine, so it needs the
+      // latch's happens-before rather than a plain local.
+      val openedOk = java.util.concurrent.atomic.AtomicBoolean(false)
       socket = webSocketClient.newWebSocket(
         request,
         object : WebSocketListener() {
           override fun onOpen(webSocket: WebSocket, response: Response) {
+            openedOk.set(true)
+            opened.countDown()
             trySend(DanmakuEvent.Connected)
             backoff.reset()
             heartbeatJob?.cancel()
             heartbeatJob = launch {
               while (true) {
-                delay(DouyinDanmakuProtocol.HEARTBEAT_INTERVAL_MILLIS)
+                delay(DouyinDanmakuHandshake.HEARTBEAT_INTERVAL_MILLIS)
                 webSocket.send(buildHeartbeat().toByteString())
-              }
-            }
-            ackJob?.cancel()
-            ackJob = launch {
-              while (true) {
-                delay(DouyinDanmakuProtocol.ACK_INTERVAL_MILLIS)
-                if (lastLogId != 0L) {
-                  webSocket.send(
-                    DouyinDanmakuProtocol.ackFrame(lastLogId, lastExt).toByteString(),
-                  )
-                }
               }
             }
           }
 
           override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             val frame = bytes.toByteArray()
-            val logId = DouyinDanmakuProtocol.logId(frame)
-            if (logId != 0L) lastLogId = logId
             DouyinDanmakuProtocol.internalExt(frame).takeIf { it.isNotBlank() }?.let { lastExt = it }
 
             DouyinDanmakuProtocol.decodeFrame(frame).forEach { decoded ->
@@ -177,49 +216,83 @@ class DouyinAdapter(
                 ),
               )
             }
+
+            // Ack only when the frame asks for it, keyed to that frame's log id. Acking
+            // every frame on a timer — the previous behaviour — is not accepted: the server
+            // waits for the ack of the specific frame and drops the socket otherwise.
+            if (DouyinDanmakuProtocol.needsAck(frame)) {
+              val logId = DouyinDanmakuProtocol.logId(frame)
+              if (logId != 0L) {
+                webSocket.send(DouyinDanmakuProtocol.ackFrame(logId, lastExt).toByteString())
+              }
+            }
           }
 
           override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            if (closedByUs) return
+            opened.countDown()
             heartbeatJob?.cancel()
-            ackJob?.cancel()
-            trySend(DanmakuEvent.Disconnected(t.message ?: "连接中断", willRetry = true))
-            launch {
-              backoff.sleepNext()
-              if (!closedByUs) connect()
+            if (!closedByUs) {
+              trySend(DanmakuEvent.Disconnected(t.message ?: "连接中断", willRetry = true))
             }
+            sessionEnded.complete(Unit)
           }
 
           /** A clean close must reconnect: Douyin rotates sockets server-side regularly. */
           override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            opened.countDown()
             heartbeatJob?.cancel()
-            ackJob?.cancel()
-            if (closedByUs) return
-            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = true))
-            launch {
-              backoff.sleepNext()
-              if (!closedByUs) connect()
+            if (!closedByUs) {
+              trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = true))
             }
+            sessionEnded.complete(Unit)
           }
         },
       )
+
+      // Wait for the handshake so a rejected signature is reported here rather than being
+      // mistaken for a healthy connection that never delivers a message.
+      runCatching {
+        opened.await(OPEN_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
+      }
+      return openedOk.get()
     }
 
-    connect()
+    val connectJob = launch {
+      while (!closedByUs) {
+        val sessionEnded = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val opened = runCatching { connectOnce(sessionEnded) }.getOrDefault(false)
+        if (!opened) {
+          trySend(
+            DanmakuEvent.Disconnected(
+              reason = if (msdkSigner == null) {
+                "抖音弹幕签名不可用（缺少 JS 引擎）"
+              } else {
+                "抖音弹幕连接失败"
+              },
+              willRetry = true,
+            ),
+          )
+          socket?.cancel()
+          socket = null
+          backoff.sleepNext()
+          continue
+        }
+        // Block until this session dies, then back off before the next attempt.
+        sessionEnded.await()
+        socket = null
+        if (!closedByUs) backoff.sleepNext()
+      }
+    }
 
     awaitClose {
       closedByUs = true
+      connectJob.cancel()
       heartbeatJob?.cancel()
-      ackJob?.cancel()
       socket?.close(1000, "client closed")
       socket = null
     }
   }.flowOn(Dispatchers.IO)
 
-  /**
-   * Douyin's heartbeat is a `PushFrame` with `payloadType = "hb"`; the server replies
-   * with the same type and expects the client to keep sending them.
-   */
   /**
    * Douyin's heartbeat reply, built by the protocol object.
    *
@@ -230,6 +303,12 @@ class DouyinAdapter(
   private fun buildHeartbeat(): ByteArray = DouyinDanmakuProtocol.heartbeatFrame()
 
   companion object {
-    const val DANMAKU_URL = "wss://webcast5-ws-web-lf.douyin.com/webcast/im/push/v2/"
+    /**
+     * How long a handshake may take before it is treated as rejected.
+     *
+     * Douyin accepts the socket only after validating `signature`, so a wrong token shows up
+     * as a handshake that never completes rather than an HTTP error.
+     */
+    private const val OPEN_TIMEOUT_MILLIS = 12_000L
   }
 }

@@ -111,13 +111,10 @@ class DouyinApi(private val http: HttpClient) {
       "partition" to partition,
       "partition_type" to partitionType,
       "req_from" to "2",
-      "msToken" to "",
+      // An empty msToken is rejected; the web client always sends a 107 character value.
+      "msToken" to DouyinSigner.randomMsToken(),
     )
-    val query = params.joinToString("&") { (key, value) ->
-      key + "=" + encodeQueryValue(value)
-    }
-    val bogus = aBogus(query, DouyinSigner.USER_AGENT)
-    val url = "$URL_PARTITION_V2?" + query + "&a_bogus=" + encodeQueryValue(bogus)
+    val url = "$URL_PARTITION_V2?${DouyinSigner.signQuery(params)}"
 
     val response = http.get(url, headers = headers())
     val root = response.requireSuccess().let { parseObject(it.body, "partition") }
@@ -198,10 +195,6 @@ class DouyinApi(private val http: HttpClient) {
     )
   }
 
-  /** Percent-encodes one query value the way the web client does. */
-  private fun encodeQueryValue(value: String): String =
-    java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
-
   private fun JsonObject.str(key: String): String? =
     (this[key] as? JsonElement)?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 
@@ -225,8 +218,7 @@ class DouyinApi(private val http: HttpClient) {
       "offset" to ((page - 1) * PAGE_SIZE).toString(),
       "count" to PAGE_SIZE.toString(),
     )
-    val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
-    val url = "$URL_SEARCH?${signed.queryString()}"
+    val url = "$URL_SEARCH?${DouyinSigner.signQuery(params)}"
     val response = http.get(url, headers = headers())
     val root = response.requireSuccess().let { parseObject(it.body, "search") }
     val list = root["data"]?.jsonArray ?: JsonArray(emptyList())
@@ -237,6 +229,26 @@ class DouyinApi(private val http: HttpClient) {
     }
     return rooms to (rooms.size >= PAGE_SIZE)
   }
+
+  /**
+   * Fetches the room page HTML.
+   *
+   * The danmaku handshake needs two values that only appear in the page: the numeric
+   * `room.id_str` and a `user_unique_id`. Neither is returned by any of the JSON endpoints,
+   * so the page is the only source. A failure here is not fatal — the caller falls back to
+   * the API for the room id and to a random id for the visitor — hence an empty string.
+   */
+  suspend fun roomPageHtml(webRid: String): String = runCatching {
+    http.get(
+      "https://live.douyin.com/$webRid",
+      headers = mapOf(
+        "User-Agent" to DouyinSigner.USER_AGENT,
+        "Referer" to "https://live.douyin.com/",
+        "Cookie" to DouyinSigner.DEFAULT_COOKIE,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      ),
+    ).requireSuccess().body
+  }.getOrDefault("")
 
   suspend fun roomInfo(roomId: String): DouyinRoomInfo {
     val params = listOf(
@@ -255,8 +267,7 @@ class DouyinApi(private val http: HttpClient) {
       "browser_version" to DouyinSigner.BROWSER_VERSION,
       "web_rid" to roomId,
     )
-    val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
-    val url = "$URL_ENTER?${signed.queryString()}"
+    val url = "$URL_ENTER?${DouyinSigner.signQuery(params)}"
     val response = http.get(url, headers = headers())
 
     // The enter endpoint rejects unknown clients with an empty 200 body, so a feed
@@ -392,9 +403,9 @@ class DouyinApi(private val http: HttpClient) {
       "count" to "50",
       "offset" to "0",
     )
-    val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
+    val signedQuery = DouyinSigner.signQuery(params)
     val response = runCatching {
-      http.get("$URL_FEED?${signed.queryString()}", headers = headers()).requireSuccess()
+      http.get("$URL_FEED?$signedQuery", headers = headers()).requireSuccess()
     }.getOrNull() ?: return null
     val root = runCatching { parseObject(response.body, "feed") }.getOrNull() ?: return null
     val list = root["data"] as? JsonArray ?: return null
@@ -444,9 +455,17 @@ class DouyinApi(private val http: HttpClient) {
     return numeric.toDoubleOrNull()?.let { (it * multiplier).toLong() } ?: 0
   }
 
+  /**
+   * Request headers.
+   *
+   * The `Cookie` is not optional: Douyin answers the partition and feed endpoints with
+   * HTTP 200 and an empty body when there is no cookie, so a cookieless request looks
+   * exactly like an empty category.
+   */
   private fun headers(): Map<String, String> = mapOf(
     "User-Agent" to DouyinSigner.USER_AGENT,
     "Referer" to "https://live.douyin.com/",
+    "Cookie" to DouyinSigner.DEFAULT_COOKIE,
     "Accept" to "application/json, text/plain, */*",
     "Accept-Language" to "zh-CN,zh;q=0.9",
   )

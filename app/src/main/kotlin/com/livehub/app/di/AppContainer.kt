@@ -77,7 +77,14 @@ class AppContainer(
         scriptSigner = com.livehub.app.sync.DouyuRhinoSigner.from(applicationContext),
       ),
       HuyaAdapter(http = httpClient, webSocketClient = webSocketClient, assets = assetReader),
-      DouyinAdapter(http = httpClient, webSocketClient = webSocketClient, assets = assetReader),
+      DouyinAdapter(
+        http = httpClient,
+        webSocketClient = webSocketClient,
+        assets = assetReader,
+        // The danmaku handshake needs a token from the site's own webmssdk.js, evaluated by
+        // the same Rhino engine Douyu's signer uses. Without it the socket cannot open.
+        msdkSigner = com.livehub.app.sync.DouyinRhinoSigner.from(applicationContext),
+      ),
       BilibiliAdapter(
         http = httpClient,
         webSocketClient = webSocketClient,

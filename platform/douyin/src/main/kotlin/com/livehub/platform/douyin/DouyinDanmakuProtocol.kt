@@ -57,9 +57,6 @@ object DouyinDanmakuProtocol {
   /** `PushFrame.payloadEncoding`. */
   const val FIELD_PAYLOAD_ENCODING = 6
 
-  /** `PushFrame.internalExt`, the routing token echoed in an ack. */
-  const val FIELD_INTERNAL_EXT = 5
-
   /** `ChatMessage.content`. */
   const val FIELD_CHAT_CONTENT = 3
 
@@ -184,9 +181,40 @@ object DouyinDanmakuProtocol {
     return out.toByteArray()
   }
 
-  /** Reads the `internalExt` routing token from a PushFrame. */
-  fun internalExt(frame: ByteArray): String =
-    DouyinProto.stringField(frame, FIELD_INTERNAL_EXT).orEmpty()
+  /**
+   * Whether a frame asks to be acknowledged.
+   *
+   * `Response.needAck` is field **9** (varint), and `internalExt` is field **5** of the
+   * decompressed response. Acking every frame on a timer instead — the previous behaviour —
+   * does not satisfy the server: it waits for an ack keyed to the specific frame, so the
+   * socket is dropped after the first few messages.
+   */
+  fun needsAck(frame: ByteArray): Boolean {
+    val payload = DouyinProto.bytesField(frame, FIELD_PUSH_PAYLOAD) ?: return false
+    val response = decompress(payload) ?: return false
+    return DouyinProto.parse(response).any { field ->
+      field.number == FIELD_NEED_ACK && field.asBool()
+    }
+  }
+
+  /** `Response.needAck`. */
+  const val FIELD_NEED_ACK = 9
+
+  /** `Response.internalExt`, the routing token echoed in an ack. */
+  const val FIELD_RESPONSE_INTERNAL_EXT = 5
+
+  /**
+   * Reads the `internalExt` routing token.
+   *
+   * It lives inside the decompressed `Response` (field 5), not on the `PushFrame`, which is
+   * why reading it straight off the frame always returned an empty string and the ack
+   * carried no token.
+   */
+  fun internalExt(frame: ByteArray): String {
+    val payload = DouyinProto.bytesField(frame, FIELD_PUSH_PAYLOAD) ?: return ""
+    val response = decompress(payload) ?: return ""
+    return DouyinProto.stringField(response, FIELD_RESPONSE_INTERNAL_EXT).orEmpty()
+  }
 
   /** Reads the heartbeat `logId` echoed by the server. */
   fun logId(frame: ByteArray): Long = DouyinProto.longField(frame, FIELD_LOG_ID) ?: 0L
