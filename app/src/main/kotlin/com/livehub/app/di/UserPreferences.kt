@@ -39,8 +39,6 @@ data class UserSettings(
   val followRecords: String = "",
   /** Serialised preference records used by the sync engine. */
   val preferenceRecords: String = "",
-  /** Serialised pinned-category records, including tombstones. */
-  val categoryRecords: String = "",
   /**
    * Secret this device presents to paired peers.
    *

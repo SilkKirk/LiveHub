@@ -241,12 +241,10 @@ class PreferencesSyncTarget(private val preferences: UserPreferences) : SyncTarg
 class AppSyncTargets(
   private val followStore: FollowStore,
   private val preferences: UserPreferences,
-  private val categoryStore: CategorySubscriptionStore,
 ) : SyncTargets {
   private val targets = listOf(
     FollowSyncTarget(followStore),
     PreferencesSyncTarget(preferences),
-    CategorySyncTarget(categoryStore),
   ).associateBy { it.scope }
 
   override fun targetFor(scope: SyncScope): SyncTarget? = targets[scope]

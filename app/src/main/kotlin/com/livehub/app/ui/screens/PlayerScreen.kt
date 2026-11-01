@@ -255,6 +255,26 @@ internal fun PlayerContent(
           )
         }
 
+        // Tap toggles the chrome; double tap toggles pause.
+        //
+        // This layer has to come *before* the controls, not after. In a Box the last child is
+        // drawn on top and receives pointer events first, so declaring it last made it swallow
+        // every tap meant for the gear, reload and fullscreen buttons — they looked live but
+        // did nothing. Declared here, it sits under them and only sees taps that miss a
+        // control. Portrait only: full screen keeps the picture clean and relies on the bar.
+        if (!fullscreen) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .pointerInput(Unit) {
+                detectTapGestures(
+                  onTap = { controlsVisible = !controlsVisible },
+                  onDoubleTap = { paused = !paused },
+                )
+              },
+          )
+        }
+
         if (verticalFullBleed) {
           PlayerHeader(state = state, onAction = onAction, modifier = Modifier.align(Alignment.TopCenter))
         }
@@ -327,22 +347,6 @@ internal fun PlayerContent(
             onOpenSettings = onOpenSettings,
             onReload = { state.room?.let { onAction(UiAction.OpenRoom(it)) } },
             modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
-          )
-        }
-
-        // Tap toggles the chrome; double tap toggles pause. Portrait only — full screen
-        // keeps the picture clean and relies on the floating bar. Declared in portrait
-        // only so the gesture layer never covers the full-screen controls.
-        if (!fullscreen) {
-          Box(
-            modifier = Modifier
-              .fillMaxSize()
-              .pointerInput(Unit) {
-                detectTapGestures(
-                  onTap = { controlsVisible = !controlsVisible },
-                  onDoubleTap = { paused = !paused },
-                )
-              },
           )
         }
       }

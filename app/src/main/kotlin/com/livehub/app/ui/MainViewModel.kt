@@ -81,7 +81,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SelectPlatform -> selectPlatform(action.platform)
       is UiAction.SelectCategory -> selectCategory(action.category)
       is UiAction.SelectSubCategory -> selectSubCategory(action.category)
-      is UiAction.ToggleCategorySubscription -> toggleCategorySubscription(action.category)
       is UiAction.MoveFollow -> moveFollow(action.streamer, action.toIndex)
       UiAction.LoadMore -> loadMore()
       UiAction.Refresh -> refresh()
@@ -235,7 +234,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         _state.update {
           it.copy(
             categories = categories,
-            subscribedCategories = container.categoryStore.subscribed(),
             selectedCategory = first,
           )
         }
@@ -594,26 +592,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         lines = emptyList(),
         selectedLine = null,
         danmaku = emptyList(),
-      )
-    }
-  }
-
-  private fun toggleCategorySubscription(category: Category) {
-    container.categoryStore.toggle(
-      category = category,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    val subscribed = container.categoryStore.subscribed()
-    _state.update {
-      it.copy(
-        subscribedCategories = subscribed,
-        message = if (subscribed.any { c -> c.key == category.key }) {
-          "已订阅 ${category.name}"
-        } else {
-          "已取消订阅 ${category.name}"
-        },
       )
     }
   }

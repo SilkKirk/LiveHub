@@ -161,7 +161,7 @@ class ScreenshotTest {
 
   @Test
   fun homePinnedCategories() =
-    capture("03-home-pinned", baseState().copy(subscribedCategories = douyuCategories.take(3)))
+    capture("03-home-pinned", baseState().copy(selectedCategory = douyuCategories[2]))
 
   @Test
   fun homeLoading() = capture("04-home-loading", baseState().copy(rooms = emptyList(), loading = true))

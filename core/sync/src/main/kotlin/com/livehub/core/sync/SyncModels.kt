@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 /** Everything that can be synchronised between two LiveHub installs. */
 enum class SyncScope(val wireName: String, val displayName: String) {
   FOLLOWS("follows", "关注列表"),
-  CATEGORIES("categories", "分区订阅"),
   PREFERENCES("preferences", "播放与弹幕设置"),
   HISTORY("history", "搜索历史"),
   ;
@@ -14,7 +13,7 @@ enum class SyncScope(val wireName: String, val displayName: String) {
     fun fromWireName(name: String): SyncScope? =
       entries.firstOrNull { it.wireName.equals(name, ignoreCase = true) }
 
-    val default: Set<SyncScope> = setOf(FOLLOWS, CATEGORIES, PREFERENCES)
+    val default: Set<SyncScope> = setOf(FOLLOWS, PREFERENCES)
   }
 }
 

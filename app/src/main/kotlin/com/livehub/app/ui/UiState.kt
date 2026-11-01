@@ -17,7 +17,6 @@ data class UiState(
   val screen: Screen = Screen.Home,
   val platform: Platform = Platform.DOUYU,
   val categories: List<Category> = emptyList(),
-  val subscribedCategories: List<Category> = emptyList(),
   val selectedCategory: Category? = null,
   /**
    * Third level of browsing ("三级分类"), empty for platforms that do not have one.
@@ -98,8 +97,6 @@ sealed interface UiAction {
   data class SelectCategory(val category: Category) : UiAction
 
   data class SelectSubCategory(val category: Category) : UiAction
-
-  data class ToggleCategorySubscription(val category: Category) : UiAction
 
   data class MoveFollow(val streamer: Streamer, val toIndex: Int) : UiAction
 

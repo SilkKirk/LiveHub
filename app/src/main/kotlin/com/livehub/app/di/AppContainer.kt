@@ -112,10 +112,8 @@ class AppContainer(
 
   val followStore: FollowStore by lazy { FollowStore(preferences) }
 
-  val categoryStore: CategorySubscriptionStore by lazy { CategorySubscriptionStore(preferences) }
-
   val syncTargets: AppSyncTargets by lazy {
-    AppSyncTargets(followStore, preferences, categoryStore)
+    AppSyncTargets(followStore, preferences)
   }
 
   val syncEngine: SyncEngine by lazy {

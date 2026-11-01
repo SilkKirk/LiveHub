@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.FlowRow
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -23,8 +21,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -32,7 +28,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -174,11 +169,11 @@ private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
 /**
  * Two level category selector.
  *
- * The top row pins the user's subscribed categories; the 订阅/已订阅 button next to the
- * active category is what writes them. That button used to be missing entirely — the
- * action and its handler existed but nothing emitted it, so `subscribedCategories` could
- * only ever be populated by a sync from another device. Pinned entries are synchronised
- * between devices through the CATEGORIES scope.
+ * Row 1 is the group ("网游" / "手游" / …) for platforms that publish one; row 2 is the
+ * concrete category inside the active group; row 3 is the third level, which only Douyu
+ * publishes. Nothing here is pinnable — a subscribed-categories row and its 订阅 toggle used
+ * to sit above these, adding a permanent button to every screen for a feature that only
+ * repeated what selecting a category already does.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -186,9 +181,6 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
   if (state.categories.isEmpty()) return
   val parents = remember(state.categories) {
     state.categories.mapNotNull { it.parentName }.distinct()
-  }
-  val pinnedKeys = remember(state.subscribedCategories) {
-    state.subscribedCategories.map { it.key }.toSet()
   }
   // Categories of the group the user is currently in. With a single group (Douyin,
   // Huya) this is simply every category.
@@ -200,36 +192,8 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
       state.categories
     }
   }
-  val active = state.selectedSubCategory ?: state.selectedCategory
-  val activePinned = active != null && pinnedKeys.contains(active.key)
 
   Column(modifier = Modifier.fillMaxWidth()) {
-    if (state.subscribedCategories.isNotEmpty()) {
-      LazyRow(
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        items(state.subscribedCategories, key = { "pinned-${it.key}" }) { category ->
-          FilterChip(
-            selected = state.selectedCategory?.key == category.key ||
-              state.selectedSubCategory?.key == category.key,
-            onClick = { onAction(UiAction.SelectCategory(category)) },
-            label = { Text("★ ${category.name}") },
-            trailingIcon = {
-              // A pinned chip is the natural place to unpin from.
-              Icon(
-                Icons.Filled.Star,
-                contentDescription = "取消订阅 ${category.name}",
-                modifier = Modifier
-                  .size(14.dp)
-                  .clickable { onAction(UiAction.ToggleCategorySubscription(category)) },
-              )
-            },
-          )
-        }
-      }
-    }
-
     // Row 1: the group tabs, only when the platform actually has groups.
     if (parents.size > 1) {
       LazyRow(
@@ -247,52 +211,20 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
       }
     }
 
-    // Row 2: the concrete categories inside the active group, plus the pin toggle for
-    // whichever one is currently open.
-    Row(
+    // Row 2: the concrete categories inside the active group.
+    LazyRow(
+      contentPadding = PaddingValues(horizontal = 12.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      state = rememberLazyListState(),
       modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
     ) {
-      LazyRow(
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        state = rememberLazyListState(),
-        modifier = Modifier.weight(1f),
-      ) {
-        items(visibleCategories, key = { it.key }) { category ->
-          FilterChip(
-            selected = state.selectedCategory?.key == category.key &&
-              state.selectedSubCategory == null,
-            onClick = { onAction(UiAction.SelectCategory(category)) },
-            label = { Text(category.name) },
-            leadingIcon = if (pinnedKeys.contains(category.key)) {
-              {
-                Icon(
-                  Icons.Filled.Star,
-                  contentDescription = "已订阅",
-                  modifier = Modifier.size(14.dp),
-                )
-              }
-            } else {
-              null
-            },
-          )
-        }
-      }
-
-      if (active != null) {
-        TextButton(
-          onClick = { onAction(UiAction.ToggleCategorySubscription(active)) },
-          contentPadding = PaddingValues(horizontal = 8.dp),
-        ) {
-          Icon(
-            imageVector = if (activePinned) Icons.Filled.Star else Icons.Filled.StarBorder,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-          Spacer(Modifier.size(4.dp))
-          Text(if (activePinned) "已订阅" else "订阅", style = MaterialTheme.typography.labelMedium)
-        }
+      items(visibleCategories, key = { it.key }) { category ->
+        FilterChip(
+          selected = state.selectedCategory?.key == category.key &&
+            state.selectedSubCategory == null,
+          onClick = { onAction(UiAction.SelectCategory(category)) },
+          label = { Text(category.name) },
+        )
       }
     }
 
