@@ -197,20 +197,20 @@ class MainViewModelTest {
       idle()
     }
 
-    // Move the last room to the front.
-    viewModel.onAction(UiAction.MoveFollow(third, 0))
+    // Until the user reorders, the list is ordered by recency, so the newest follow
+    // comes first. Derive the starting order instead of assuming insertion order.
+    val before = state.followed.map { it.key }
+    assertEquals(3, before.size)
+
+    val moving = state.followed.last()
+    viewModel.onAction(UiAction.MoveFollow(moving, 0))
     idle()
 
-    assertEquals(
-      listOf(third.key, first.key, second.key),
-      state.followed.map { it.key },
-    )
+    val expected = listOf(moving.key) + before.filterNot { it == moving.key }
+    assertEquals(expected, state.followed.map { it.key })
 
     // And the store agrees after a reload.
-    assertEquals(
-      listOf(third.key, first.key, second.key),
-      container.followStore.followed().map { it.key },
-    )
+    assertEquals(expected, container.followStore.followed().map { it.key })
   }
 
   // ---------------------------------------------------------------- preferences ---
