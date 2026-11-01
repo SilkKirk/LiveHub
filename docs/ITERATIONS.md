@@ -893,3 +893,63 @@ CI run 18309181 全绿。`13-sync.png` 从 48484 字节变为 54060 字节，chi
 - **同步 `pull` 分页**：仍是整包返回，和上一轮给 `push` 做的一样。
 - **更多"够得着"断言**：给其他长列表页面（设置页、同步页日志）加同类测试。
 - **视觉对照**：剩余截图（1-6、9-10、12、16、20）尚未逐张检查。
+
+---
+
+## 第十四轮迭代：pull 分页收尾，以及一个 151MB 的下载为什么要挪到 Gradle
+
+### pull 也开始分片
+
+`push` 两轮前就按 500 条分片了，`pull` 却仍把整个 scope 塞进一个响应。现在 `pull`
+端点接受 `chunk` 参数，`LanSyncTransport.pull` 循环取回各片并在本地拼成一个 payload，
+所以传输层以上的代码完全无感。不带 `chunk` 时返回第 0 片，老的调用方式照旧能用。
+
+**一处诚实的限制**（写进代码注释而不是糊过去）：每片都是重新快照的，两次分片请求之间
+若有记录增删，分片边界会漂移，某条记录可能被传两次或漏掉。重复无害（合并按 key 幂等），
+漏掉的会在下次同步补回；而且只影响超过 500 条的 scope。要做到严格原子需要在协议里加
+快照令牌，对这个量级不值得。`buildPullPayload` 对越界 chunk 做钳制而不是报错。
+
+### 三次 CI 红灯，其实都是同一个 151MB 文件
+
+连续三轮 `Build & test` 红，报错都是：
+
+```
+initializationError: Failed to fetch maven artifact
+  org.robolectric:android-all-instrumented:14-robolectric-10818077-i7
+```
+
+上一轮我加过"预热缓存 + 重试三次"，这一轮看到三次预热**全部**失败。先确认这个坐标是
+真的：HTTP 200，**151,142,227 字节**。
+
+问题不在网络，在**下载位置**：Robolectric 是在测试 JVM 内部、类初始化时去 Maven Central
+拉这个 jar，落到 `~/.m2` —— 而 CI 里没有任何缓存持久化那个目录。于是每个干净的 runner
+都要在测试启动阶段重新下 151MB，任何一次慢或失败就同时打挂所有 Robolectric 测试。
+
+Gradle 不同：它的依赖缓存由 `gradle/actions/setup-gradle` 跨 run 持久化。所以改成由
+Gradle 解析这个 jar（`robolectricRuntime` 配置 + `copyRobolectricRuntime` 任务），再用
+`robolectric.offline=true` + `robolectric.dependency.dir` 指过去。坐标万一解析不到，
+构建会以一条点名该坐标的 Gradle 解析错误失败，比 N 个 `initializationError` 好排查得多。
+
+仓库里三个 Robolectric 测试都固定 `@Config(sdk = [34])`，一个 jar 够用。
+
+### 顺带修掉的编译错误
+
+上一轮 pull 分页的测试里写了 `assertTrue("msg", cond)` ——那是 JUnit 4 的参数顺序，而本
+项目的 JVM 测试用的是 Jupiter，message 在最后一个参数。改成 `assertTrue(cond, "msg")`。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（Robolectric 离线，含 pull 分页与钳制断言） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+CI run 21172066 全绿。新增测试：空手机 / 满平板的分片拉取（512 条）、越界 chunk 钳制。
+
+### 下一轮
+
+- **"够得着"断言**：设置页、同步页日志等长列表，用 `performScrollTo` 覆盖。
+- **视觉对照**：剩余截图（1-6、9-10、12、16、20）尚未逐张检查。
+- **`pull` 原子性**：如需严格一致，加快照令牌。
