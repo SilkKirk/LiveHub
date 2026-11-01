@@ -218,6 +218,11 @@ class DouyinDanmakuProtocolTest {
  * algorithm Douyin uses, so it could pass while every signed request was rejected. Those
  * functions are deleted; these tests cover the real transcription in `DouyinABogus.kt` and
  * the query assembly in [DouyinSigner].
+ *
+ * Note that the raw signature is *not* URL safe — it is base64 over the `s4` alphabet and
+ * ends with `=` — which is why it is percent-encoded when placed in a URL. An earlier
+ * version of these tests asserted URL safety and failed for that reason; the code was
+ * right and the assertion was wrong.
  */
 class DouyinSignerTest {
 
@@ -236,14 +241,15 @@ class DouyinSignerTest {
     assertTrue(a != b, "a different query must produce a different signature")
   }
 
+  /** The signature is base64 over a custom alphabet and carries a `=` pad. */
   @Test
-  fun `a-bogus is url safe`() {
+  fun `a-bogus is base64 shaped`() {
     val value = aBogus("aid=6383&count=20", DouyinSigner.USER_AGENT)
     assertTrue(value.isNotEmpty())
-    assertTrue(value.none { it == '+' || it == '/' || it == '=' }, "value was $value")
+    assertTrue(value.endsWith("="), "expected a base64 pad, got $value")
     assertTrue(
-      value.all { it.isLetterOrDigit() || it == '-' || it == '_' },
-      "value was $value",
+      value.dropLast(1).all { it.isLetterOrDigit() || it == '+' || it == '/' || it == '-' },
+      "unexpected characters: $value",
     )
   }
 
@@ -262,6 +268,22 @@ class DouyinSignerTest {
     assertTrue(query.startsWith("aid=6383&count=20&"), "order changed: $query")
     assertTrue(query.contains("&a_bogus="), "missing signature: $query")
     assertTrue(!query.contains("X-Bogus"), "the invented X-Bogus must not be sent")
+  }
+
+  /**
+   * The signature must be percent-encoded before it goes into a URL.
+   *
+   * `aBogus` emits `/`, `+` and `=`, each of which changes the meaning of a query string.
+   */
+  @Test
+  fun `signQuery percent-encodes the signature`() {
+    val query = DouyinSigner.signQuery(listOf("aid" to "6383"))
+    val raw = aBogus("aid=6383", DouyinSigner.USER_AGENT)
+    val encoded = query.substringAfter("&a_bogus=")
+
+    assertTrue(!encoded.contains('/'), "unencoded slash in $encoded")
+    assertTrue(!encoded.contains('+'), "unencoded plus in $encoded")
+    assertTrue(encoded != raw, "the signature was pasted in raw")
   }
 
   @Test

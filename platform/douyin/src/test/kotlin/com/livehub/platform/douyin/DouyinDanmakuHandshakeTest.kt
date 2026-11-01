@@ -117,14 +117,23 @@ class DouyinDanmakuHandshakeTest {
     assertEquals("", DouyinDanmakuHandshake.extractUserUniqueId("<html></html>"))
   }
 
+  /**
+   * The page's own `roomInfo.roomId`, when it carries one.
+   *
+   * Verified against the live page: it currently sends `\"roomId\":\"\"` for every room
+   * (checked on four web_rids, including two on air), so this branch does not fire in
+   * practice and the API fallback in `DouyinAdapter.resolveInit` is what actually supplies
+   * the numeric id. The pattern is kept because the field is the right one and Douyin has
+   * populated it before; the test pins the shape rather than claiming it is reachable.
+   */
   @Test
-  fun `room id is read from the roomInfo block`() {
-    val escaped = """{"path":"\\"roomInfo\\":{\\"room\\":{\\"id_str\\":\\"7380123456789012345\\"}}"}"""
+  fun `room id is read from the roomInfo block when populated`() {
+    val escaped = """{"s":"\"roomInfo\":{\"roomId\":\"7380123456789012345\",\"web_rid\":\"164485212\"}"}"""
     assertEquals("7380123456789012345", DouyinDanmakuHandshake.extractRoomId(escaped))
-    assertEquals(
-      "7380123456789012345",
-      DouyinDanmakuHandshake.extractRoomId("""{"id_str":"7380123456789012345"}"""),
-    )
+
+    // The shape the live page actually sends: an empty roomId, which must not be returned.
+    val empty = """{"s":"\"roomInfo\":{\"roomId\":\"\",\"web_rid\":\"164485212\"}"}"""
+    assertEquals("", DouyinDanmakuHandshake.extractRoomId(empty))
     assertEquals("", DouyinDanmakuHandshake.extractRoomId(""))
   }
 

@@ -107,11 +107,19 @@ object DouyinDanmakuHandshake {
     return ""
   }
 
-  /** Extracts the numeric `id_str` from the room page HTML. */
+  /**
+   * Extracts the numeric room id from the room page HTML.
+   *
+   * The page embeds `\"roomInfo\":{\"roomId\":\"…\",\"web_rid\":\"…\"}`. Verified against the
+   * live page on four web_rids: `roomId` is currently an **empty string** every time, so in
+   * practice the caller has to fall back to the API. The pattern is kept because the field is
+   * the correct one and has carried a value before; an empty result simply means "not in the
+   * HTML", which the caller already handles.
+   */
   fun extractRoomId(html: String): String {
     val patterns = listOf(
-      Regex("""\\"roomInfo\\":\{\\"room\\":\{\\"id_str\\":\\"(\d+)\\""""),
-      Regex(""""id_str"\s*:\s*"(\d+)""""),
+      Regex("""\\"roomInfo\\":\{\\"roomId\\":\\"(\d+)\\""""),
+      Regex(""""roomInfo"\s*:\s*\{\s*"roomId"\s*:\s*"(\d+)""""),
     )
     patterns.forEach { pattern ->
       pattern.find(html)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return it }
