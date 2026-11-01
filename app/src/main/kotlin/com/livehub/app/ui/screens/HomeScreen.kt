@@ -3,7 +3,9 @@ package com.livehub.app.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -106,30 +108,26 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
   }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    // `weight(1f)` on a LazyRow lets the last chip be squeezed to "哔", so the row is
-    // given the remaining width instead and scrolls when it overflows.
-    LazyRow(
+    // A horizontally scrolling row clipped the last chip to "哔" on narrow screens and
+    // gave no hint that more existed. Wrapping keeps every platform fully readable and
+    // still fits on one line whenever the screen is wide enough.
+    FlowRow(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
       modifier = Modifier.weight(1f, fill = true),
     ) {
-      items(Platform.supported) { platform ->
+      Platform.entries.forEach { platform ->
         FilterChip(
           selected = state.platform == platform,
           onClick = { onAction(UiAction.SelectPlatform(platform)) },
-          label = {
-            Text(
-              text = platform.displayName,
-              maxLines = 1,
-              softWrap = false,
-              overflow = TextOverflow.Visible,
-            )
-          },
+          label = { Text(platform.displayName, maxLines = 1, softWrap = false) },
         )
       }
     }

@@ -255,9 +255,15 @@ class ScreenshotTest {
   )
 
   private fun capture(name: String, state: UiState) {
+    composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
       LiveHubRoot(state = state, onAction = { })
     }
+    // Compose test rules advance the virtual clock automatically; with the player's
+    // auto-hide timer that meant the chrome had already faded before the capture, so
+    // the screenshot never showed the controls. Freeze the clock and render the first
+    // frame instead.
+    composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
 
     val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
