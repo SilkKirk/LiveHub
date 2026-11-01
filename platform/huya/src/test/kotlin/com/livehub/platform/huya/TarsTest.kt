@@ -234,6 +234,10 @@ class TarsTest {
     // Either a short read or an exception is acceptable; hanging is not.
     assertTrue(value.isSuccess || value.isFailure)
   }
+
+  /** Decodes a hex string into bytes; used to embed captured network frames verbatim. */
+  private fun hexToBytes(hex: String): ByteArray =
+    hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
 
 class HuyaDanmakuProtocolTest {
@@ -320,8 +324,4 @@ class HuyaDanmakuProtocolTest {
   fun `decodeText handles empty input`() {
     assertEquals("", HuyaDanmakuProtocol.decodeText(ByteArray(0)))
   }
-
-  /** Decodes a hex string into bytes; used to embed captured network frames verbatim. */
-  private fun hexToBytes(hex: String): ByteArray =
-    hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
