@@ -121,19 +121,12 @@ jobs:
             set +e
             ./gradlew connectedDebugAndroidTest --stacktrace
             TEST_EXIT=$?
+            # ScreenshotTest writes the renders into the shared Download folder, so a
+            # plain pull works: pull it inside the script, while the device is still up.
+            # The emulator-runner action tears the device down as soon as this script ends.
             mkdir -p "$GITHUB_WORKSPACE/ui-screenshots"
-            # Resolve the installed package instead of hard-coding it: the debug variant
-            # carries an applicationIdSuffix, which is easy to get wrong by hand.
-            PKG="$(adb shell pm list packages | grep -o 'com\.livehub\.app[^ ]*' | head -n1 | tr -d '\r')"
-            echo "resolved package: ${PKG:-<none>}"
-            if [ -n "$PKG" ]; then
-              # The app's external files dir is only readable through run-as, so copy the
-              # renders into the shared Download folder first and pull them from there.
-              adb shell run-as "$PKG" ls "/sdcard/Android/data/$PKG/files/screenshots" || true
-              adb shell run-as "$PKG" cp -r \
-                "/sdcard/Android/data/$PKG/files/screenshots" /sdcard/Download/livehub-shots || true
-              adb pull /sdcard/Download/livehub-shots "$GITHUB_WORKSPACE/ui-screenshots" || true
-            fi
+            adb shell ls -la /sdcard/Download/livehub-shots || true
+            adb pull /sdcard/Download/livehub-shots "$GITHUB_WORKSPACE/ui-screenshots" || true
             ls -la "$GITHUB_WORKSPACE/ui-screenshots" || true
             exit $TEST_EXIT
 

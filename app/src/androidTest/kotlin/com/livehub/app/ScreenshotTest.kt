@@ -1,5 +1,6 @@
 package com.livehub.app
 
+import android.os.Environment
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -42,8 +43,20 @@ class ScreenshotTest {
 
   private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
-  private val outputDir: File by lazy {
-    File(context.getExternalFilesDir(null), "screenshots").apply { mkdirs() }
+  /**
+   * Renders are written both to the app's external files dir and to the shared
+   * Download folder. The CI runner tears the emulator down as soon as the test task
+   * finishes, after which `adb` reports "device offline", so the shared copy is the
+   * one the workflow can actually pull while the device is still alive.
+   */
+  private val outputDirs: List<File> by lazy {
+    listOfNotNull(
+      File(context.getExternalFilesDir(null), "screenshots"),
+      File(
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+        "livehub-shots",
+      ),
+    ).onEach { runCatching { it.mkdirs() } }
   }
 
   // ---------------------------------------------------------------- fake data ---
@@ -248,8 +261,12 @@ class ScreenshotTest {
     composeRule.waitForIdle()
 
     val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
-    FileOutputStream(File(outputDir, "$name.png")).use { out ->
-      bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+    outputDirs.forEach { dir ->
+      runCatching {
+        FileOutputStream(File(dir, "$name.png")).use { out ->
+          bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+        }
+      }
     }
     bitmap.recycle()
   }
