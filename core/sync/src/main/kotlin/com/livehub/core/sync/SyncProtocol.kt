@@ -19,6 +19,14 @@ data class SyncEnvelope(
   /** Echoed by the responder so the caller can detect a version mismatch. */
   val serverDeviceId: Long = 0,
   val serverDeviceName: String = "",
+  /**
+   * Port the sender's own server is listening on.
+   *
+   * The LAN server binds an ephemeral port when the preferred one is taken, and the
+   * peer cannot guess it. Carrying it in the handshake is what lets the other side
+   * record a reachable address instead of assuming the default.
+   */
+  val preferredPort: Int = 0,
   /** Set on error responses. */
   val error: String? = null,
   /** The payload being pushed or returned. */

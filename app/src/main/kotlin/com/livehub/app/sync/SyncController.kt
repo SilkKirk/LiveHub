@@ -95,7 +95,11 @@ class SyncController(
             expectedCode = expected,
           )
           val peer = result.getOrNull() ?: return null
-          addressBook.addManual(envelope.deviceId, envelope.deviceName, remoteAddress, DEFAULT_PORT)
+          // Record where the *peer* is listening. `remoteAddress` is their IP but the
+          // port must be the one their server advertised, not our own default: the
+          // handshake is the only moment we learn it.
+          val remotePort = envelope.preferredPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
+          addressBook.addManual(envelope.deviceId, envelope.deviceName, remoteAddress, remotePort)
           return peer.sharedSecret to peer
         }
 
@@ -179,6 +183,7 @@ class SyncController(
       deviceId = preferences.deviceId,
       deviceName = preferences.deviceName,
       secret = "",
+      preferredPort = listeningPort,
       payload = SyncPayload(
         scope = "pair",
         sourceDeviceId = preferences.deviceId,

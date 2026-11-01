@@ -70,7 +70,13 @@ class CrossDeviceSyncTest {
               expectedCode = PAIRING_CODE,
             )
             val peer = result.getOrNull() ?: return null
-            addressBook.addManual(envelope.deviceId, envelope.deviceName, "127.0.0.1", port)
+            // Record where the *caller* listens, which the handshake told us.
+            addressBook.addManual(
+              envelope.deviceId,
+              envelope.deviceName,
+              "127.0.0.1",
+              envelope.preferredPort,
+            )
             return peer.sharedSecret to peer
           }
 
@@ -114,6 +120,7 @@ class CrossDeviceSyncTest {
         deviceId = id,
         deviceName = name,
         secret = "",
+        preferredPort = port,
         payload = SyncPayload(
           scope = "pair",
           sourceDeviceId = id,
