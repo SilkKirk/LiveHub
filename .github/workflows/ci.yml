@@ -18,12 +18,20 @@ env:
   # Keep Gradle from writing to the read-only GitHub token path.
   GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
+# The three jobs below are independent on purpose: they start together, so a push costs
+# as long as the slowest one rather than the sum of all three. Before this split the
+# release build sat inside `verify`, and the emulator job waited on `verify` with
+# `needs:`, so every green push took lint + tests + debug + R8 + emulator (~10 minutes)
+# even though the work itself is ~10 minutes of *runner* time either way.
+#
+# Do not reintroduce `needs:` between them. Serialising saves one wasted emulator boot
+# on a red push and costs a full emulator run on every green one.
 jobs:
   # ---------------------------------------------------------------- verify ----
   verify:
     name: Build & test
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -100,9 +108,6 @@ jobs:
       - name: Assemble debug
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Assemble release (unsigned)
-        run: ./gradlew :app:assembleRelease --stacktrace
-
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -123,10 +128,49 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # --------------------------------------------------------------- release ----
+  # Split out of `verify` so R8 runs *alongside* lint and the tests instead of in front of
+  # them. It is the most expensive single step of the pipeline (~3 minutes when a change
+  # touches sources, ~20s when the build cache already holds the outputs) and nothing in
+  # `verify` consumes its result.
+  release:
+    name: Release assembly
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure Android SDK components
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$SDK_ROOT" ANDROID_HOME="$SDK_ROOT"
+          SDKM="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 2 -name sdkmanager -type f 2>/dev/null | sort | tail -n1 || true)"
+          if [ -n "$SDKM" ]; then
+            yes 2>/dev/null | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-37.2" "build-tools;37.0.0" "platform-tools" >/dev/null || true
+          fi
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      # Catches R8 / ProGuard / resource-shrinking breakage that a debug build cannot:
+      # minification only runs here. `release.yml` builds the same variant for a tag, so a
+      # regression is caught before the release is cut rather than at tag time.
+      - name: Assemble release (unsigned)
+        run: ./gradlew :app:assembleRelease --stacktrace
+
   # ------------------------------------------------------------- instrument ---
   instrumented:
     name: Instrumented tests
-    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -141,6 +185,13 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # The emulator action boots the device first and only then runs the script, so
+      # without this step a compile error would burn a full boot before failing. Building
+      # here also leaves `connectedDebugAndroidTest` with nothing to do but install and
+      # run, which keeps the device's uptime to the part that actually needs a device.
+      - name: Build app and test APKs
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -151,11 +202,17 @@ jobs:
       # Runs *inside* the emulator script: the runner tears the device down as soon as
       # this script exits, so the screenshots must be pulled while it is still alive.
       # `|| true` keeps a screenshot failure from masking a real test failure.
+      #
+      # `google_atd` is Google's "Automated Test Device" image: same framework, no Play
+      # Store and stripped system apps, which is what makes it boot noticeably faster than
+      # `google_apis`. These tests only reach the Android framework, DataStore and Compose,
+      # so they need nothing the full image adds. If the image ever fails to resolve for
+      # this API level, `target: google_apis` is the drop-in revert.
       - name: Run instrumented tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
-          target: google_apis
+          target: google_atd
           arch: x86_64
           disable-animations: true
           script: |

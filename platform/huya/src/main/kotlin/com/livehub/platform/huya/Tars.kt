@@ -230,14 +230,28 @@ object Tars {
       }
     }
 
-    /** Advances to [tag] or returns null when the stream is exhausted. */
+    /**
+     * Advances to [tag] and returns its type, or null when the struct does not contain it.
+     *
+     * TARS writes fields in tag order and omits any field left at its default, so a tag that
+     * is skipped over simply is not present. Throwing here treated an ordinary optional field
+     * as a protocol error and made the caller drop the whole message: a live frame carrying
+     * the nickname at tag 2 but no tag 3 threw `missing tag 3 (saw 4)` and was discarded.
+     *
+     * On a miss the position is rewound to just before the larger tag, so the caller can ask
+     * for that one next.
+     */
     private fun requireHead(tag: Int): Int? {
       while (position < data.size) {
+        val mark = position
         val (currentTag, type) = readHead()
         lastTag = currentTag
         if (type == Type.STRUCT_END) return null
         if (currentTag == tag) return type
-        if (currentTag > tag) throw IllegalStateException("missing tag $tag (saw $currentTag)")
+        if (currentTag > tag) {
+          position = mark
+          return null
+        }
         skip(type)
       }
       return null
