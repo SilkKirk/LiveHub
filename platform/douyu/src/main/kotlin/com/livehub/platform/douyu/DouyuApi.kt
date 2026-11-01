@@ -241,7 +241,15 @@ class DouyuApi(private val http: HttpClient) {
     cdn: String,
     rate: Int,
   ): DyPlayResponse {
-    val body = "$signData&cdn=${encode(cdn)}&rate=$rate"
+    // `ver` / `iar` / `ive` / `hevc` / `fa` are part of the payload the web client sends.
+    // Omitting them makes getH5Play answer HTTP 403 on a valid signature.
+    val body = buildString {
+      append(signData)
+      append("&cdn=").append(encode(cdn))
+      append("&rate=").append(rate)
+      append("&ver=").append(encode(WEB_VERSION))
+      append("&iar=1&ive=1&hevc=0&fa=0")
+    }
     val response: HttpResponse = http.postForm(
       "$URL_GET_H5_PLAY/$realRoomId",
       body = body,
@@ -264,6 +272,8 @@ class DouyuApi(private val http: HttpClient) {
     DouyuResponseRules.requireJson(body = body, code = code, label = label)
 
   companion object {
+    /** Douyu web client build; getH5Play rejects a payload without it. */
+    const val WEB_VERSION = "Douyu_223061205"
     const val URL_WEB = "https://www.douyu.com"
     const val URL_CATEGORIES = "https://m.douyu.com/api/cate/list"
     /** Prefix marking a category id as a level-3 sub-category rather than a cate2. */

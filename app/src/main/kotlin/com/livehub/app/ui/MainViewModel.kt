@@ -32,6 +32,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   val state: StateFlow<UiState> = _state.asStateFlow()
 
   private var roomsJob: Job? = null
+  private var subCategoriesJob: Job? = null
   private var searchJob: Job? = null
   private var playbackJob: Job? = null
   private var danmakuJob: Job? = null
@@ -68,6 +69,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     when (action) {
       is UiAction.SelectPlatform -> selectPlatform(action.platform)
       is UiAction.SelectCategory -> selectCategory(action.category)
+      is UiAction.SelectSubCategory -> selectSubCategory(action.category)
       is UiAction.ToggleCategorySubscription -> toggleCategorySubscription(action.category)
       is UiAction.MoveFollow -> moveFollow(action.streamer, action.toIndex)
       UiAction.LoadMore -> loadMore()
@@ -149,6 +151,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         platform = platform,
         categories = emptyList(),
         selectedCategory = null,
+        subCategories = emptyList(),
+        selectedSubCategory = null,
         rooms = emptyList(),
         screen = Screen.Home,
         error = null,
@@ -185,8 +189,37 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
+  /**
+   * Opens a category, then asks the platform whether it has a third level.
+   *
+   * Only Douyu publishes one. When it answers with sub-categories the home screen shows a
+   * third chip row; selecting a chip narrows the list further without re-fetching the
+   * parent.
+   */
   private fun selectCategory(category: Category) {
-    _state.update { it.copy(selectedCategory = category, rooms = emptyList()) }
+    _state.update {
+      it.copy(
+        selectedCategory = category,
+        selectedSubCategory = null,
+        subCategories = emptyList(),
+        rooms = emptyList(),
+      )
+    }
+    nextCursor = null
+    loadRooms(_state.value.platform, category, reset = true)
+
+    subCategoriesJob?.cancel()
+    subCategoriesJob = viewModelScope.launch {
+      val children = runCatching {
+        container.platformRepository.subCategories(_state.value.platform, category.id)
+      }.getOrDefault(emptyList())
+      _state.update { if (it.selectedCategory?.key == category.key) it.copy(subCategories = children) else it }
+    }
+  }
+
+  /** Narrows the list to a third level category, keeping the parent selected. */
+  private fun selectSubCategory(category: Category) {
+    _state.update { it.copy(selectedSubCategory = category, rooms = emptyList()) }
     nextCursor = null
     loadRooms(_state.value.platform, category, reset = true)
   }

@@ -37,6 +37,10 @@ class ResilientPlatformRepository(
     slug: String? = null,
   ): RoomPage = withRetry { gateway.rooms(platform, categoryId, cursor, slug) }
 
+  /** Third level of browsing, cached alongside the list it belongs to. */
+  suspend fun subCategories(platform: Platform, categoryId: String): List<Category> =
+    withRetry { gateway.subCategories(platform, categoryId) }
+
   suspend fun search(platform: Platform, keyword: String, cursor: String? = null): RoomPage =
     withRetry { gateway.search(platform, keyword, cursor) }
 

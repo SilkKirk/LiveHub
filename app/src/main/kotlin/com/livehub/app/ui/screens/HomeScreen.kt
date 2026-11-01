@@ -243,5 +243,21 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
         )
       }
     }
+
+    // Row 3: the third level, offered only by platforms that publish one (Douyu).
+    if (state.subCategories.isNotEmpty()) {
+      LazyRow(
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(state.subCategories, key = { "sub-${it.key}" }) { category ->
+          FilterChip(
+            selected = state.selectedSubCategory?.key == category.key,
+            onClick = { onAction(UiAction.SelectSubCategory(category)) },
+            label = { Text(category.name, maxLines = 1) },
+          )
+        }
+      }
+    }
   }
 }

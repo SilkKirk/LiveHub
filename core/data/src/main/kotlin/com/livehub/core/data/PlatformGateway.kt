@@ -57,6 +57,10 @@ class PlatformGateway(private val registry: PlatformRegistry) {
     slug: String? = null,
   ): RoomPage = requireAdapter(platform).rooms(categoryId, cursor, slug)
 
+  /** Third level of browsing, empty when the platform has none. */
+  suspend fun subCategories(platform: Platform, categoryId: String): List<Category> =
+    requireAdapter(platform).subCategories(categoryId)
+
   suspend fun search(platform: Platform, keyword: String, cursor: String? = null): RoomPage =
     requireAdapter(platform).search(keyword, cursor)
 

@@ -73,9 +73,34 @@ class BilibiliApi(
     }
   }
 
+  /**
+   * One page of a category.
+   *
+   * `second/getList` is risk-controlled: a `w_webid` that the server has started
+   * rejecting (which happens after the playback endpoints touch the same client) is
+   * answered with `code = -352`, not with an HTTP error. The identifier is therefore
+   * dropped and re-scraped once before the failure is surfaced, which is what makes a
+   * category keep working after the user watches a stream and comes back.
+   */
   private suspend fun areaRooms(area: BilibiliArea, page: Int): Pair<List<Streamer>, Boolean> {
+    val first = requestAreaPage(area, page, accessId())
+    if (first["code"]?.jsonPrimitive?.intOrNull == RISK_CONTROL_CODE) {
+      cachedAccessId = null
+      accessIdFetchedAt = 0
+      val retry = requestAreaPage(area, page, accessId())
+      ensureSuccess(retry, "B站分区列表获取失败")
+      return parseAreaPage(retry)
+    }
+    ensureSuccess(first, "B站分区列表获取失败")
+    return parseAreaPage(first)
+  }
+
+  private suspend fun requestAreaPage(
+    area: BilibiliArea,
+    page: Int,
+    accessId: String,
+  ): JsonObject {
     val wts = System.currentTimeMillis() / 1000
-    val accessId = accessId()
     val ordered = listOf(
       "area_id" to area.areaId,
       "page" to page.toString(),
@@ -95,8 +120,10 @@ class BilibiliApi(
         "Cookie" to "buvid3=i;",
       ),
     )
-    val root = response.requireSuccess().let { parseObject(it.body, "second/getList") }
-    ensureSuccess(root, "B站分区列表获取失败")
+    return response.requireSuccess().let { parseObject(it.body, "second/getList") }
+  }
+
+  private fun parseAreaPage(root: JsonObject): Pair<List<Streamer>, Boolean> {
     val list = root["data"]?.jsonObject?.get("list")?.jsonArray ?: JsonArray(emptyList())
     val rooms = list.mapNotNull { parseRoom(it) }
     return rooms to (rooms.size >= DEFAULT_PAGE_SIZE)
@@ -497,6 +524,9 @@ class BilibiliApi(
     const val DEFAULT_PAGE_SIZE = 20
     const val NAV_TTL_MILLIS = 6L * 60 * 60 * 1000
     const val ACCESS_ID_TTL_MILLIS = 30L * 60 * 1000
+
+    /** Bilibili answers this when the `w_webid` is risk-controlled. */
+    const val RISK_CONTROL_CODE = -352
 
     // Stable fallbacks: used only when the live endpoints are unreachable so the
     // feature degrades instead of failing outright.

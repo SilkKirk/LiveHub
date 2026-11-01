@@ -19,6 +19,12 @@ data class UiState(
   val categories: List<Category> = emptyList(),
   val subscribedCategories: List<Category> = emptyList(),
   val selectedCategory: Category? = null,
+  /**
+   * Third level of browsing ("三级分类"), empty for platforms that do not have one.
+   * Douyu is the only platform that publishes it.
+   */
+  val subCategories: List<Category> = emptyList(),
+  val selectedSubCategory: Category? = null,
   val rooms: List<Streamer> = emptyList(),
   val followed: List<Streamer> = emptyList(),
   val searchQuery: String = "",
@@ -62,6 +68,7 @@ sealed interface UiAction {
   data class SelectPlatform(val platform: Platform) : UiAction
 
   data class SelectCategory(val category: Category) : UiAction
+data class SelectSubCategory(val category: Category) : UiAction
 
   data class ToggleCategorySubscription(val category: Category) : UiAction
 
