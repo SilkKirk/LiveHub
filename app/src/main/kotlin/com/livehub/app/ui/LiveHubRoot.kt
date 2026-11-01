@@ -1,9 +1,13 @@
 package com.livehub.app.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -21,8 +25,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.screens.FollowScreen
 import com.livehub.app.ui.screens.HomeScreen
 import com.livehub.app.ui.screens.PlayerScreen
@@ -57,10 +64,29 @@ fun LiveHubRoot(
     }
   }
 
+  // System back leaves the player (and any non-home tab) instead of closing the app.
+  BackHandler(enabled = state.screen != Screen.Home) {
+    onAction(UiAction.Back)
+  }
+
   LiveHubTheme(mode = themeMode) {
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
       if (state.screen == Screen.Player) {
-        PlayerScreen(state = state, onAction = onAction)
+        // Swipe from the left edge is the gesture users expect for "go back".
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+              detectHorizontalDragGestures { change, dragAmount ->
+                change.consume()
+                if (dragAmount > SWIPE_THRESHOLD_PX) {
+                  onAction(UiAction.ClosePlayer)
+                }
+              }
+            },
+        ) {
+          PlayerScreen(state = state, onAction = onAction)
+        }
       } else {
         Scaffold(
           snackbarHost = { SnackbarHost(snackbar) },
@@ -95,3 +121,6 @@ private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
     }
   }
 }
+
+/** A finger travel of roughly 60dp counts as a back gesture. */
+private const val SWIPE_THRESHOLD_PX = 180f

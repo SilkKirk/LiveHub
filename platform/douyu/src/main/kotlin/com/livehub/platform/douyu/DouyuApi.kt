@@ -50,18 +50,67 @@ class DouyuApi(private val http: HttpClient) {
 
   // ---------------------------------------------------------------------- rooms
 
-  /** First page of a category, using Douyu's offset based recommendation list. */
-  suspend fun rooms(categoryId: String, offset: Int, limit: Int): DouyuRoomPage {
-    val url = "$URL_REC_LIST?offset=$offset&cate2=${encode(categoryId)}&limit=$limit"
-    val response = http.get(url)
-    val root = response.requireSuccess().parseObject("newRecList")
-    return DouyuParser.recList(root, offset = offset, limit = limit)
+  /**
+   * First page of a category.
+   *
+   * The legacy JSON endpoints were retired (`newRecList` answers
+   * `{"error":1,"msg":"系统异常"}` for every category) so the directory page is scraped
+   * instead — it still renders the first page server side. Pagination is therefore
+   * unavailable and the result reports no next cursor.
+   */
+  suspend fun rooms(categoryId: String, page: Int, limit: Int): DouyuRoomPage {
+    val html = fetchDirectoryPage(categoryId, page)
+    val rooms = DouyuHtmlParser.roomsFromDirectory(html, limit)
+    return DouyuRoomPage(rooms = rooms, nextOffset = null)
   }
 
-  /** Directory listing (older rooms, page based). Used as a second page source. */
+  /** Loads `https://www.douyu.com/directory/game/<slug>` (or the numeric id form). */
+  private suspend fun fetchDirectoryPage(categoryId: String, page: Int): String {
+    val slug = DouyuCategorySlug.forId(categoryId)
+    val candidates = buildList {
+      if (page <= 1) {
+        add("$URL_DIRECTORY/$slug")
+        add("$URL_WEB/g_$slug")
+      } else {
+        // Older mirrors keep a page segment; try it before giving up on page 2.
+        add("$URL_DIRECTORY/$slug?page=$page")
+      }
+      add("$URL_WEB/directory/game/$slug")
+    }
+
+    var lastError: Throwable? = null
+    for (url in candidates.distinct()) {
+      val html = runCatching {
+        http.get(
+          url,
+          headers = mapOf(
+            "User-Agent" to HttpClients.UA_DESKTOP,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language" to "zh-CN,zh;q=0.9",
+            "Referer" to URL_WEB,
+          ),
+        ).requireSuccess().body
+      }.getOrElse { error ->
+        lastError = error
+        continue
+      }
+      if (DouyuHtmlParser.roomsFromDirectory(html).isNotEmpty()) return html
+    }
+
+    throw PlatformProtocolException(
+      "斗鱼分区列表加载失败，请稍后重试",
+      Platform.DOUYU,
+      lastError,
+    )
+  }
+
+  /** Legacy directory listing, kept as a secondary source and for tests. */
   suspend fun directory(categoryId: String, page: Int, limit: Int): DouyuRoomPage {
     val url = "$URL_MIX_LIST/2_${encode(categoryId)}/$page?limit=$limit"
-    val response = http.get(url)
+    val response = http.get(
+      url,
+      headers = mapOf("Referer" to URL_WEB, "User-Agent" to HttpClients.UA_DESKTOP),
+    )
     val root = response.requireSuccess().parseObject("mixListV1")
     return DouyuParser.mixList(root, page = page)
   }
@@ -211,6 +260,8 @@ class DouyuApi(private val http: HttpClient) {
   }
 
   companion object {
+    const val URL_WEB = "https://www.douyu.com"
+    const val URL_DIRECTORY = "https://www.douyu.com/directory/game"
     const val URL_CATEGORIES = "https://m.douyu.com/api/cate/list"
     const val URL_REC_LIST = "https://m.douyu.com/hgapi/live/cate/newRecList"
     const val URL_MIX_LIST = "https://www.douyu.com/gapi/rkc/directory/mixListV1"

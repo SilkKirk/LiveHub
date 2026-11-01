@@ -61,6 +61,15 @@ class DouyinApi(private val http: HttpClient) {
 
   suspend fun categories(): List<Category> = DouyinCategories.all()
 
+  /**
+   * Live rooms for a partition.
+   *
+   * `webcast/web/partition/detail/room` now answers HTTP 444 (Douyin's anti-bot status)
+   * for requests that do not carry a full browser fingerprint, including ones with a
+   * valid `ttwid`. `webcast/feed` still serves JSON to an anonymous client and returns
+   * the same room objects, so it is the list source; the partition id is kept for the
+   * UI but only influences ordering, not the endpoint.
+   */
   suspend fun rooms(categoryId: String, page: Int): Pair<List<Streamer>, Boolean> {
     val params = listOf(
       "aid" to "6383",
@@ -75,22 +84,60 @@ class DouyinApi(private val http: HttpClient) {
       "browser_language" to "zh-CN",
       "browser_platform" to "Win32",
       "browser_name" to "Chrome",
-      "browser_version" to "122.0.0.0",
+      "browser_version" to DouyinSigner.BROWSER_VERSION,
+      "count" to PAGE_SIZE.toString(),
+      "offset" to ((page - 1) * PAGE_SIZE).toString(),
       "partition" to categoryId,
       "partition_type" to "1",
-      "req_from" to "2",
-      "offset" to ((page - 1) * PAGE_SIZE).toString(),
-      "count" to PAGE_SIZE.toString(),
     )
     val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
-    val url = "$URL_PARTITION?${signed.queryString()}"
-    val response = http.get(url, headers = headers())
-    val root = response.requireSuccess().let { parseObject(it.body, "partition") }
-    val list = root["data"]?.jsonObject?.get("data")?.jsonArray
-      ?: root["data"]?.jsonArray
-      ?: JsonArray(emptyList())
-    val rooms = list.mapNotNull { parseRoomCard(it) }
+    val response = http.get("$URL_FEED?${signed.queryString()}", headers = headers())
+    val root = response.requireSuccess().let { parseObject(it.body, "feed") }
+    val status = root["status_code"]?.jsonPrimitive?.intOrNull ?: 0
+    if (status != 0) {
+      throw PlatformProtocolException("抖音列表获取失败: status=$status", Platform.DOUYIN)
+    }
+    val list = root["data"]?.jsonArray ?: JsonArray(emptyList())
+    val rooms = list.mapNotNull { parseFeedItem(it) }
     return rooms to (rooms.size >= PAGE_SIZE)
+  }
+
+  /** Maps one `webcast/feed` entry, whose room fields sit at the top level. */
+  private fun parseFeedItem(element: JsonElement): Streamer? {
+    val obj = element as? JsonObject ?: return null
+    val room = obj["room"]?.let { it as? JsonObject } ?: obj
+    val idText = room.str("id_str")
+      ?: room["id"]?.jsonPrimitive?.longOrNull?.toString()
+      ?: room.str("web_rid")
+      ?: return null
+    if (idText.isBlank() || idText == "0") return null
+    val owner = room["owner"] as? JsonObject
+    val status = room["status"]?.jsonPrimitive?.intOrNull
+    val viewers = room["stats"]?.jsonObject?.get("total_user")?.jsonPrimitive?.longOrNull
+      ?: room["user_count"]?.jsonPrimitive?.longOrNull
+      ?: room.str("user_count_str")?.let { parseCount(it) }
+      ?: 0
+    return Streamer(
+      platform = Platform.DOUYIN,
+      roomId = idText,
+      streamerName = owner?.str("nickname").orEmpty().ifBlank { "抖音主播" },
+      title = room.str("title").orEmpty().ifBlank { "直播中" },
+      coverUrl = firstImage(room["cover"]) ?: firstImage(room["dynamic_cover"]),
+      avatarUrl = firstImage(owner?.get("avatar_thumb")),
+      viewerCount = viewers,
+      isLive = status == null || status == 2,
+      updatedAt = System.currentTimeMillis(),
+    )
+  }
+
+  private fun JsonObject.str(key: String): String? =
+    (this[key] as? JsonElement)?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+
+  private fun firstImage(element: JsonElement?): String? {
+    val obj = element as? JsonObject ?: return null
+    return obj["url_list"]?.jsonArray?.firstOrNull()
+      ?.jsonPrimitive?.contentOrNull
+      ?.let(Texts::normalizeUrl)
   }
 
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
@@ -283,6 +330,7 @@ class DouyinApi(private val http: HttpClient) {
   }
 
   companion object {
+    const val URL_FEED = "https://live.douyin.com/webcast/feed/"
     const val URL_PARTITION = "https://live.douyin.com/webcast/web/partition/detail/room/"
     const val URL_SEARCH = "https://live.douyin.com/webcast/search/partition/room/"
     const val URL_ENTER = "https://live.douyin.com/webcast/room/web/enter/"

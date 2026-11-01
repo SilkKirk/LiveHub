@@ -118,10 +118,13 @@ object DouyinSigner {
   private const val BASE64_ALPHABET =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
+  /** Browser version string echoed in requests; Douyin validates it against the UA. */
+  const val BROWSER_VERSION = "131.0.0.0"
+
   /** Default web user agent; Douyin binds signatures to the UA. */
   const val USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+      "(KHTML, like Gecko) Chrome/$BROWSER_VERSION Safari/537.36"
 
   const val XBOGUS_SALT_CONST = XBOGUS_SALT
 }

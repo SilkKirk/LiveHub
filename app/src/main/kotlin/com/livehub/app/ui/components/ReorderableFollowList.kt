@@ -1,6 +1,7 @@
 package com.livehub.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -126,6 +127,9 @@ private fun FollowRow(
       .fillMaxWidth()
       .then(if (isDragging) Modifier.zIndex(1f) else Modifier)
       .clip(RoundedCornerShape(12.dp))
+      // The whole row opens the room; the star used to be the only tap target, which
+      // made the follow list feel dead.
+      .clickable(onClick = onClick)
       .then(dragModifier),
   ) {
     Row(
@@ -180,9 +184,6 @@ private fun FollowRow(
         contentDescription = "长按拖动排序",
         tint = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-      IconButton(onClick = onClick) {
-        Icon(Icons.Filled.Star, contentDescription = "打开", tint = MaterialTheme.colorScheme.primary)
-      }
     }
   }
 }
