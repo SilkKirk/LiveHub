@@ -2,12 +2,14 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -194,12 +196,19 @@ private fun ThisDeviceCard(state: UiState) {
   }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ScopeCard(state: UiState, onAction: (UiAction) -> Unit) {
   Card(modifier = Modifier.fillMaxWidth()) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text("同步内容", style = MaterialTheme.typography.titleMedium)
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      // FlowRow, not Row: the labels are 4, 4 and 7 characters wide, which does not fit one
+      // 320dp line. A plain Row squeezed the last chip until its text wrapped to a single
+      // character per line — "播放与弹幕设置" rendered as a vertical column of glyphs.
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
         SyncScope.entries.forEach { scope ->
           FilterChip(
             selected = state.syncScopes.contains(scope),
@@ -208,7 +217,7 @@ private fun ScopeCard(state: UiState, onAction: (UiAction) -> Unit) {
               if (!next.add(scope)) next.remove(scope)
               onAction(UiAction.SetSyncScopes(next))
             },
-            label = { Text(scope.displayName) },
+            label = { Text(scope.displayName, maxLines = 1, softWrap = false) },
           )
         }
       }
