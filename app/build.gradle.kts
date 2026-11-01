@@ -144,6 +144,9 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.test.ext.junit)
+    // Compose UI assertions under Robolectric, so overlay behaviour is covered on the JVM
+    // instead of only on an emulator. The debug manifest it needs is already declared above.
+    testImplementation(libs.compose.ui.test.junit4)
     testRuntimeOnly(libs.junit.platform.launcher)
     testRuntimeOnly(libs.junit.vintage.engine)
 

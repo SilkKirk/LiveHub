@@ -63,8 +63,8 @@ fun List<com.livehub.core.model.DanmakuMessage>.withoutBlockedKeywords(
  * Danmaku overlay.
  *
  * Each message flies right-to-left in one of [laneCount] lanes. Lanes are chosen
- * round-robin per second so bursts stack instead of overlapping, and blocked keywords
- * are filtered before a message ever enters the list.
+ * round-robin so bursts stack instead of overlapping, and blocked keywords are filtered
+ * before a message ever enters the list.
  *
  * The composable renders nothing when [enabled] is false, which also stops the
  * collector so a disabled overlay costs no work.
@@ -85,12 +85,29 @@ fun DanmakuOverlay(
   val flying = remember { mutableStateListOf<FlyingDanmaku>() }
   var nextId by remember { mutableStateOf(0L) }
   var laneCursor by remember { mutableStateOf(0) }
+  /**
+   * How far into [messages] the overlay has already animated.
+   *
+   * `LaunchedEffect(messages)` re-runs on every emission, and `messages` is the *whole*
+   * rolling buffer (up to 200 entries) rather than the new message. Iterating it each time
+   * re-added every older danmaku, so one new message per second put a couple of hundred
+   * extra bubbles on screen and the lane cursor wrapped constantly. The offset makes each
+   * message enter exactly once.
+   */
+  var consumedCount by remember { mutableStateOf(0) }
 
   val laneCount = (MAX_LANES * areaFraction).toInt().coerceIn(1, MAX_LANES)
 
   LaunchedEffect(messages) {
-    if (messages.isEmpty()) return@LaunchedEffect
-    messages.forEach { message ->
+    // The buffer is trimmed at the front once it exceeds the cap, which shifts every index.
+    // A shorter list than the consumed count means that happened, so start over rather than
+    // skip the new tail.
+    if (messages.size < consumedCount) consumedCount = 0
+    val pending = messages.drop(consumedCount)
+    consumedCount = messages.size
+    if (pending.isEmpty()) return@LaunchedEffect
+
+    pending.forEach { message ->
       if (blocked.any { keyword -> message.text.lowercase().contains(keyword) }) {
         return@forEach
       }
@@ -159,9 +176,15 @@ private fun DanmakuLine(
     maxLines = 1,
     overflow = TextOverflow.Visible,
     softWrap = false,
+    // Deliberately not `fillMaxSize()`: that forced every bubble to the full overlay width,
+    // so a three-character danmaku hit the right edge already, and the right-to-left
+    // animation read as a bubble sliding rather than as text scrolling. Wrapping the
+    // content keeps the label its natural width.
     modifier = Modifier
-      .offset(x = with(LocalDensity.current) { offsetX.value.toDp() }, y = with(LocalDensity.current) { (laneHeight * item.lane).toDp() })
-      .fillMaxSize(),
+      .offset(
+        x = with(LocalDensity.current) { offsetX.value.toDp() },
+        y = with(LocalDensity.current) { (laneHeight * item.lane).toDp() },
+      ),
   )
 }
 
