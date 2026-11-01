@@ -60,7 +60,7 @@ class CrossDeviceSyncTest {
       server = com.livehub.core.sync.server.SyncHttpServer(
         deviceId = id,
         deviceName = name,
-        localSecret = "local",
+        localSecret = selfSecret,
         handler = object : com.livehub.core.sync.server.SyncHttpServer.Handler {
           override fun onPair(
             envelope: SyncEnvelope,
@@ -108,10 +108,11 @@ class CrossDeviceSyncTest {
       transport = com.livehub.core.sync.transport.LanSyncTransport(
         deviceId = id,
         deviceName = name,
-        localSecret = "local",
+        localSecret = selfSecret,
         peersProvider = { peers.toList() },
         addressProvider = { peer -> addressBook.addressFor(peer) },
         timeoutMillis = 3_000,
+        localPort = port,
       )
     }
 

@@ -33,6 +33,8 @@ class LanSyncTransport(
   private val peersProvider: () -> List<TrustedPeer>,
   private val addressProvider: (TrustedPeer) -> DiscoveredPeer?,
   private val timeoutMillis: Int = DEFAULT_TIMEOUT_MILLIS,
+  /** Port this device listens on; advertised so peers can call back. */
+  private val localPort: Int = 0,
 ) : SyncTransport {
 
   override suspend fun pull(peer: TrustedPeer, scope: SyncScope): SyncPayload? {
@@ -43,7 +45,9 @@ class LanSyncTransport(
     val envelope = SyncEnvelope(
       deviceId = deviceId,
       deviceName = deviceName,
-      secret = peer.sharedSecret,
+      // Present our own secret: the peer stored exactly this during pairing.
+      secret = localSecret,
+      preferredPort = localPort,
     )
     val response = call(
       peer = peer,
@@ -64,7 +68,8 @@ class LanSyncTransport(
     val envelope = SyncEnvelope(
       deviceId = deviceId,
       deviceName = deviceName,
-      secret = peer.sharedSecret,
+      secret = localSecret,
+      preferredPort = localPort,
       payload = payload,
     )
     val response = call(
@@ -86,7 +91,12 @@ class LanSyncTransport(
         host = address.host,
         port = address.port,
         path = SyncEnvelope.PATH_PING,
-        envelope = SyncEnvelope(deviceId = deviceId, deviceName = deviceName, secret = ""),
+        envelope = SyncEnvelope(
+          deviceId = deviceId,
+          deviceName = deviceName,
+          secret = localSecret,
+          preferredPort = localPort,
+        ),
       )
       response.error == null && response.serverDeviceId == peer.deviceId
     }.getOrDefault(false)

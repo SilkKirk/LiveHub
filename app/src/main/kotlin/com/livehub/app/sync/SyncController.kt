@@ -125,9 +125,10 @@ class SyncController(
     transport = LanSyncTransport(
       deviceId = deviceId,
       deviceName = deviceName,
-      localSecret = CURRENT_SECRET,
+      localSecret = selfSecret(),
       peersProvider = { preferences.trustedPeers() },
       addressProvider = { peer -> addressBook.addressFor(peer) },
+      localPort = listeningPort,
     )
 
     // mDNS advertises only while the flow is collected, so keep one collector alive.
