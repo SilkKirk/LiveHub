@@ -38,6 +38,14 @@ interface LivePlatformAdapter {
    */
   suspend fun rooms(categoryId: String, cursor: String? = null, slug: String? = null): RoomPage
 
+  /**
+   * Optional third level of browsing (Douyu "三级分类").
+   *
+   * Returns categories whose `id` is already encoded for [rooms], or an empty list when
+   * the platform has no third level. The default keeps the other platforms unchanged.
+   */
+  suspend fun subCategories(categoryId: String): List<Category> = emptyList()
+
   /** Searches live rooms by keyword. */
   suspend fun search(keyword: String, cursor: String? = null): RoomPage
 

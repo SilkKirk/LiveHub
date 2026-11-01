@@ -51,133 +51,95 @@ class DouyuApi(private val http: HttpClient) {
   // ---------------------------------------------------------------------- rooms
 
   /**
-   * Live rooms for a category.
+   * One page of live rooms for a category.
    *
-   * The legacy JSON endpoints were retired (`newRecList` answers
-   * `{"error":1,"msg":"系统异常"}` for every category), so the directory page is scraped;
-   * it renders 40 rooms server side.
+   * Uses `gapi/rkc/directory/mixListV1/2_<cate2Id>/<page>`, the endpoint the web client
+   * itself calls. It answers `{"code":0,"data":{"rl":[...]}}` with 40 rooms per page and
+   * paginates properly: verified page 1 vs 2 vs 3 share zero room ids.
    *
-   * `?page=N` is accepted but unreliable — page 2 differs only slightly from page 1
-   * (38 of 40 rooms overlap) and page 3 returns page 1 again. The adapter therefore
-   * reports no next cursor instead of serving duplicates to an infinite-scroll list.
-   */
-  /**
-   * @param slug the category's real directory slug (`shortName` from `cate/list`).
-   *   Required: the numeric `cate2Id` is not a valid URL segment and 404s.
+   * Earlier revisions scraped `www.douyu.com/directory/game/<slug>` because the *mobile*
+   * `newRecList` endpoint had been retired, and then reported "single page only" because
+   * the scraped HTML ignored `?page=`. That whole detour is unnecessary — mixListV1 was
+   * simply being called with wrong category ids (`2_86` instead of `2_1`).
+   *
+   * @param categoryId `cate2Id` for a two level browse, or `cate3Id` when [level] is 3.
+   * @param level 2 for a category, 3 for a sub-category.
    */
   suspend fun rooms(
     categoryId: String,
     page: Int,
     limit: Int,
     slug: String? = null,
+    level: Int = 2,
   ): DouyuRoomPage {
-    val html = fetchDirectoryPage(categoryId, page, slug)
-    val rooms = DouyuHtmlParser.roomsFromDirectory(html, limit)
-    return DouyuRoomPage(rooms = rooms, nextOffset = null)
-  }
+    val currentPage = if (page <= 0) 1 else page
+    val prefix = if (level == 3) "3" else "2"
+    val url = "$URL_MIX_LIST/$prefix" + "_" + categoryId + "/" + currentPage + "?limit=" + limit
 
-  /**
-   * Loads the directory page for [categoryId].
-   *
-   * Page 1 uses the canonical slug URL; later pages try the `?page=` form and accept it
-   * only when Douyu actually returns different rooms, otherwise the caller gets page 1
-   * rather than a duplicate list.
-   */
-  private suspend fun fetchDirectoryPage(categoryId: String, page: Int, slug: String?): String {
-    val resolved = DouyuCategorySlug.forId(categoryId, slug)
-      ?: throw PlatformOfflineException(
-        "该分区暂不支持浏览，请选择其他分区",
+    val response = http.get(
+      url,
+      headers = mapOf(
+        "User-Agent" to HttpClients.UA_DESKTOP,
+        "Referer" to URL_WEB,
+        "Accept" to "application/json, text/plain, */*",
+      ),
+    ).requireSuccess()
+
+    val root = response.parseObject("mixListV1")
+    val code = root["code"]?.jsonPrimitive?.intOrNull ?: -1
+    if (code != 0) {
+      throw PlatformProtocolException(
+        "斗鱼分区列表加载失败（code=$code）",
         Platform.DOUYU,
       )
-    val candidates = buildList {
-      if (page <= 1) {
-        add("$URL_DIRECTORY/$resolved")
-      } else {
-        add("$URL_DIRECTORY/$resolved?page=$page")
-      }
-      add("$URL_WEB/directory/game/$resolved")
-      add("$URL_WEB/g_$resolved")
     }
 
-    var lastError: Throwable? = null
-    for (url in candidates.distinct()) {
-      val html = runCatching {
-        http.get(
-          url,
-          headers = mapOf(
-            "User-Agent" to HttpClients.UA_DESKTOP,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language" to "zh-CN,zh;q=0.9",
-            "Referer" to URL_WEB,
-          ),
-        ).requireSuccess().body
-      }.getOrElse { error ->
-        lastError = error
-        continue
-      }
-      if (DouyuHtmlParser.roomsFromDirectory(html).isNotEmpty()) return html
-    }
+    val list = root["data"]?.jsonObject?.get("rl")?.jsonArray ?: JsonArray(emptyList())
+    val rooms = list.mapNotNull { DouyuParser.mixListRoom(it) }
 
-    throw PlatformProtocolException(
-      "斗鱼分区列表加载失败，请稍后重试",
-      Platform.DOUYU,
-      lastError,
+    // `limit` is honoured server side, so a short page means the category is exhausted.
+    val hasMore = rooms.size >= limit
+    return DouyuRoomPage(
+      rooms = rooms,
+      nextOffset = if (hasMore) currentPage + 1 else null,
     )
   }
-
-  /** Legacy directory listing, kept as a secondary source and for tests. */
-  suspend fun directory(categoryId: String, page: Int, limit: Int): DouyuRoomPage {
-    val url = "$URL_MIX_LIST/2_${encode(categoryId)}/$page?limit=$limit"
-    val response = http.get(
-      url,
-      headers = mapOf("Referer" to URL_WEB, "User-Agent" to HttpClients.UA_DESKTOP),
-    )
-    val root = response.requireSuccess().parseObject("mixListV1")
-    return DouyuParser.mixList(root, page = page)
-  }
-
-  // --------------------------------------------------------------------- search
-
-  /** `GET /japi/search/api/searchUser` — anchors matching [keyword]. */
-  suspend fun search(keyword: String, page: Int, pageSize: Int): DouyuRoomPage {
-    val did = DouyuSigner.randomDid()
-    val url = "$URL_SEARCH?kw=${encode(keyword)}&page=$page&pageSize=$pageSize&filterType=0"
-    val response = http.get(
-      url,
-      headers = mapOf(
-        "Referer" to "https://www.douyu.com/search/",
-        "Cookie" to "dy_did=$did; acf_did=$did",
-        "User-Agent" to HttpClients.UA_DESKTOP,
-      ),
-    )
-    val root = response.requireSuccess().parseObject("searchUser")
-    return DouyuParser.search(root, page = page, pageSize = pageSize)
-  }
-
-  // --------------------------------------------------------------------- detail
-
-  /** `GET /betard/{roomId}` — room metadata; doubles as the live check. */
-  suspend fun betard(roomId: String): DouyuRoomInfo {
-    val response = http.get(
-      "$URL_BETARD/$roomId",
-      headers = mapOf(
-        "Referer" to "https://www.douyu.com/$roomId",
-        "User-Agent" to HttpClients.UA_DESKTOP,
-      ),
-    )
-    val root = response.requireSuccess().parseObject("betard")
-    return DouyuParser.betard(root)
-  }
-
-  // ------------------------------------------------------------------- playback
 
   /**
-   * Resolves the playable FLV/HLS URL.
+   * Sub-categories ("三级分类") for a `cate2Id`.
    *
-   * Douyu requires a per-request signature produced by JavaScript served from
-   * `/swf_api/homeH5Enc`. [DouyuSigner] reimplements that algorithm on the JVM so the
-   * app does not need a JS engine.
+   * `capi/v1/getThreeCate?tag_id=<cate2Id>` returns items shaped `{"id":"3683",
+   * "name":"S15"}` — note the flat `id`/`name` keys, not `tagId`/`tagName`/`cateId`.
+   * Rooms for a sub-category come from `mixListV1/3_<id>/<page>`.
    */
+  suspend fun subCategories(categoryId: String): List<Category> {
+    val response = http.get(
+      "$URL_THREE_CATE?tag_id=" + categoryId + "&client_sys=android",
+      headers = mapOf("User-Agent" to HttpClients.UA_DESKTOP),
+    )
+    val root = runCatching { response.requireSuccess().parseObject("getThreeCate") }.getOrNull()
+      ?: return emptyList()
+    val items = root["data"] as? JsonArray ?: return emptyList()
+
+    return items.mapNotNull { element ->
+      val obj = element as? JsonObject ?: return@mapNotNull null
+      val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        ?: return@mapNotNull null
+      val name = obj["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        ?: return@mapNotNull null
+      Category(
+        platform = Platform.DOUYU,
+        id = "$SUB_CATEGORY_PREFIX$id",
+        name = name,
+        parentId = categoryId,
+        parentName = null,
+        slug = null,
+        sortOrder = id.toIntOrNull() ?: Int.MAX_VALUE,
+      )
+    }
+  }
+
+  /** Prefix marking a category id as a level-3 sub-category. */
   suspend fun playback(roomId: String, preferredQuality: Int?): PlaybackSource {
     val info = betard(roomId)
     if (!info.isLive) throw PlatformOfflineException("主播未开播", Platform.DOUYU)
@@ -282,10 +244,12 @@ class DouyuApi(private val http: HttpClient) {
 
   companion object {
     const val URL_WEB = "https://www.douyu.com"
-    const val URL_DIRECTORY = "https://www.douyu.com/directory/game"
     const val URL_CATEGORIES = "https://m.douyu.com/api/cate/list"
-    const val URL_REC_LIST = "https://m.douyu.com/hgapi/live/cate/newRecList"
+    /** Prefix marking a category id as a level-3 sub-category rather than a cate2. */
+    const val SUB_CATEGORY_PREFIX = "c3:"
     const val URL_MIX_LIST = "https://www.douyu.com/gapi/rkc/directory/mixListV1"
+    const val URL_THREE_CATE = "https://capi.douyucdn.cn/api/v1/getThreeCate"
+    const val URL_REC_LIST = "https://m.douyu.com/hgapi/live/cate/newRecList"
     const val URL_SEARCH = "https://www.douyu.com/japi/search/api/searchUser"
     const val URL_BETARD = "https://www.douyu.com/betard"
     const val URL_GET_H5_PLAY = "https://www.douyu.com/lapi/live/getH5Play"

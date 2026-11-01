@@ -103,6 +103,36 @@ object DouyuParser {
     }
   }
 
+  /**
+   * Maps one `mixListV1` entry (`data.rl[]`).
+   *
+   * Douyu abbreviates every field here:
+   *  * `rid` room id, `rn` room title, `nn` streamer name,
+   *  * `av` avatar, `ol` online viewers, `rs16` screenshot,
+   *  * `c2url` is the *browsable* directory path and doubles as the category slug.
+   */
+  fun mixListRoom(element: JsonElement): Streamer? {
+    val obj = element as? JsonObject ?: return null
+    val roomId = obj.string("rid") ?: return null
+    if (roomId.isBlank() || roomId == "0") return null
+
+    val viewers = obj["ol"]?.jsonPrimitive?.longOrNull
+      ?: obj.string("ol")?.toLongOrNull()
+      ?: 0
+
+    return Streamer(
+      platform = Platform.DOUYU,
+      roomId = roomId,
+      streamerName = obj.string("nn").orEmpty().trim().ifBlank { "斗鱼主播" },
+      title = obj.string("rn").orEmpty().trim().ifBlank { "直播中" },
+      coverUrl = (obj.string("rs16") ?: obj.string("rs16_avif"))?.let(::normalizeUrl),
+      avatarUrl = obj.string("av")?.let(::normalizeUrl),
+      viewerCount = viewers,
+      // mixListV1 only lists rooms that are on air.
+      isLive = true,
+      updatedAt = System.currentTimeMillis(),
+    )
+  }
   /** `newRecList` uses an absolute offset cursor and reports a total. */
   fun recList(root: JsonObject, offset: Int, limit: Int): DouyuRoomPage {
     val data = root["data"] as? JsonObject

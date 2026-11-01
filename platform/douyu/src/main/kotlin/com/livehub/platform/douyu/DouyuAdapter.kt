@@ -47,19 +47,38 @@ class DouyuAdapter(
 
   override suspend fun categories(): List<Category> = api.categories()
 
+  /**
+   * One page of rooms.
+   *
+   * A category id prefixed with `c3:` is a level-3 sub-category ("三级分类"); anything
+   * else is a normal `cate2Id`. Both come from `mixListV1`, which paginates properly, so
+   * the cursor is simply the page number.
+   */
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
-    // Douyu's directory page only renders the first page server side, so a missing
-    // cursor legitimately means "we are done"; the adapter must not pretend otherwise.
-    val result = api.rooms(categoryId = categoryId, page = page, limit = PAGE_SIZE, slug = slug)
-    val fallback = if (result.rooms.isEmpty() && page == 1) {
-      runCatching { api.directory(categoryId, page = 1, limit = PAGE_SIZE).rooms }
-        .getOrDefault(emptyList())
+    val isSubCategory = categoryId.startsWith(DouyuApi.SUB_CATEGORY_PREFIX)
+    val rawId = if (isSubCategory) {
+      categoryId.removePrefix(DouyuApi.SUB_CATEGORY_PREFIX)
     } else {
-      emptyList()
+      categoryId
     }
-    val rooms = result.rooms.ifEmpty { fallback }
-    return RoomPage(rooms = rooms, nextCursor = null)
+
+    val result = api.rooms(
+      categoryId = rawId,
+      page = page,
+      limit = PAGE_SIZE,
+      level = if (isSubCategory) 3 else 2,
+    )
+    return RoomPage(
+      rooms = result.rooms,
+      nextCursor = result.nextOffset?.let { it.toString() },
+    )
+  }
+
+  /** Sub-categories for [categoryId], shown as a third row of chips on the home screen. */
+  override suspend fun subCategories(categoryId: String): List<Category> {
+    if (categoryId.startsWith(DouyuApi.SUB_CATEGORY_PREFIX)) return emptyList()
+    return runCatching { api.subCategories(categoryId) }.getOrDefault(emptyList())
   }
 
   override suspend fun search(keyword: String, cursor: String?): RoomPage {
