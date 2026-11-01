@@ -36,12 +36,14 @@ data class UiState(
   val danmakuAreaFraction: Float = 0.5f,
   val blockedKeywords: List<String> = emptyList(),
   val peers: List<TrustedPeer> = emptyList(),
+  val discoveredPeers: List<com.livehub.core.sync.DiscoveredPeer> = emptyList(),
   val syncLog: List<SyncLogEntry> = emptyList(),
   val syncScopes: Set<SyncScope> = SyncScope.default,
   val deviceName: String = "",
   val localAddress: String = "",
   val pairingCode: String = "",
   val syncing: Boolean = false,
+  val discovering: Boolean = false,
   val loading: Boolean = false,
   val loadingMore: Boolean = false,
   val error: String? = null,
@@ -99,6 +101,11 @@ sealed interface UiAction {
   data class UnpairPeer(val deviceId: Long) : UiAction
 
   data class PairPeer(val peerName: String, val address: String, val code: String) : UiAction
+
+  /** Pair with a device that mDNS discovered, using its advertised address. */
+  data class PairDiscovered(val peer: com.livehub.core.sync.DiscoveredPeer, val code: String) : UiAction
+
+  data object StartDiscovery : UiAction
 
   data object SyncNow : UiAction
 

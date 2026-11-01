@@ -51,6 +51,22 @@ class SyncController(
   /** Observers get every peer seen by discovery. */
   var onPeerDiscovered: ((DiscoveredPeer) -> Unit)? = null
 
+  /**
+   * Peers currently visible on the LAN, newest first.
+   *
+   * mDNS keeps re-announcing the same device, so the map is keyed by device id and
+   * only the last sighting is kept; the UI shows this list as "可配对设备".
+   */
+  private val discovered = java.util.concurrent.ConcurrentHashMap<Long, DiscoveredPeer>()
+
+  fun discoveredPeers(): List<DiscoveredPeer> = discovered.values.sortedBy { it.deviceName }
+
+  /** Removes a peer that stopped advertising, so the list does not grow stale. */
+  fun forgetPeer(deviceId: Long) {
+    discovered.remove(deviceId)
+    addressBook.forget(deviceId)
+  }
+
   val isRunning: Boolean get() = server?.isRunning == true
 
   /**
@@ -110,6 +126,7 @@ class SyncController(
     discoveryJob += scope.launch {
       discovery.discover().collect { peer ->
         addressBook.remember(peer)
+        discovered[peer.deviceId] = peer
         onPeerDiscovered?.invoke(peer)
       }
     }
@@ -121,6 +138,7 @@ class SyncController(
     server?.stop()
     server = null
     transport = null
+    discovered.clear()
   }
 
   fun dispose() {

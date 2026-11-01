@@ -92,6 +92,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       UiAction.RefreshPeers -> refreshPeers()
       is UiAction.UnpairPeer -> unpair(action.deviceId)
       is UiAction.PairPeer -> pair(action.peerName, action.address, action.code)
+      is UiAction.PairDiscovered -> pair(
+        peerName = action.peer.deviceName,
+        address = "${action.peer.host}:${action.peer.port}",
+        code = action.code,
+      )
+      UiAction.StartDiscovery -> startDiscovery()
       UiAction.SyncNow -> syncNow()
       UiAction.ToggleTheme -> _state.update { it.copy(darkTheme = !it.darkTheme) }
       UiAction.StartBilibiliLogin -> startBilibiliLogin()
@@ -110,9 +116,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       Screen.Sync -> {
         container.syncController.start()
         refreshPeers()
+        startDiscovery()
         _state.update {
           it.copy(
             localAddress = container.syncController.serverAddress.orEmpty(),
+        discoveredPeers = container.syncController.discoveredPeers(),
             pairingCode = container.syncController.beginPairing(),
           )
         }
@@ -467,6 +475,43 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     _state.update { it.copy(blockedKeywords = normalized) }
   }
 
+  // ------------------------------------------------------------- peer discovery
+
+  private var discoveryJob: Job? = null
+
+  /**
+   * Runs mDNS discovery for a bounded window and mirrors every sighting into the UI.
+   *
+   * Discovery is intentionally time-boxed: keeping an mDNS browse running forever
+   * drains the battery and the sync screen is the only place that needs it.
+   */
+  private fun startDiscovery() {
+    discoveryJob?.cancel()
+    container.syncController.start()
+    discoveryJob = viewModelScope.launch {
+      _state.update { it.copy(discovering = true) }
+      val polling = launch {
+        repeat(DISCOVERY_POLLS) {
+          kotlinx.coroutines.delay(DISCOVERY_POLL_INTERVAL_MILLIS)
+          _state.update {
+            it.copy(discoveredPeers = container.syncController.discoveredPeers())
+          }
+        }
+      }
+      polling.join()
+      _state.update {
+        it.copy(
+          discovering = false,
+          discoveredPeers = container.syncController.discoveredPeers(),
+          message = if (it.discoveredPeers.isEmpty()) {
+            "没有发现其他设备。请确认两台设备在同一 Wi-Fi 下，或手动填写对方地址。"
+          } else {
+            null
+          },
+        )
+      }
+    }
+  }
   // ------------------------------------------------------------- bilibili login
 
   private var loginJob: Job? = null
@@ -576,6 +621,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         peers = container.preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
         localAddress = container.syncController.serverAddress.orEmpty(),
+        discoveredPeers = container.syncController.discoveredPeers(),
       )
     }
   }
@@ -640,6 +686,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private companion object {
     const val MAX_DANMAKU_BUFFER = 200
+    const val DISCOVERY_POLLS = 15
+    const val DISCOVERY_POLL_INTERVAL_MILLIS = 2_000L
     const val LOGIN_POLL_ATTEMPTS = 100
     const val LOGIN_POLL_INTERVAL_MILLIS = 2_000L
   }

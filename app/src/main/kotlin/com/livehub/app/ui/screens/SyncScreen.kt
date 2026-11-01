@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -79,6 +81,8 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item { ScopeCard(state, onAction) }
+
+    item { DiscoveryCard(state, onAction) }
 
     item {
       Text("已配对设备", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -295,4 +299,74 @@ private fun PairDialog(
     },
     dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
   )
+}
+
+/**
+ * Devices found on the LAN.
+ *
+ * Only peers the user has not already paired with are offered, so the list stays
+ * actionable instead of repeating the paired-device section below it.
+ */
+@Composable
+private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
+  val pairedIds = remember(state.peers) { state.peers.map { it.deviceId }.toSet() }
+  val candidates = remember(state.discoveredPeers, pairedIds) {
+    state.discoveredPeers.filterNot { pairedIds.contains(it.deviceId) }
+  }
+
+  Card(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+          text = "发现附近设备",
+          style = MaterialTheme.typography.titleMedium,
+          modifier = Modifier.weight(1f),
+        )
+        if (state.discovering) {
+          CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        }
+        IconButton(onClick = { onAction(UiAction.StartDiscovery) }) {
+          Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
+        }
+      }
+
+      if (candidates.isEmpty()) {
+        Text(
+          text = if (state.discovering) {
+            "正在扫描同一 Wi-Fi 下的设备…"
+          } else {
+            "未发现其他设备。请确认两台设备连接同一个 Wi-Fi，且路由器没有开启 AP 隔离。"
+          },
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      } else {
+        candidates.forEach { peer ->
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(peer.deviceName, style = MaterialTheme.typography.bodyMedium)
+              Text(
+                text = "${peer.host}:${peer.port}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            Text(
+              text = "待配对",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+            )
+          }
+        }
+        Text(
+          text = "在对方设备上生成配对码后，点击「配对设备」并填写该地址即可完成配对。",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
 }
