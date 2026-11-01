@@ -293,24 +293,38 @@ class DouyinApi(private val http: HttpClient) {
       "live_id" to "1",
       "device_platform" to "web",
       "language" to "zh-CN",
-      "enter_from" to "web_live",
-      "cookie_enabled" to "true",
-      "screen_width" to "1920",
-      "screen_height" to "1080",
       "browser_language" to "zh-CN",
       "browser_platform" to "Win32",
       "browser_name" to "Chrome",
       "browser_version" to DouyinSigner.BROWSER_VERSION,
       "web_rid" to roomId,
+      // `msToken` must be present even when empty. The reference client sends it on this
+      // endpoint and it works; omitting the key entirely (as this did) made `enter` answer
+      // HTTP 200 with an empty body, which then fell through to the six-room feed and
+      // produced "该直播间可能未开播" for every room not in that feed.
+      "msToken" to "",
     )
     val url = "$URL_ENTER?${DouyinSigner.signQuery(params)}"
-    val response = http.get(url, headers = headers())
+    // The Referer has to be the room page, not the site root: Douyin checks it against
+    // `web_rid`, and a mismatched Referer is another way to get the empty 200.
+    val response = http.get(
+      url,
+      headers = headers().toMutableMap().apply {
+        put("Referer", "https://live.douyin.com/$roomId")
+        // Without this the body may be gzip'd, and the hand-rolled reader below would see
+        // bytes it cannot parse.
+        put("Accept-Encoding", "identity")
+      },
+    )
 
-    // The enter endpoint rejects unknown clients with an empty 200 body, so a feed
-    // lookup is the reliable fallback: it already carries the stream URL.
     val root = runCatching { parseObject(response.body, "enter") }.getOrNull()
+    // The live shape is `data.data[0]`, not `data.room` — reading `data.room` always yielded
+    // null, so the feed fallback ran even on a successful response.
     val data = root?.get("data")?.let { it as? JsonObject }
-    val entered = data?.get("room")?.let { it as? JsonObject }
+    val entered = (data?.get("data") as? JsonArray)?.firstOrNull()?.let { it as? JsonObject }
+      ?: data?.get("room")?.let { it as? JsonObject }
+    // `data.user` carries the anchor identity; the room object does not repeat it.
+    val anchor = data?.get("user")?.let { it as? JsonObject }
     val room = entered ?: findInFeed(roomId)
       ?: throw PlatformProtocolException(
         "抖音直播间信息获取失败，该直播间可能未开播",
@@ -319,12 +333,18 @@ class DouyinApi(private val http: HttpClient) {
     val status = room["status"]?.jsonPrimitive?.intOrNull ?: 2
     val owner = room["owner"]?.jsonObject
     val streamUrl = room["stream_url"]?.jsonObject
+    // `enter` puts the anchor on `data.user`; the feed items carry it on the room's `owner`.
+    // Reading only `room.owner` left the nickname and avatar blank for every `enter` hit.
+    val nickname = anchor?.get("nickname")?.jsonPrimitive?.contentOrNull
+      ?: owner?.get("nickname")?.jsonPrimitive?.contentOrNull
+    val avatarUrls = anchor?.get("avatar_thumb")?.jsonObject?.get("url_list")
+      ?: owner?.get("avatar_thumb")?.jsonObject?.get("url_list")
     return DouyinRoomInfo(
       roomId = room["id_str"]?.jsonPrimitive?.contentOrNull ?: roomId,
       title = room["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-      streamerName = owner?.get("nickname")?.jsonPrimitive?.contentOrNull.orEmpty(),
-      avatarUrl = owner?.get("avatar_thumb")?.jsonObject?.get("url_list")
-        ?.jsonArray?.firstOrNull()?.jsonPrimitive?.contentOrNull?.let(Texts::normalizeUrl),
+      streamerName = nickname.orEmpty(),
+      avatarUrl = avatarUrls?.jsonArray?.firstOrNull()
+        ?.jsonPrimitive?.contentOrNull?.let(Texts::normalizeUrl),
       coverUrl = room["cover"]?.jsonObject?.get("url_list")?.jsonArray?.firstOrNull()
         ?.jsonPrimitive?.contentOrNull?.let(Texts::normalizeUrl),
       viewerCount = room["stats"]?.jsonObject?.get("total_user")
