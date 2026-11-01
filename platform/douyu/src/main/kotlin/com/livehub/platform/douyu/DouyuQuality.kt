@@ -16,17 +16,29 @@ object DouyuQuality {
   /**
    * Picks the requested rate, falling back to the highest available.
    *
-   * Douyu encodes `rate == 0` as 原画 (source quality). When the caller asks for a
-   * label rather than a code we canonicalise common aliases first.
+   * Douyu encodes `rate == 0` as 原画 (source quality). The caller passes the *code* it
+   * remembered from another room; rates are not stable across rooms — a room with only
+   * `原画:0 / 高清:2` cannot serve a remembered `4` — so [resolveRate] is used to map the
+   * remembered value onto whatever this room actually advertises before falling back.
    */
   fun select(response: DyPlayResponse, preferred: Int?): Selection {
     val rates = response.rates
     val cdn = selectCdn(response.cdns, preferredCdn = null)
     if (rates.isEmpty()) return Selection(rate = -1, rateLabel = "原画", cdn = cdn)
 
-    val chosen = when (preferred) {
+    // A remembered code that this room does not offer is treated as a label, so "I picked
+    // 超清 last time" degrades to the closest tier here instead of silently becoming 原画.
+    val resolved = preferred?.let { requested ->
+      if (rates.any { it.rate == requested }) {
+        requested
+      } else {
+        resolveRate(labelFor(requested), rates)
+      }
+    }
+
+    val chosen = when (resolved) {
       null -> rates.firstOrNull { it.rate == 0 } ?: rates.maxByOrNull { it.rate } ?: rates.first()
-      else -> rates.firstOrNull { it.rate == preferred }
+      else -> rates.firstOrNull { it.rate == resolved }
         ?: rates.firstOrNull { it.rate == 0 }
         ?: rates.maxByOrNull { it.rate }
         ?: rates.first()

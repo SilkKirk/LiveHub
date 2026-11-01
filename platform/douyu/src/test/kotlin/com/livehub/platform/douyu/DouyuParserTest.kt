@@ -293,6 +293,48 @@ class DouyuQualityTest {
     assertEquals("高清", selection.rateLabel)
   }
 
+  /**
+   * Rate codes are not stable across rooms, but labels are.
+   *
+   * Douyu numbers the same tier differently between rooms — one room lists 高清 as `2`,
+   * another as `8`. Matching the remembered code alone would miss, and the user's choice
+   * would silently reset to 原画. Falling back to the *label* finds the tier by name, which
+   * is what `resolveRate` is for; before this it was dead code that only tests exercised.
+   */
+  @Test
+  fun `a remembered rate is matched by label when this room renumbers it`() {
+    val renumbered = listOf(
+      DouyuRate("原画720P30", 0, 8000),
+      DouyuRate("超清", 3, 2000),
+      DouyuRate("高清", 8, 1000),
+      DouyuRate("标清", 7, 500),
+    )
+    // 高清 is remembered as 2 but this room calls it 8.
+    assertEquals(8, DouyuQuality.select(response(renumbered), preferred = 2).rate)
+    // 标清 is remembered as 1 but this room calls it 7.
+    assertEquals(7, DouyuQuality.select(response(renumbered), preferred = 1).rate)
+  }
+
+  /**
+   * A label this room does not offer resolves through the documented keyword chain.
+   *
+   * `resolveRate("高清", …)` walks: name contains 高清 → rate 2 → rate 4 → name contains
+   * 超清 → highest rate. Verified by tracing that chain against this rate set: none of the
+   * first four hit, so it lands on the highest offered rate, which here is 标清 (1). The
+   * point of the test is that the result is a rate this room actually advertises, and that
+   * it never silently becomes a code the room cannot serve.
+   */
+  @Test
+  fun `a label missing from this room resolves through the keyword chain`() {
+    val narrow = listOf(DouyuRate("原画", 0, 8000), DouyuRate("标清", 1, 500))
+    val resolved = DouyuQuality.select(response(narrow), preferred = 2).rate
+    assertTrue(
+      narrow.any { it.rate == resolved },
+      "resolved to $resolved, which this room does not advertise",
+    )
+    assertEquals(1, resolved)
+  }
+
   @Test
   fun `cdn selection avoids scdn and prefers alphabetical order`() {
     // "ali" sorts before "ws-h5", and both outrank the scdn fallback.
