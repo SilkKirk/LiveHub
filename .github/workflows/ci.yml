@@ -76,7 +76,17 @@ jobs:
           exit "${LINT_EXIT:-0}"
 
       - name: JVM unit tests
-        run: ./gradlew test --stacktrace
+        run: |
+          set -o pipefail
+          # A failing test otherwise reports only "exit code 1"; the failing class and
+          # assertion are surfaced through the XML results so they reach the annotations.
+          ./gradlew test --stacktrace > test.log 2>&1 || TEST_EXIT=$?
+          python3 .github/scripts/report_tests.py || true
+          if [ -n "${TEST_EXIT:-}" ]; then
+            echo "=== test log tail ==="
+            tail -n 40 test.log
+          fi
+          exit "${TEST_EXIT:-0}"
 
       - name: Assemble debug
         run: ./gradlew :app:assembleDebug --stacktrace
