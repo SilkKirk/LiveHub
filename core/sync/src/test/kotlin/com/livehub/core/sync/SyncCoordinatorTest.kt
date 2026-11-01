@@ -73,6 +73,40 @@ class SyncCoordinatorTest {
     assertEquals(listOf("pull:follows", "push:follows"), transport.calls)
   }
 
+  /**
+   * The reported "sent" count is the record count, not the payload sequence.
+   *
+   * `pushed` used to be `payload.sequence`, a monotonic per-device counter, so the sync
+   * summary showed numbers that had nothing to do with the data exchanged: three followed
+   * rooms with a fresh install reported "sent 1", and after a few syncs "sent 9" for the
+   * same three records. The sequence exists only for de-duplication.
+   */
+  @Test
+  fun `the pushed count is the number of records, not the sequence number`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    // Three records on this device.
+    target.apply(
+      listOf(
+        SyncRecord(key = "douyu:1", value = SyncCodec.stringValue("a"), hlc = Hlc(1, 1), deviceId = 1, updatedAt = now),
+        SyncRecord(key = "douyu:2", value = SyncCodec.stringValue("b"), hlc = Hlc(1, 2), deviceId = 1, updatedAt = now),
+        SyncRecord(key = "huya:3", value = SyncCodec.stringValue("c"), hlc = Hlc(1, 3), deviceId = 1, updatedAt = now),
+      ),
+    )
+
+    // Burn a few sequence numbers first, so a sequence-based count would be visibly wrong.
+    engine.buildPayload(SyncScope.FOLLOWS)
+    engine.buildPayload(SyncScope.FOLLOWS)
+
+    val outcomes = SyncCoordinator(engine, FakeTransport()).syncWith(peers.first())
+    val follows = outcomes.first { it.scope == SyncScope.FOLLOWS }
+
+    assertEquals(3, follows.pushed, "expected the record count, got ${follows.pushed}")
+  }
+
   @Test
   fun `a pulled payload is applied before the push happens`() = runTest {
     val target = Target(SyncScope.FOLLOWS)

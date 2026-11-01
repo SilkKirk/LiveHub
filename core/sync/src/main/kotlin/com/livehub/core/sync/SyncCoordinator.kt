@@ -68,8 +68,12 @@ class SyncCoordinator(
           val applied = engine.applyPayload(response, peer)
           pulled += applied.added
         }
-        pushed = local.sequence.toInt().coerceAtLeast(0)
-        engine.recordPush(peer, scope, itemCount = pushed, success = true)
+        // The record count, not the payload sequence. `local.sequence` is a counter that only
+        // ever grows, so showing it as "sent N items" made the sync summary report numbers
+        // unrelated to what was transferred — and the de-duplication guard means the same
+        // sequence is never re-sent anyway.
+        pushed = local.recordCount
+        engine.recordPush(peer, scope, itemCount = pushed, success = true, note = "发送 $pushed 条")
       }
 
       outcomes += ScopeOutcome(scope, pulled = pulled, pushed = pushed)

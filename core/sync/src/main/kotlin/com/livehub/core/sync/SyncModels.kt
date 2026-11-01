@@ -39,6 +39,18 @@ data class SyncPayload(
 ) {
   val parsedScope: SyncScope? get() = SyncScope.fromWireName(scope)
 
+  /**
+   * How many records this payload carries.
+   *
+   * Used for the human-facing "sent N items" count. It is deliberately *not* [sequence]:
+   * the sequence is a monotonic per-device counter used for de-duplication, so reporting it
+   * as a transfer size showed numbers that had nothing to do with the data exchanged.
+   * Malformed entries decode to an empty list rather than throwing, because this is only
+   * used for reporting.
+   */
+  val recordCount: Int
+    get() = runCatching { SyncCodec.decodeRecords(entries).size }.getOrDefault(0)
+
   companion object {
     /** Bump whenever the JSON layout of any scope changes incompatibly. */
     const val SCHEMA: Int = 1
