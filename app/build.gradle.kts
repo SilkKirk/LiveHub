@@ -141,6 +141,7 @@ dependencies {
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.test.ext.junit)
     testRuntimeOnly(libs.junit.platform.launcher)
+    testRuntimeOnly(libs.junit.vintage.engine)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.core)
