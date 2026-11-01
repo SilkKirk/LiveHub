@@ -68,6 +68,18 @@ class BilibiliCategoriesTest {
   }
 
   @Test
+  fun `the groups are the thirteen Bilibili tabs`() {
+    val groups = BilibiliCategories.parse(raw).mapNotNull { it.parentName }.distinct()
+
+    assertEquals(
+      listOf(
+        "网游", "手游", "单机游戏", "虚拟主播", "娱乐", "电台", "赛事",
+        "聊天室", "生活", "知识", "帮我玩", "互动玩法", "购物",
+      ),
+      groups,
+    )
+  }
+  @Test
   fun `the hot tab is distinguishable from a real area`() {
     assertEquals("0:0", BilibiliCategories.HOT_ID)
     assertEquals(0 to 0, BilibiliCategories.idsOf(BilibiliCategories.HOT_ID))

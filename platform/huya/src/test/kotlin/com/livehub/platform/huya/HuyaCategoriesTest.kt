@@ -59,8 +59,10 @@ class HuyaCategoriesTest {
   fun `the groups cover the expected top level tabs`() {
     val groups = HuyaCategories.parse(raw).mapNotNull { it.parentName }.distinct()
 
-    assertTrue(groups.size >= 4, "expected at least four groups, saw $groups")
-    assertTrue("网游" in groups, "expected 网游 among $groups")
+    assertEquals(
+      listOf("网游竞技", "单机热游", "娱乐天地", "手游休闲"),
+      groups,
+    )
   }
 
   @Test

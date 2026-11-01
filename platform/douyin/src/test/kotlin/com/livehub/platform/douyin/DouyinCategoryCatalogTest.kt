@@ -83,9 +83,16 @@ class DouyinCategoryCatalogTest {
   }
 
   @Test
-  fun `groups are populated so the first chip row is not empty`() {
+  fun `the groups are the nine Douyin tabs`() {
     val groups = DouyinCategoryCatalog.parse(raw).mapNotNull { it.parentName }.distinct()
-    assertTrue(groups.size >= 9, "expected at least nine groups, saw $groups")
+
+    assertEquals(
+      listOf(
+        "射击游戏", "竞技游戏", "单机游戏", "棋牌游戏", "休闲益智",
+        "角色扮演", "策略卡牌", "娱乐天地", "科技文化",
+      ),
+      groups,
+    )
   }
 
   @Test
