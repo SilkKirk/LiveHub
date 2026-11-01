@@ -66,9 +66,15 @@ class DanmakuOverlayTest {
       )
     }
     composeRule.waitForIdle()
+    composeRule.mainClock.advanceTimeByFrame()
+    composeRule.waitForIdle()
 
     // One more arrives.
     messages = first + message("c")
+    composeRule.waitForIdle()
+    // The frozen clock means the new bubble has been added to the list but not yet laid
+    // out or drawn; one frame is what turns it into a node.
+    composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
 
     composeRule.onAllNodesWithText("a").assertCountEquals(1)
@@ -103,6 +109,8 @@ class DanmakuOverlayTest {
         blockedKeywords = listOf("广告"),
       )
     }
+    composeRule.waitForIdle()
+    composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
 
     composeRule.onAllNodesWithText("买广告").assertCountEquals(0)
