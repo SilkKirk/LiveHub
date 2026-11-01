@@ -8,6 +8,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import com.livehub.core.model.DanmakuMessage
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -121,5 +124,67 @@ class DanmakuOverlayTest {
 
     composeRule.onAllNodesWithText("买广告").assertCountEquals(0)
     composeRule.onNodeWithText("正常弹幕").assertExists()
+  }
+}
+
+/**
+ * Lane scheduling, which is pure arithmetic and needs no composition.
+ *
+ * Plain round-robin assignment — what the overlay did before — hands out lane N+1 while a
+ * long danmaku is still crossing lane N, so a short one entering behind it catches up and
+ * overlaps. These pin the rule that replaced it.
+ */
+class DanmakuLaneSchedulingTest {
+
+  @Test
+  fun `a free lane is taken immediately`() {
+    val lanes = LongArray(3) { 0L }
+    assertEquals(0, chooseLane(lanes, now = 1_000))
+  }
+
+  @Test
+  fun `the lane that frees soonest wins when every lane is busy`() {
+    // Lane 2 frees at 1_050, inside the tolerance window; lanes 0 and 1 much later.
+    val lanes = longArrayOf(5_000, 4_000, 1_050)
+    assertEquals(2, chooseLane(lanes, now = 1_000))
+  }
+
+  @Test
+  fun `no lane is returned when the soonest is beyond the tolerance`() {
+    // Dropping a danmaku beats stacking it on top of another: every live client does this.
+    val lanes = longArrayOf(9_000, 9_000, 9_000)
+    assertNull(chooseLane(lanes, now = 1_000))
+  }
+
+  @Test
+  fun `a lane exactly at the tolerance boundary is still usable`() {
+    val lanes = longArrayOf(1_120, 9_000)
+    assertEquals(0, chooseLane(lanes, now = 1_000))
+  }
+
+  @Test
+  fun `a wider label keeps its lane busy longer`() {
+    val shortLabel = laneFreeAfterMs(textWidthPx = 50f, screenWidthPx = 1_000f, flightMillis = 8_000)
+    val longLabel = laneFreeAfterMs(textWidthPx = 500f, screenWidthPx = 1_000f, flightMillis = 8_000)
+
+    assertTrue(
+      "a longer label must hold the lane longer ($longLabel vs $shortLabel)",
+      longLabel > shortLabel,
+    )
+  }
+
+  @Test
+  fun `a label never frees its lane before it has cleared the edge`() {
+    // The label travels screen + text width; it clears the entry point after its own width.
+    // 200px of a 1200px travel at 8000ms is ~1333ms.
+    val free = laneFreeAfterMs(textWidthPx = 200f, screenWidthPx = 1_000f, flightMillis = 8_000)
+
+    assertTrue("expected roughly 1333ms, got $free", free in 1_400..1_450)
+  }
+
+  @Test
+  fun `a zero width screen falls back to the whole flight`() {
+    assertEquals(8_000L, laneFreeAfterMs(textWidthPx = 100f, screenWidthPx = 0f, flightMillis = 8_000))
+    assertEquals(8_000L, laneFreeAfterMs(textWidthPx = 0f, screenWidthPx = 1_000f, flightMillis = 8_000))
   }
 }
