@@ -102,12 +102,20 @@ class DouyinApi(private val http: HttpClient) {
     return rooms to (rooms.size >= PAGE_SIZE)
   }
 
-  /** Maps one `webcast/feed` entry, whose room fields sit at the top level. */
+  /**
+   * Maps one `webcast/feed` entry.
+   *
+   * The feed wraps every card in an envelope whose room object lives under `data`;
+   * older responses put the room fields at the top level, so both shapes are accepted.
+   */
   private fun parseFeedItem(element: JsonElement): Streamer? {
-    val obj = element as? JsonObject ?: return null
-    val room = obj["room"]?.let { it as? JsonObject } ?: obj
+    val envelope = element as? JsonObject ?: return null
+    val room = (envelope["data"] as? JsonObject)
+      ?: (envelope["room"] as? JsonObject)
+      ?: envelope
     val idText = room.str("id_str")
       ?: room["id"]?.jsonPrimitive?.longOrNull?.toString()
+      ?: envelope.str("web_rid")
       ?: room.str("web_rid")
       ?: return null
     if (idText.isBlank() || idText == "0") return null
@@ -180,17 +188,23 @@ class DouyinApi(private val http: HttpClient) {
       "browser_language" to "zh-CN",
       "browser_platform" to "Win32",
       "browser_name" to "Chrome",
-      "browser_version" to "122.0.0.0",
+      "browser_version" to DouyinSigner.BROWSER_VERSION,
       "web_rid" to roomId,
     )
     val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
     val url = "$URL_ENTER?${signed.queryString()}"
     val response = http.get(url, headers = headers())
-    val root = response.requireSuccess().let { parseObject(it.body, "enter") }
-    val data = root["data"]?.jsonObject
-      ?: throw PlatformProtocolException("抖音房间数据为空", Platform.DOUYIN)
-    val room = data["room"]?.jsonObject
-      ?: throw PlatformProtocolException("抖音房间数据缺失 room 字段", Platform.DOUYIN)
+
+    // The enter endpoint rejects unknown clients with an empty 200 body, so a feed
+    // lookup is the reliable fallback: it already carries the stream URL.
+    val root = runCatching { parseObject(response.body, "enter") }.getOrNull()
+    val data = root?.get("data")?.let { it as? JsonObject }
+    val entered = data?.get("room")?.let { it as? JsonObject }
+    val room = entered ?: findInFeed(roomId)
+      ?: throw PlatformProtocolException(
+        "抖音直播间信息获取失败，该直播间可能未开播",
+        Platform.DOUYIN,
+      )
     val status = room["status"]?.jsonPrimitive?.intOrNull ?: 2
     val owner = room["owner"]?.jsonObject
     val streamUrl = room["stream_url"]?.jsonObject
@@ -244,9 +258,22 @@ class DouyinApi(private val http: HttpClient) {
         )
       }
     }
+    // The anonymous feed only exposes the flat `hls_pull_url` string, which is already
+    // the highest quality the CDN will serve.
     streamUrl["hls_pull_url"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { url ->
       if (builder.none { it.url == url }) {
         builder += DouyinVariant(name = "原画", url = url, rank = 0)
+      }
+    }
+    streamUrl["flv_pull_url_map"]?.let { it as? JsonObject }?.let { flv ->
+      flv.entries.forEachIndexed { index, entry ->
+        val url = entry.value.jsonPrimitive.contentOrNull ?: return@forEachIndexed
+        if (url.isBlank() || builder.any { it.url == url }) return@forEachIndexed
+        builder += DouyinVariant(
+          name = qualityName(entry.key),
+          url = url,
+          rank = qualityRank(entry.key, index) + 10,
+        )
       }
     }
     val flv = streamUrl["flv_pull_url"] as? JsonObject
@@ -279,6 +306,43 @@ class DouyinApi(private val http: HttpClient) {
     else -> 10 + index
   }
 
+  /**
+   * Finds a room in `webcast/feed` by id.
+   *
+   * Douyin's `enter` endpoint only answers fully for a logged-in, fingerprinted client;
+   * the feed response contains the same room object (including `stream_url`) and works
+   * anonymously, so it doubles as the detail source.
+   */
+  private suspend fun findInFeed(roomId: String): JsonObject? {
+    val params = listOf(
+      "aid" to "6383",
+      "app_name" to "douyin_web",
+      "live_id" to "1",
+      "device_platform" to "web",
+      "language" to "zh-CN",
+      "enter_from" to "web_live",
+      "cookie_enabled" to "true",
+      "browser_language" to "zh-CN",
+      "browser_name" to "Chrome",
+      "browser_version" to DouyinSigner.BROWSER_VERSION,
+      "count" to "50",
+      "offset" to "0",
+    )
+    val signed = DouyinSigner.sign(params, DouyinSigner.USER_AGENT)
+    val response = runCatching {
+      http.get("$URL_FEED?${signed.queryString()}", headers = headers()).requireSuccess()
+    }.getOrNull() ?: return null
+    val root = runCatching { parseObject(response.body, "feed") }.getOrNull() ?: return null
+    val list = root["data"] as? JsonArray ?: return null
+    return list.firstNotNullOfOrNull { element ->
+      val envelope = element as? JsonObject ?: return@firstNotNullOfOrNull null
+      val candidate = (envelope["data"] as? JsonObject) ?: envelope
+      val id = candidate.str("id_str")
+        ?: candidate["id"]?.jsonPrimitive?.longOrNull?.toString()
+        ?: envelope.str("web_rid")
+      if (id == roomId) candidate else null
+    }
+  }
   private fun parseRoomCard(element: JsonElement): Streamer? {
     val obj = element as? JsonObject ?: return null
     val room = obj["room"]?.jsonObject ?: obj
