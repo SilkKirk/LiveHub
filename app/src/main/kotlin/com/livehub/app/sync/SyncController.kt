@@ -103,7 +103,8 @@ class SyncController(
           // handshake is the only moment we learn it.
           val remotePort = envelope.preferredPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
           addressBook.addManual(envelope.deviceId, envelope.deviceName, remoteAddress, remotePort)
-          return peer.sharedSecret to peer
+          // Reply with the secret WE present; the caller stores it for later requests.
+          return selfSecret() to peer
         }
 
         override fun onPull(envelope: SyncEnvelope, scope: SyncScope, peer: TrustedPeer?): SyncPayload? =

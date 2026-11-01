@@ -81,7 +81,8 @@ class CrossDeviceSyncTest {
               "127.0.0.1",
               envelope.preferredPort,
             )
-            return peer.sharedSecret to peer
+            // Reply with OUR secret so the caller can authenticate against us.
+            return selfSecret to peer
           }
 
           override fun onPull(
