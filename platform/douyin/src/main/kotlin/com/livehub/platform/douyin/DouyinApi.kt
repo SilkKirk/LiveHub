@@ -52,12 +52,75 @@ data class DouyinRoomInfo(
 }
 
 /** HTTP + parsing for Douyin live. */
-class DouyinApi(private val http: HttpClient) {
+class DouyinApi(
+  private val http: HttpClient,
+  /**
+   * Persists a negotiated `ttwid` across calls and restarts.
+   *
+   * Defaults to a no-op so tests and callers that do not care behave exactly as before.
+   */
+  private val cookieStore: DouyinCookieStore = DouyinCookieStore.InMemory,
+) {
 
   val json = Json {
     ignoreUnknownKeys = true
     isLenient = true
     coerceInputValues = true
+  }
+
+  @Volatile private var negotiatedCookie: String? = null
+
+  /**
+   * The `Cookie` header to send.
+   *
+   * Negotiates a real `ttwid` on first use instead of shipping the year-old literal. That
+   * literal is why the first room-open after a cold start failed: Douyin answered the enter
+   * call with an empty body and only then handed back a usable `ttwid` in `Set-Cookie`, so
+   * the second attempt — and every later one — worked. Fetching the page first means the
+   * first attempt already carries a valid value.
+   *
+   * Everything here is best-effort: if the negotiation fails the fallback is still sent,
+   * because a request with *no* cookie looks like an empty category rather than an error.
+   */
+  suspend fun cookieHeader(): String {
+    negotiatedCookie?.let { return it }
+    cookieStore.header().takeIf { it.isNotBlank() }?.let {
+      negotiatedCookie = it
+      return it
+    }
+    val fresh = runCatching { negotiateTtwid() }.getOrNull()
+    if (!fresh.isNullOrBlank()) {
+      negotiatedCookie = fresh
+      cookieStore.save(fresh)
+      return fresh
+    }
+    return DouyinSigner.FALLBACK_COOKIE
+  }
+
+  /**
+   * Asks Douyin for a `ttwid` by loading any live page.
+   *
+   * The page is not parsed: what matters is the `Set-Cookie` header, which arrives on a
+   * plain 200 for every `live.douyin.com` URL.
+   */
+  private suspend fun negotiateTtwid(): String? {
+    val response = runCatching {
+      http.get(
+        "https://live.douyin.com/",
+        headers = mapOf(
+          "User-Agent" to DouyinSigner.USER_AGENT,
+          "Accept" to "text/html,application/xhtml+xml,*/*",
+          "Accept-Encoding" to "identity",
+        ),
+      )
+    }.getOrNull() ?: return null
+    val cookies = response.headersNamed("Set-Cookie")
+    if (cookies.isEmpty()) return null
+    val ttwid = cookies.firstNotNullOfOrNull { raw ->
+      val pair = raw.substringBefore(';').trim()
+      pair.takeIf { it.startsWith("ttwid=") && it.length > "ttwid=".length }
+    } ?: return null
+    return ttwid
   }
 
   /**
@@ -278,7 +341,7 @@ class DouyinApi(private val http: HttpClient) {
       headers = mapOf(
         "User-Agent" to DouyinSigner.USER_AGENT,
         "Referer" to "https://live.douyin.com/",
-        "Cookie" to DouyinSigner.DEFAULT_COOKIE,
+        "Cookie" to cookieHeader(),
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       ),
     ).requireSuccess().body
@@ -538,12 +601,16 @@ class DouyinApi(private val http: HttpClient) {
    *
    * The `Cookie` is not optional: Douyin answers the partition and feed endpoints with
    * HTTP 200 and an empty body when there is no cookie, so a cookieless request looks
-   * exactly like an empty category.
+   * exactly like an empty category. The value is negotiated (see [cookieHeader]) rather
+   * than the shipped literal, which was a year old and made the first room-open fail.
+   *
+   * Suspending because negotiation may need one network call the first time; afterwards the
+   * value is cached and this is a map lookup.
    */
-  private fun headers(): Map<String, String> = mapOf(
+  private suspend fun headers(): Map<String, String> = mapOf(
     "User-Agent" to DouyinSigner.USER_AGENT,
     "Referer" to "https://live.douyin.com/",
-    "Cookie" to DouyinSigner.DEFAULT_COOKIE,
+    "Cookie" to cookieHeader(),
     "Accept" to "application/json, text/plain, */*",
     "Accept-Language" to "zh-CN,zh;q=0.9",
   )

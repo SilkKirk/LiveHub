@@ -326,7 +326,9 @@ class DouyinSignerTest {
   }
 
   @Test
-  fun `the default cookie carries ttwid`() {
-    assertTrue(DouyinSigner.DEFAULT_COOKIE.startsWith("ttwid="))
+  fun `the fallback cookie carries ttwid`() {
+    // It is only a last resort, but it still has to be a syntactically valid cookie: the
+    // partition endpoint answers an empty body for a request with no cookie at all.
+    assertTrue(DouyinSigner.FALLBACK_COOKIE.startsWith("ttwid="))
   }
 }

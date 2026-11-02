@@ -31,13 +31,20 @@ object DouyinSigner {
       "Core/1.116.567.400 QQBrowser/19.7.6764.400"
 
   /**
-   * Default `ttwid` cookie.
+   * Fallback `ttwid` cookie, used only when none has been negotiated yet.
    *
    * The partition and feed endpoints answer HTTP 200 with an empty body when the request
-   * carries no cookie at all, which is indistinguishable from "no rooms": a request
-   * without this header silently looks like an empty category.
+   * carries no cookie at all, which is indistinguishable from "no rooms": a request without
+   * this header silently looks like an empty category. So *something* has to be sent even
+   * before a real value is available.
+   *
+   * It is a last resort and not a working credential: this literal was issued on
+   * 2025-10-21 and Douyin's ttwid is not durable. Sending it is what made the first
+   * room-open fail — Douyin answered the enter call with an empty body, then handed back a
+   * fresh ttwid in `Set-Cookie`, so the *second* attempt worked. `DouyinApi` now negotiates
+   * a real value on first use; this constant only covers the moment before that.
    */
-  const val DEFAULT_COOKIE =
+  const val FALLBACK_COOKIE =
     "ttwid=1%7C2iDIYVmjzMcpZ20fcaFde0VghXAA3NaNXE_SLR68IyE%7C1761045455" +
       "%7Cab35197d5cfb21df6cbb2fa7ef1c9262206b062c315b9d04da746d0b37dfbc7d"
 

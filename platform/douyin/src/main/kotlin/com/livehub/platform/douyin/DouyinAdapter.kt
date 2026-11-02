@@ -34,7 +34,12 @@ import kotlin.time.Duration.Companion.milliseconds
 class DouyinAdapter(
   private val http: HttpClient,
   private val webSocketClient: OkHttpClient,
-  private val api: DouyinApi = DouyinApi(http),
+  /**
+   * Persists the negotiated `ttwid`; the app supplies a DataStore-backed one so the value
+   * survives restarts, while tests fall back to the in-memory default.
+   */
+  private val cookieStore: DouyinCookieStore = DouyinCookieStore.InMemory,
+  private val api: DouyinApi = DouyinApi(http, cookieStore),
   /** Supplies the bundled category table; empty in tests. */
   private val assets: com.livehub.platform.api.AssetReader = com.livehub.platform.api.AssetReader.Empty,
   /**
@@ -167,7 +172,9 @@ class DouyinAdapter(
       return DouyinDanmakuHandshake.RoomInit(
         roomId = numericRoomId,
         userUniqueId = userUniqueId,
-        cookieHeader = DouyinSigner.DEFAULT_COOKIE,
+        // The socket handshake needs the same negotiated ttwid the REST calls use; the old
+        // shipped literal was a year out of date.
+        cookieHeader = api.cookieHeader(),
       )
     }
 

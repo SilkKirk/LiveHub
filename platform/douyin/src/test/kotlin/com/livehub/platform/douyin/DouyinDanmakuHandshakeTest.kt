@@ -19,7 +19,7 @@ class DouyinDanmakuHandshakeTest {
   private val init = DouyinDanmakuHandshake.RoomInit(
     roomId = "7380000000000000000",
     userUniqueId = "123456789012",
-    cookieHeader = DouyinSigner.DEFAULT_COOKIE,
+    cookieHeader = DouyinSigner.FALLBACK_COOKIE,
   )
 
   @Test

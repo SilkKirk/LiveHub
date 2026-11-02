@@ -69,6 +69,10 @@ class AppContainer(
     DataStoreBilibiliCookies(applicationContext)
   }
 
+  val douyinCookieStore: com.livehub.platform.douyin.DouyinCookieStore by lazy {
+    DataStoreDouyinCookies(applicationContext)
+  }
+
   val adapters: List<LivePlatformAdapter> by lazy {
     listOf(
       DouyuAdapter(
@@ -80,6 +84,10 @@ class AppContainer(
       DouyinAdapter(
         http = httpClient,
         webSocketClient = webSocketClient,
+        // Persisted so the negotiated ttwid survives a restart. The shipped literal was a
+        // year old, and sending it made the first room-open fail until Douyin handed back a
+        // fresh cookie in Set-Cookie.
+        cookieStore = douyinCookieStore,
         assets = assetReader,
         // The danmaku handshake needs a token from the site's own webmssdk.js, evaluated by
         // the same Rhino engine Douyu's signer uses. Without it the socket cannot open.
