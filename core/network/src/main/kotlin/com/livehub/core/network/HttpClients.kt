@@ -77,12 +77,23 @@ object HttpClients {
  * The app never relies on `java.net.CookieManager` because Android and the JVM
  * disagree on its default policy; this explicit implementation keeps behaviour
  * identical in unit tests and on device.
+ *
+ * **Bilibili hosts are deliberately excluded.** OkHttp's `BridgeInterceptor` replaces the
+ * `Cookie` header wholesale with whatever the jar returns whenever the jar has any cookie
+ * for that host — an explicit header set by the caller does not win. Bilibili hands
+ * `LIVE_BUVID` to any response and then treats a request *without* `buvid3` as anonymous,
+ * answering `-352`; so as soon as the user had opened one room, the jar held `LIVE_BUVID`,
+ * the list request lost its `buvid3` placeholder and every category failed until the app
+ * was restarted. Bilibili cookies are already owned explicitly by
+ * `BilibiliCookieStore` (persisted, and set header by header), so the jar has no business
+ * touching them.
  */
 class InMemoryCookieJar : CookieJar {
   private val store = ConcurrentHashMap<String, MutableList<Cookie>>()
 
   override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
     if (cookies.isEmpty()) return
+    if (isManagedExternally(url.host)) return
     val key = url.host
     val existing = store.getOrPut(key) { mutableListOf() }
     synchronized(existing) {
@@ -94,6 +105,9 @@ class InMemoryCookieJar : CookieJar {
   }
 
   override fun loadForRequest(url: HttpUrl): List<Cookie> {
+    // Returning empty here is what lets the caller's own `Cookie` header survive: OkHttp
+    // only overwrites the header when this returns a non-empty list.
+    if (isManagedExternally(url.host)) return emptyList()
     val key = url.host
     val now = System.currentTimeMillis()
     val existing = store[key] ?: return emptyList()
@@ -109,4 +123,16 @@ class InMemoryCookieJar : CookieJar {
     .orEmpty()
 
   fun clear() = store.clear()
+
+  private fun isManagedExternally(host: String): Boolean =
+    BILIBILI_HOSTS.any { host == it || host.endsWith(".$it") }
+
+  companion object {
+    /**
+     * Hosts whose cookies LiveHub sets explicitly and persists itself. Matched exactly or as
+     * a suffix so `api.live.bilibili.com`, `api.bilibili.com` and `live.bilibili.com` are all
+     * covered.
+     */
+    private val BILIBILI_HOSTS = listOf("bilibili.com")
+  }
 }

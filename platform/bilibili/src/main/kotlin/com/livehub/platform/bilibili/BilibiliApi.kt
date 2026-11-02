@@ -164,8 +164,8 @@ class BilibiliApi(
       headers = mapOf(
         "User-Agent" to UA_MOBILE,
         "Referer" to "https://www.bilibili.com/",
-        // Always the fixed placeholder, never the stored jar — see LIST_COOKIE for why a
-        // real buvid makes this endpoint answer -352.
+        // Always the placeholder, never the stored jar — see LIST_COOKIE for why a real
+        // buvid makes this endpoint answer -352.
         "Cookie" to LIST_COOKIE,
       ),
     )
@@ -646,16 +646,24 @@ class BilibiliApi(
     /**
      * Cookie `second/getList` must carry, verbatim.
      *
-     * Measured against the live endpoint (area 2:86, six scrape-cookie × list-cookie
-     * combinations): the placeholder yields `code = 0` and 40 rooms in **every** case, while
-     * a real `buvid3` from `finger/spi` — or any other value, even a well-formed UUID — yields
-     * `-352`. The endpoint accepts an anonymous placeholder and rejects a real device
-     * fingerprint that it has no session for.
+     * The rule the live endpoint actually enforces is "**a `buvid3` must be present**".
+     * Measured (area 2:86):
      *
-     * This is why the list request must not read the cookie jar. The jar holds a real
-     * `buvid3` as soon as the user has searched anything (`search` persists what
-     * `ensureBuvidCookie` negotiates) or logged in, and from then on every category would
-     * fail with -352 while search kept working — exactly the reported symptom.
+     *  * `buvid3=i;` → `code = 0`, 40 rooms
+     *  * no cookie, or a cookie without `buvid3` (e.g. only `LIVE_BUVID`) → `-352`
+     *  * a *real* `buvid3` from `finger/spi` → also `-352`
+     *
+     * So the placeholder is not merely tolerated, it is the only value that works: this
+     * endpoint accepts an anonymous marker and rejects a device fingerprint it has no
+     * session for.
+     *
+     * Setting the header is necessary but was not sufficient. OkHttp's `BridgeInterceptor`
+     * replaces the `Cookie` header with the cookie jar's contents whenever the jar has
+     * anything for that host, and `getRoomInfo` hands back `Set-Cookie: LIVE_BUVID=…`. Once
+     * the user opened a single room, the jar held `LIVE_BUVID`, this header was overwritten
+     * with it, and the request lost its `buvid3` — every category then answered -352 until
+     * the process restarted and the in-memory jar was cleared. `InMemoryCookieJar` now
+     * ignores bilibili.com for exactly this reason.
      */
     const val LIST_COOKIE = "buvid3=i;"
 
