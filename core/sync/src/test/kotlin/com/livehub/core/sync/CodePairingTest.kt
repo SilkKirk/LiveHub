@@ -155,9 +155,18 @@ class CodePairingTest {
     assertTrue(hostPeers.isEmpty(), "nothing must be stored on a wrong code")
   }
 
+  /**
+   * A six digit code that no device will accept.
+   *
+   * `hostCode` is only populated by [startHost], so the tests that never start a host have
+   * to supply their own — passing the empty default made every one of them come back
+   * `Malformed` and assert the wrong thing.
+   */
+  private val anyCode = "482913"
+
   @Test
   fun `no device answering is reported as unreachable, not as a wrong code`() = runBlocking {
-    val result = pairing().pair(hostCode, listOf(peerAt(closedPort())), clientTransport())
+    val result = pairing().pair(anyCode, listOf(peerAt(closedPort())), clientTransport())
 
     assertTrue(result is CodePairingResult.Unreachable, "got $result")
     assertTrue((result as CodePairingResult.Unreachable).tried >= 1)
@@ -173,7 +182,7 @@ class CodePairingTest {
 
   @Test
   fun `no candidates explains what to check`() = runBlocking {
-    val result = pairing().pair(hostCode, emptyList(), clientTransport())
+    val result = pairing().pair(anyCode, emptyList(), clientTransport())
 
     assertEquals(CodePairingResult.NoCandidate, result)
     assertTrue(result.message!!.contains("Wi-Fi"))

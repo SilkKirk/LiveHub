@@ -280,7 +280,13 @@ class SyncEngine(
     remoteSecret: String? = null,
     issuedSecret: String? = null,
   ): Result<TrustedPeer> {
-    val secret = (remoteSecret ?: issuedSecret ?: idGenerator()).replace("-", "")
+    // A generated secret is dash-stripped so it is URL and QR friendly. A secret the peer
+    // *presented* is stored verbatim: rewriting it means this device compares a mangled
+    // value against whatever the peer sends, and every authenticated request 403s. The
+    // old code ran `.replace("-", "")` over both paths, which silently corrupted any peer
+    // whose secret contained a dash.
+    val secret = remoteSecret?.takeIf { it.isNotBlank() }
+      ?: (issuedSecret ?: idGenerator()).replace("-", "")
     if (secret.isBlank()) {
       return Result.failure(IllegalStateException("配对密钥为空"))
     }
