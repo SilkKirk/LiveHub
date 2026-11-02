@@ -241,9 +241,10 @@ class CodePairingTest {
 
     val rejected = result as? CodePairingResult.Rejected
     assertNotNull(rejected, "got $result")
+    // Jupiter argument order: the reason is last.
     assertTrue(
-      "an expired code must say so, not blame the network: ${rejected!!.reason}",
-      rejected.reason.contains("过期"),
+      rejected!!.reason.contains("过期"),
+      "an expired code must say so, not blame the network: ${rejected.reason}",
     )
     assertTrue(hostPeers.isEmpty())
   }

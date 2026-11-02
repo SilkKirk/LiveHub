@@ -450,7 +450,10 @@ class MainViewModelTest {
     idle()
 
     assertNotNull(state.message)
-    assertTrue(state.message!!.contains("六位"), state.message!!)
+    // This file is JUnit 4 (`org.junit.Assert`), so the reason comes *first*. Argument order
+    // is the one thing that differs from the Jupiter tests elsewhere in the repo, and
+    // getting it backwards makes the compiler read the reason as the condition.
+    assertTrue(state.message!!, state.message!!.contains("六位"))
     assertFalse(state.pairing)
   }
 

@@ -8,9 +8,12 @@ import org.junit.jupiter.api.Test
 /**
  * The subnet sweep that makes code pairing work when multicast does not.
  *
- * The bounds are the point: a sweep that reached past RFC 1918 or past a /24 would turn
- * "pair with a phone" into "scan somebody's network", which is both slow and not something
- * an app should do uninvited.
+ * The bounds are the point: a sweep that reached past RFC 1918 or past a 24 bit prefix
+ * would turn "pair with a phone" into "scan somebody's network", which is both slow and
+ * not something an app should do uninvited.
+ *
+ * Test names avoid `/` for a mundane reason: a backticked function name containing a slash
+ * is an illegal class name, and the JVM module fails to compile rather than skipping it.
  */
 class SubnetScannerTest {
 
@@ -39,7 +42,7 @@ class SubnetScannerTest {
   }
 
   @Test
-  fun `candidates cover a full /24 on the sync port`() {
+  fun `candidates cover a full twenty four bit subnet on the sync port`() {
     val candidates = SubnetScanner.candidates(port = 47653, hostSuffixes = 1..4)
 
     // The suffix range is injectable precisely so this can be asserted without enumerating
