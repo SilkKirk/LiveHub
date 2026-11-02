@@ -194,38 +194,33 @@ class SyncEngineTest {
   }
 
   @Test
-  fun `pairing succeeds with the right code and stores a peer`() {
+  fun `linking a peer stores the secret it presented`() {
     val peers = mutableListOf<TrustedPeer>()
     val engine = engine(listOf(FakeTarget(SyncScope.FOLLOWS)), peers)
 
-    val result = engine.completePairing(
+    val result = engine.linkPeer(
       peerDeviceId = 42,
       peerDeviceName = "tablet",
-      code = "123456",
-      expectedCode = "123456",
+      remoteSecret = "remote-secret",
     )
 
     assertTrue(result.isSuccess)
     assertEquals(1, peers.size)
     assertEquals(42L, peers.first().deviceId)
-    // The engine strips the dashes so the secret is URL/QR friendly.
-    assertEquals("secrettoken", peers.first().sharedSecret)
+    // The peer's own secret is what it will present, so that is what has to be stored.
+    assertEquals("remote-secret", peers.first().sharedSecret)
   }
 
   @Test
-  fun `pairing fails with the wrong code and stores nothing`() {
+  fun `linking without a remote secret generates one and strips dashes`() {
     val peers = mutableListOf<TrustedPeer>()
     val engine = engine(listOf(FakeTarget(SyncScope.FOLLOWS)), peers)
 
-    val result = engine.completePairing(
-      peerDeviceId = 42,
-      peerDeviceName = "tablet",
-      code = "000000",
-      expectedCode = "123456",
-    )
+    val result = engine.linkPeer(peerDeviceId = 42, peerDeviceName = "tablet")
 
-    assertTrue(result.isFailure)
-    assertTrue(peers.isEmpty())
+    assertTrue(result.isSuccess)
+    // The engine strips the dashes so the secret is URL/QR friendly.
+    assertEquals("secrettoken", peers.first().sharedSecret)
   }
 
   @Test
@@ -262,16 +257,6 @@ class SyncEngineTest {
     assertEquals(2, entries.size)
     assertEquals(SyncLogEntry.Direction.PULL, entries.first().direction)
     assertEquals(SyncLogEntry.Direction.PUSH, entries.last().direction)
-  }
-
-  @Test
-  fun `hosting produces a six digit code that expires`() {
-    val engine = engine(listOf(FakeTarget(SyncScope.FOLLOWS)))
-    val hosting = engine.startHosting(ttlMillis = 1_000)
-
-    assertEquals(6, hosting.code.length)
-    assertTrue(hosting.code.all { it.isDigit() })
-    assertEquals(now + 1_000, hosting.expiresAt)
   }
 
   @Test

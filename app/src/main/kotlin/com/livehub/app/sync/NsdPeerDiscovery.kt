@@ -18,6 +18,11 @@ import kotlinx.coroutines.flow.callbackFlow
  * The service is registered as `_livehub._tcp.` and the TXT record carries the device
  * id and name, so a peer can be matched to a [com.livehub.core.sync.TrustedPeer] without
  * an extra round trip.
+ *
+ * [portProvider] is read when the browse starts, which is *after* `SyncController` has
+ * bound its server: the LAN server falls back to an ephemeral port when 47653 is taken,
+ * and advertising the constant instead sent every peer to a port nothing was listening
+ * on. Peers then reported "对方拒绝连接" on a network where both devices were fine.
  */
 class NsdPeerDiscovery(
   private val context: Context,

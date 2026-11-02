@@ -65,6 +65,13 @@ interface SyncHttpTransport {
     port: Int,
     path: String,
     envelope: SyncEnvelope,
+    /**
+     * Optional per-call timeout.
+     *
+     * Pairing probes many candidate addresses and needs each one to fail fast; the
+     * normal sync exchange can afford the transport's default. `null` keeps the default.
+     */
+    timeoutMillis: Int? = null,
   ): SyncEnvelope
 }
 

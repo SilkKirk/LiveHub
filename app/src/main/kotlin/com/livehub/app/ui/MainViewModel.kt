@@ -36,6 +36,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private var searchJob: Job? = null
   private var playbackJob: Job? = null
   private var danmakuJob: Job? = null
+  private var pairingCountdownJob: Job? = null
   private var nextCursor: String? = null
   private var searchCursor: String? = null
 
@@ -109,12 +110,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SetSyncScopes -> setSyncScopes(action.scopes)
       UiAction.RefreshPeers -> refreshPeers()
       is UiAction.UnpairPeer -> unpair(action.deviceId)
-      is UiAction.PairPeer -> pair(action.peerName, action.address, action.code)
-      is UiAction.PairDiscovered -> pair(
-        peerName = action.peer.deviceName,
-        address = "${action.peer.host}:${action.peer.port}",
-        code = action.code,
-      )
+      is UiAction.PairWithCode -> pairWithCode(action.code)
+      UiAction.RefreshPairingCode -> refreshPairingCode()
       UiAction.StartDiscovery -> startDiscovery()
       UiAction.SyncNow -> syncNow()
       UiAction.ToggleTheme -> {
@@ -162,13 +159,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.syncController.start()
         refreshPeers()
         startDiscovery()
+        // Show a fresh code on arrival: the device the user just picked up is the one they
+        // want the matching code from, and a stale code from a previous visit may already
+        // have expired.
+        val code = container.syncController.beginPairing()
         _state.update {
           it.copy(
             localAddress = container.syncController.serverAddress.orEmpty(),
-        discoveredPeers = container.syncController.discoveredPeers(),
-            pairingCode = container.syncController.beginPairing(),
+            discoveredPeers = container.syncController.discoveredPeers(),
+            pairingCode = code,
+            pairingCodeSecondsLeft = container.syncController.pairingCodeSecondsLeft(),
           )
         }
+        startPairingCountdown()
       }
       else -> Unit
     }
@@ -870,6 +873,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         syncLog = container.syncEngine.logEntries(),
         localAddress = container.syncController.serverAddress.orEmpty(),
         discoveredPeers = container.syncController.discoveredPeers(),
+        pairingCode = container.syncController.pairingCode.orEmpty(),
+        pairingCodeSecondsLeft = container.syncController.pairingCodeSecondsLeft(),
       )
     }
   }
@@ -881,31 +886,72 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   }
 
   /**
-   * Performs the real pairing handshake with the device at [address].
+   * Pairs with whichever device is showing [code].
    *
-   * The peer validates [code] against the code it is hosting and answers with the
-   * shared secret used by every later sync request.
+   * The whole flow is the code: candidates come from discovery plus a subnet sweep inside
+   * [SyncController.pairByCode], so there is no address for the user to read or retype.
    */
-  private fun pair(peerName: String, address: String, code: String) {
+  private fun pairWithCode(code: String) {
+    val digits = code.filter(Char::isDigit)
+    if (digits.length != 6) {
+      _state.update { it.copy(message = "请输入六位匹配码") }
+      return
+    }
     viewModelScope.launch {
-      _state.update { it.copy(syncing = true) }
-      // `finally` rather than a plain sequence: if anything inside the block throws — including
-      // the state reads after the handshake — `syncing` stayed true forever and the screen
-      // showed 立即同步 permanently greyed out with no way to retry.
+      _state.update { it.copy(pairing = true) }
+      // `finally` rather than a plain sequence: any throw between the handshake and the
+      // state reads used to leave the flag stuck and 立即同步 permanently disabled.
       val result = try {
-        runCatching { container.syncController.pair(peerName, address, code) }
+        runCatching { container.syncController.pairByCode(digits) }
           .getOrElse { Result.failure(it) }
       } finally {
-        _state.update { it.copy(syncing = false) }
+        _state.update { it.copy(pairing = false) }
       }
       _state.update {
         it.copy(
           peers = container.preferences.trustedPeers(),
+          followed = container.followStore.followed(),
           message = result.fold(
-            onSuccess = { name -> "已与 $name 配对" },
+            onSuccess = { name -> "已与 $name 关联" },
             onFailure = { error -> error.message ?: "配对失败" },
           ),
         )
+      }
+    }
+  }
+
+  /**
+   * Shows a new matching code.
+   *
+   * Re-issuing also drops the countdown back to a full window, so the UI never shows a
+   * code that is already dead.
+   */
+  private fun refreshPairingCode() {
+    val code = container.syncController.beginPairing()
+    _state.update {
+      it.copy(
+        pairingCode = code,
+        pairingCodeSecondsLeft = container.syncController.pairingCodeSecondsLeft(),
+      )
+    }
+    startPairingCountdown()
+  }
+
+  /**
+   * Keeps [UiState.pairingCodeSecondsLeft] honest while the screen is open.
+   *
+   * The value is a snapshot, so without this the screen would keep advertising the code's
+   * original five minutes for as long as the user stayed on the page — and the other
+   * device would be told "配对码已过期" by a screen still claiming 4 分钟.
+   */
+  private fun startPairingCountdown() {
+    pairingCountdownJob?.cancel()
+    pairingCountdownJob = viewModelScope.launch {
+      while (true) {
+        val left = container.syncController.pairingCodeSecondsLeft()
+        _state.update { it.copy(pairingCodeSecondsLeft = left) }
+        if (left <= 0) return@launch
+        kotlinx.coroutines.delay(1_000)
       }
     }
   }
@@ -934,6 +980,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   override fun onCleared() {
     danmakuJob?.cancel()
+    pairingCountdownJob?.cancel()
     container.syncController.stop()
   }
 

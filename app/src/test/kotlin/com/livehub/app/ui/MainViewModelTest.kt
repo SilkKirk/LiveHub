@@ -403,6 +403,57 @@ class MainViewModelTest {
     assertTrue(state.peers.isEmpty())
   }
 
+  /**
+   * Arriving at the sync screen has to show a usable matching code.
+   *
+   * The whole pairing flow starts by reading this code off the other device, so an empty
+   * or already-expired one makes 关联设备 impossible to complete.
+   */
+  @Test
+  fun `opening the sync screen shows a six digit matching code`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Sync))
+    idle()
+
+    assertEquals(6, state.pairingCode.length)
+    assertTrue("code must be digits: ${state.pairingCode}", state.pairingCode.all { it.isDigit() })
+    assertTrue("code must have time left", state.pairingCodeSecondsLeft > 0)
+  }
+
+  @Test
+  fun `refreshing the matching code issues a new one with a full window`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Sync))
+    idle()
+    val first = state.pairingCode
+
+    viewModel.onAction(UiAction.RefreshPairingCode)
+    idle()
+
+    assertEquals(6, state.pairingCode.length)
+    // Not asserting "differs": a random draw can legitimately repeat. The window is what
+    // must reset, and that is what the countdown is derived from.
+    assertTrue(state.pairingCodeSecondsLeft > 0)
+    assertTrue("a refreshed code must still be six digits ($first)", state.pairingCode.all { it.isDigit() })
+  }
+
+  /**
+   * A short code is refused before any socket opens.
+   *
+   * Without this the sweep would run on a partial code and report "没有找到设备", which
+   * reads as a network problem rather than as "you have not finished typing".
+   */
+  @Test
+  fun `a code that is not six digits is refused without searching`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Sync))
+    idle()
+
+    viewModel.onAction(UiAction.PairWithCode("123"))
+    idle()
+
+    assertNotNull(state.message)
+    assertTrue(state.message!!.contains("六位"), state.message!!)
+    assertFalse(state.pairing)
+  }
+
   // ------------------------------------------------------------------ messages ---
 
   @Test

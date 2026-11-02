@@ -226,6 +226,7 @@ class ScreenshotTest {
     baseState().copy(
       screen = Screen.Sync,
       pairingCode = "482913",
+      pairingCodeSecondsLeft = 268,
       peers = listOf(
         TrustedPeer(2, "小米平板 6", "secret", 1_700_000_000_000, lastSeenAt = 1_700_000_100_000),
       ),

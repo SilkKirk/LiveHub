@@ -58,7 +58,12 @@ data class UiState(
   val syncScopes: Set<SyncScope> = SyncScope.default,
   val deviceName: String = "",
   val localAddress: String = "",
+  /** The matching code this device is showing, empty when none. */
   val pairingCode: String = "",
+  /** Seconds until [pairingCode] stops working; drives the countdown in the UI. */
+  val pairingCodeSecondsLeft: Long = 0,
+  /** True while a `PairWithCode` sweep is in flight. */
+  val pairing: Boolean = false,
   val syncing: Boolean = false,
   val discovering: Boolean = false,
   val loading: Boolean = false,
@@ -150,10 +155,17 @@ sealed interface UiAction {
 
   data class UnpairPeer(val deviceId: Long) : UiAction
 
-  data class PairPeer(val peerName: String, val address: String, val code: String) : UiAction
+  /**
+   * Pairs with the device showing [code].
+   *
+   * No address: the code is the whole input, and finding the device it belongs to is the
+   * app's job — that is what makes this match WeChat's input-method pairing instead of
+   * asking the user to read an IP off another screen.
+   */
+  data class PairWithCode(val code: String) : UiAction
 
-  /** Pair with a device that mDNS discovered, using its advertised address. */
-  data class PairDiscovered(val peer: com.livehub.core.sync.DiscoveredPeer, val code: String) : UiAction
+  /** Issues a fresh matching code to show on this device. */
+  data object RefreshPairingCode : UiAction
 
   data object StartDiscovery : UiAction
 

@@ -256,17 +256,13 @@ class SyncEngine(
   // ------------------------------------------------------------------- pairing
 
   /**
-   * Starts hosting: produces the six digit code the other device must type.
-   * The code is derived from the device id and a nonce so two devices present at the
-   * same time never show the same digits.
-   */
-  fun startHosting(ttlMillis: Long = PAIRING_CODE_TTL_MILLIS): PairingState.Hosting {
-    val code = (0..999999).random().toString().padStart(6, '0')
-    return PairingState.Hosting(code = code, expiresAt = clock() + ttlMillis)
-  }
-
-  /**
-   * Builds the [TrustedPeer] for a peer that completed the code exchange.
+   * Records the [TrustedPeer] for a peer whose code was just accepted.
+   *
+   * The code is **not** checked here. [PairingWindow] owns the code, its expiry, its
+   * per-source attempt budget and its single-use rule, and the server calls it before this
+   * method ever runs. Accepting an `expectedCode` here as well only produced a second,
+   * weaker check: the caller had to pass the code it had just verified, so the comparison
+   * was `code == code` and could never fail.
    *
    * The stored `sharedSecret` is the secret **the peer issued for itself**, not one this
    * device generates: `SyncHttpServer.authenticate` compares the caller's `secret` field
@@ -274,28 +270,20 @@ class SyncEngine(
    * will present. Generating it locally produced two unrelated secrets and every
    * authenticated request failed.
    *
-   * @param remoteSecret the secret the peer returned for us to present.
-   * @param issuedSecret the secret this device issued for the peer to present; only used
-   *   when the caller is the pairing host and has not been handed one yet.
+   * @param remoteSecret the secret the peer presented for itself.
+   * @param issuedSecret the secret this device issues for the peer to present; only used
+   *   when the peer has not identified itself with one.
    */
-  fun completePairing(
+  fun linkPeer(
     peerDeviceId: Long,
     peerDeviceName: String,
-    code: String,
-    expectedCode: String,
     remoteSecret: String? = null,
     issuedSecret: String? = null,
   ): Result<TrustedPeer> {
-    // An empty expected code must never match: callers that have not generated a code yet
-    // pass "", and `"" == ""` would otherwise pair any device that also sent nothing, which
-    // is both a security hole and a confusing "it worked but nothing syncs" state.
-    if (expectedCode.isBlank()) {
-      return Result.failure(IllegalStateException("本机尚未生成配对码"))
-    }
-    if (!code.equals(expectedCode, ignoreCase = false)) {
-      return Result.failure(IllegalArgumentException("配对码不正确"))
-    }
     val secret = (remoteSecret ?: issuedSecret ?: idGenerator()).replace("-", "")
+    if (secret.isBlank()) {
+      return Result.failure(IllegalStateException("配对密钥为空"))
+    }
     val peer = TrustedPeer(
       deviceId = peerDeviceId,
       deviceName = peerDeviceName,
@@ -325,7 +313,6 @@ class SyncEngine(
   }
 
   companion object {
-    const val PAIRING_CODE_TTL_MILLIS = 5L * 60 * 1000
     const val MAX_LOG_ENTRIES = 100
   }
 }

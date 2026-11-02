@@ -33,8 +33,14 @@ class SyncHttpServer(
 ) {
   /** Implemented by the app to serve payloads from the sync engine. */
   interface Handler {
-    /** Validates a peer that is trying to pair, returning the accepted secret. */
-    fun onPair(envelope: SyncEnvelope, remoteAddress: String): Pair<String, TrustedPeer>?
+    /**
+     * Validates a peer that is trying to pair.
+     *
+     * Returns a [PairingOutcome] rather than a nullable secret so a rejection can say
+     * *why*: "配对码已过期" and "配对码不正确" ask different things of the user, and the
+     * caller cannot guess which happened from a bare null.
+     */
+    fun onPair(envelope: SyncEnvelope, remoteAddress: String): PairingOutcome
 
     /**
      * Returns one part of what this device knows about [scope], or null when it is disabled.
@@ -159,10 +165,15 @@ class SyncHttpServer(
   private fun handlePair(request: Request, socket: Socket): Response {
     val envelope = decode(request.body) ?: return Response(400, errorBody("bad envelope"))
     val remote = socket.inetAddress?.hostAddress.orEmpty()
-    val paired = handler.onPair(envelope, remote)
-      ?: return Response(403, errorBody("配对码不正确"))
+    val outcome = handler.onPair(envelope, remote)
 
-    val (issuedSecret, peer) = paired
+    val (issuedSecret, peer) = when (outcome) {
+      is PairingOutcome.Accepted -> outcome.issuedSecret to outcome.peer
+      // 403 with the reason in the envelope: the pairing client turns this into the exact
+      // message the user needs ("配对码已过期…"), instead of a generic "连线失败".
+      is PairingOutcome.Rejected -> return Response(403, errorBody(outcome.reason))
+    }
+
     return Response(
       200,
       SyncEnvelope.encode(
@@ -355,4 +366,16 @@ class SyncHttpServer(
       emptyList()
     }
   }
+}
+
+/**
+ * What the app decided about a pairing attempt.
+ *
+ * [Rejected] carries a user presentable [reason] that travels back over the wire, so the
+ * device typing the code can say "配对码已过期" instead of a generic connection error.
+ */
+sealed interface PairingOutcome {
+  data class Accepted(val issuedSecret: String, val peer: TrustedPeer) : PairingOutcome
+
+  data class Rejected(val reason: String) : PairingOutcome
 }

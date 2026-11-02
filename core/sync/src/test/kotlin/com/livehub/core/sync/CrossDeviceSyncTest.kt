@@ -65,15 +65,15 @@ class CrossDeviceSyncTest {
           override fun onPair(
             envelope: SyncEnvelope,
             remoteAddress: String,
-          ): Pair<String, TrustedPeer>? {
-            val result = engine.completePairing(
+          ): com.livehub.core.sync.server.PairingOutcome {
+            val result = engine.linkPeer(
               peerDeviceId = envelope.deviceId,
               peerDeviceName = envelope.deviceName,
-              code = envelope.payload?.entries.orEmpty(),
-              expectedCode = PAIRING_CODE,
               remoteSecret = envelope.secret.ifBlank { null },
             )
-            val peer = result.getOrNull() ?: return null
+            val peer = result.getOrElse { error ->
+              return com.livehub.core.sync.server.PairingOutcome.Rejected(error.message ?: "配对失败")
+            }
             // Record where the *caller* listens, which the handshake told us.
             addressBook.addManual(
               envelope.deviceId,
@@ -82,7 +82,10 @@ class CrossDeviceSyncTest {
               envelope.preferredPort,
             )
             // Reply with OUR secret so the caller can authenticate against us.
-            return selfSecret to peer
+            return com.livehub.core.sync.server.PairingOutcome.Accepted(
+              issuedSecret = selfSecret,
+              peer = peer,
+            )
           }
 
           override fun onPull(

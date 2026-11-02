@@ -4,6 +4,7 @@ import com.livehub.core.sync.SyncEnvelope
 import com.livehub.core.sync.SyncPayload
 import com.livehub.core.sync.SyncScope
 import com.livehub.core.sync.TrustedPeer
+import com.livehub.core.sync.server.PairingOutcome
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -34,9 +35,9 @@ class SyncHttpServerTest {
       deviceName = "phone",
       localSecret = "local-secret",
       handler = object : SyncHttpServer.Handler {
-        override fun onPair(envelope: SyncEnvelope, remoteAddress: String): Pair<String, TrustedPeer>? {
-          val expected = expectedPairCode ?: return null
-          if (envelope.payload?.entries != expected) return null
+        override fun onPair(envelope: SyncEnvelope, remoteAddress: String): PairingOutcome {
+          val expected = expectedPairCode ?: return PairingOutcome.Rejected("本机尚未生成配对码")
+          if (envelope.payload?.entries != expected) return PairingOutcome.Rejected("配对码不正确")
           val peer = TrustedPeer(
             deviceId = envelope.deviceId,
             deviceName = envelope.deviceName,
@@ -44,7 +45,7 @@ class SyncHttpServerTest {
             pairedAt = 0,
           )
           paired += peer
-          return peer.sharedSecret to peer
+          return PairingOutcome.Accepted(issuedSecret = "issued-secret", peer = peer)
         }
 
         override fun onPull(
@@ -193,6 +194,24 @@ class SyncHttpServerTest {
       SyncEnvelope.encode(SyncEnvelope(deviceId = 3, deviceName = "tv", secret = "", payload = payload)),
     )
     assertEquals(403, response.status)
+  }
+
+  /**
+   * A refusal has to say why.
+   *
+   * The pairing client turns this text into the message the user sees, so a bare 403 with
+   * no body collapsed "配对码已过期" and "配对码不正确" into one unhelpful "同步失败".
+   */
+  @Test
+  fun `a refused pairing carries the reason in the body`() {
+    val payload = SyncPayload(scope = "pair", sourceDeviceId = 3, sequence = 1, createdAt = 0, entries = "000000")
+    val response = post(
+      SyncEnvelope.PATH_PAIR,
+      SyncEnvelope.encode(SyncEnvelope(deviceId = 3, deviceName = "tv", secret = "", payload = payload)),
+    )
+
+    val envelope = SyncEnvelope.decode(response.body)
+    assertEquals("配对码不正确", envelope.error)
   }
 
   @Test

@@ -114,26 +114,32 @@ class SyncOffMainThreadTest {
   /**
    * Pairing from the UI thread must fail for a network reason, not for the thread guard.
    *
-   * Port 1 on loopback is closed everywhere, so this drives the real socket path and fails
-   * fast with ECONNREFUSED instead of waiting out the 8 s timeout.
+   * The sweep runs against this device's own /24, so nothing answers and the result is a
+   * reported "not found" rather than a successful pairing. What matters is *where* the
+   * socket work happened: on the main thread the platform throws
+   * [NetworkOnMainThreadException] with a null message, and the failure text then has no
+   * cause in it.
    */
   @Test
   fun pairingFromMainThreadReportsNetworkReason() {
     val outcome = onMainThread {
-      controller.pair(peerName = "对端", address = "127.0.0.1:1", code = "123456")
+      controller.pairByCode("123456")
     }
 
-    assertTrue("a closed port must not pair successfully", outcome.isFailure)
+    assertTrue("pairing with no device showing that code must not succeed", outcome.isFailure)
     val reason = outcome.exceptionOrNull()?.message.orEmpty()
 
     assertFalse(
       "pairing opened a socket on the main thread: $reason",
       reason.contains(NetworkOnMainThreadException::class.java.simpleName),
     )
-    // The old code produced "无法连接到该设备" from a null message; a blank or generic
-    // string means the cause was lost the same way it was in production.
-    assertFalse("the failure carries no cause: '$reason'", reason.isBlank() || reason == "同步失败")
-    assertTrue("unexpected failure reason: $reason", reason.contains("拒绝连接"))
+    assertFalse("the failure carries no cause: '$reason'", reason.isBlank())
+    // One of the two real outcomes: nothing found, or a device refused the code. Both are
+    // produced by the socket path actually running; neither is a generic "同步失败".
+    assertTrue(
+      "unexpected failure reason: $reason",
+      reason.contains("没有找到") || reason.contains("配对码") || reason.contains("匹配码"),
+    )
   }
 
   /**

@@ -2,7 +2,10 @@ package com.livehub.app.sync
 
 import com.livehub.app.di.FollowStore
 import com.livehub.app.di.UserPreferences
+import com.livehub.core.sync.CodePairing
+import com.livehub.core.sync.CodePairingResult
 import com.livehub.core.sync.DiscoveredPeer
+import com.livehub.core.sync.PairingWindow
 import com.livehub.core.sync.SyncCodec
 import com.livehub.core.sync.SyncCoordinator
 import com.livehub.core.sync.SyncEnvelope
@@ -10,7 +13,10 @@ import com.livehub.core.sync.SyncPayload
 import com.livehub.core.sync.SyncScope
 import com.livehub.core.sync.TrustedPeer
 import com.livehub.core.sync.discovery.PeerDiscovery
+import com.livehub.core.sync.discovery.SubnetScanner
+import com.livehub.core.sync.server.PairingOutcome
 import com.livehub.core.sync.server.SyncHttpServer
+import com.livehub.core.sync.transport.LanSyncHttpTransport
 import com.livehub.core.sync.transport.LanSyncTransport
 import com.livehub.core.sync.transport.PeerAddressBook
 import com.livehub.core.sync.SyncEngine
@@ -33,16 +39,34 @@ class SyncController(
   private val followStore: FollowStore,
   private val engine: SyncEngine,
   private val discovery: PeerDiscovery,
+  /** Notified with the real listening port as soon as the LAN server binds. */
+  private val onListening: (Int) -> Unit = {},
 ) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val addressBook = PeerAddressBook()
 
   private var server: SyncHttpServer? = null
   private var transport: LanSyncTransport? = null
+  private var httpTransport: LanSyncHttpTransport? = null
   private val discoveryJob = mutableListOf<kotlinx.coroutines.Job>()
 
-  @Volatile var pairingCode: String? = null
-    private set
+  /**
+   * The code shown on this device, with its expiry and failed-attempt budget.
+   *
+   * Owned here rather than in the UI so a recomposition cannot silently mint a new code
+   * the other device is no longer looking at.
+   */
+  private val pairingWindow = PairingWindow()
+
+  /** The code currently displayed, or null when this device is not hosting. */
+  val pairingCode: String?
+    get() = pairingWindow.current?.code
+
+  /** Seconds left on the displayed code, 0 when none is showing. */
+  fun pairingCodeSecondsLeft(): Long {
+    val current = pairingWindow.current ?: return 0
+    return ((current.expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+  }
 
   @Volatile var listeningPort: Int = 0
     private set
@@ -75,7 +99,7 @@ class SyncController(
    * Starts discovery and the LAN server.
    *
    * Pairing is a two-step flow: [beginPairing] shows a code on one device, the other
-   * device enters it and calls [completePairing], and both sides store the resulting
+   * device types it into [pairByCode], and both sides store the resulting
    * [TrustedPeer].
    */
   fun start() {
@@ -88,25 +112,33 @@ class SyncController(
       deviceName = deviceName,
       localSecret = CURRENT_SECRET,
       handler = object : SyncHttpServer.Handler {
-        override fun onPair(envelope: SyncEnvelope, remoteAddress: String): Pair<String, TrustedPeer>? {
-          val expected = pairingCode ?: return null
+        override fun onPair(envelope: SyncEnvelope, remoteAddress: String): PairingOutcome {
+          // The typed code is the whole credential here, and it is checked against the
+          // live window: wrong guesses are counted per source address (pairing sweeps the
+          // subnet, so uninvolved devices see this request too) and a used or expired code
+          // is dead.
+          val verdict = pairingWindow.verify(
+            code = envelope.payload?.entries.orEmpty(),
+            source = remoteAddress.ifBlank { PairingWindow.DEFAULT_SOURCE },
+          )
+          verdict.reason?.let { return PairingOutcome.Rejected(it) }
+
           // The caller told us the secret it will present; we store that, and reply
           // with our own so the caller can authenticate against us.
-          val result = engine.completePairing(
+          val peer = engine.linkPeer(
             peerDeviceId = envelope.deviceId,
             peerDeviceName = envelope.deviceName,
-            code = envelope.payload?.entries.orEmpty(),
-            expectedCode = expected,
             remoteSecret = envelope.secret.ifBlank { null },
-          )
-          val peer = result.getOrNull() ?: return null
+          ).getOrElse { error ->
+            return PairingOutcome.Rejected(error.message ?: "配对失败")
+          }
           // Record where the *peer* is listening. `remoteAddress` is their IP but the
           // port must be the one their server advertised, not our own default: the
           // handshake is the only moment we learn it.
           val remotePort = envelope.preferredPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
           addressBook.addManual(envelope.deviceId, envelope.deviceName, remoteAddress, remotePort)
           // Reply with the secret WE present; the caller stores it for later requests.
-          return selfSecret() to peer
+          return PairingOutcome.Accepted(issuedSecret = selfSecret(), peer = peer)
         }
 
         // One part per request: the caller pages through them with `chunk`. Sending the
@@ -138,6 +170,9 @@ class SyncController(
     )
     listeningPort = httpServer.start()
     server = httpServer
+    // Published before discovery starts, so the mDNS record carries the port the server
+    // really bound (it falls back to an ephemeral one when the preferred port is taken).
+    onListening(listeningPort)
 
     transport = LanSyncTransport(
       deviceId = deviceId,
@@ -147,6 +182,10 @@ class SyncController(
       addressProvider = { peer -> addressBook.addressFor(peer) },
       localPort = listeningPort,
     )
+    // Same transport, exposed as the one-method shape CodePairing probes candidates with.
+    transport?.let { lan ->
+      httpTransport = LanSyncHttpTransport(lan, addressProvider = { addressBook.addressFor(it) })
+    }
 
     // mDNS advertises only while the flow is collected, so keep one collector alive.
     discoveryJob += scope.launch {
@@ -164,7 +203,10 @@ class SyncController(
     server?.stop()
     server = null
     transport = null
+    httpTransport = null
     discovered.clear()
+    // An open code must not outlive the page it was shown on: it is a live credential.
+    pairingWindow.cancel()
   }
 
   fun dispose() {
@@ -172,12 +214,13 @@ class SyncController(
     scope.cancel()
   }
 
-  /** Generates the code shown to the user on this device. */
-  fun beginPairing(): String {
-    val hosting = engine.startHosting()
-    pairingCode = hosting.code
-    return hosting.code
-  }
+  /**
+   * Issues the code this device shows.
+   *
+   * Re-issuing is explicit rather than automatic-on-render: the code is what the other
+   * device types, so replacing it behind the user's back would strand them mid-entry.
+   */
+  fun beginPairing(): String = pairingWindow.issue().code
 
   /** Registers a peer discovered automatically so it can be reached later. */
   fun rememberPeer(peer: DiscoveredPeer) {
@@ -185,95 +228,68 @@ class SyncController(
   }
 
   /**
-   * Pairs with a peer that is showing [code].
+   * Pairs with the device that is showing [code], without being told any address.
    *
-   * Performs the real handshake rather than only recording the attempt locally:
-   * a `pair` request is sent to the peer with the code as the payload, the peer
-   * validates it against the code it is currently hosting and answers with the
-   * per-peer shared secret that both sides then use for every sync request.
+   * Candidates are the mDNS sightings plus a /24 sweep of this network, and every one of
+   * them is offered the code. The device holding that code accepts; every other address
+   * either refuses or never answers, and neither of those is an error until *nothing*
+   * accepts.
    *
-   * Suspending, and dispatched to [Dispatchers.IO], because this opens a socket. The
-   * caller is `viewModelScope`, which runs on the main thread, and Android throws
-   * `NetworkOnMainThreadException` on the first `connect()` made there — with a null
-   * message, so a blocking version of this method surfaced as a bare "同步失败" the
-   * moment the user confirmed the pairing code.
-   *
-   * @return the paired device name on success, or a failure describing why.
+   * Suspending and dispatched to [Dispatchers.IO]: this opens sockets, and the caller is
+   * `viewModelScope`. Android throws `NetworkOnMainThreadException` (with a null message)
+   * for a connect on the main thread, which once surfaced as a bare "同步失败".
    */
-  suspend fun pair(peerName: String, address: String, code: String): Result<String> =
-    withContext(Dispatchers.IO) { pairBlocking(peerName, address, code) }
+  suspend fun pairByCode(code: String): Result<String> = withContext(Dispatchers.IO) {
+    val attempts = pairingCandidates()
+    if (attempts.isEmpty()) {
+      return@withContext Result.failure(IllegalStateException("还没发现附近设备，请确认两台设备连的是同一个 Wi-Fi"))
+    }
+    val currentTransport = httpTransport
+      ?: return@withContext Result.failure(IllegalStateException("同步服务未启动，请重新打开同步页"))
 
-  private fun pairBlocking(peerName: String, address: String, code: String): Result<String> {
-    val parsed = com.livehub.core.sync.transport.parseManualAddress(address, DEFAULT_PORT)
-      ?: return Result.failure(IllegalArgumentException("地址格式应为 192.168.1.10 或 192.168.1.10:$DEFAULT_PORT"))
-
-    val currentTransport = transport
-      ?: return Result.failure(IllegalStateException("同步服务未启动，请重新打开同步页"))
-
-    // Present the secret we issued for ourselves; the host stores it.
-    val envelope = SyncEnvelope(
+    val pairing = CodePairing(
       deviceId = preferences.deviceId,
       deviceName = preferences.deviceName,
-      secret = selfSecret(),
-      preferredPort = listeningPort,
-      payload = SyncPayload(
-        scope = "pair",
-        sourceDeviceId = preferences.deviceId,
-        sequence = System.currentTimeMillis(),
-        createdAt = System.currentTimeMillis(),
-        entries = code,
-      ),
+      localSecret = selfSecret(),
+      localPort = listeningPort,
     )
 
-    val response = runCatching {
-      currentTransport.call(
-        peer = TrustedPeer(
-          deviceId = 0,
-          deviceName = peerName,
-          sharedSecret = "",
-          pairedAt = 0,
-        ),
-        host = parsed.first,
-        port = parsed.second,
-        path = SyncEnvelope.PATH_PAIR,
-        envelope = envelope,
-      )
-    }.getOrElse { error ->
-      return Result.failure(IllegalStateException(error.message ?: "无法连接到该设备"))
+    when (val outcome = pairing.pair(code, attempts, currentTransport)) {
+      is CodePairingResult.Paired -> {
+        preferences.saveTrustedPeers(
+          preferences.trustedPeers().filterNot { it.deviceId == outcome.peer.deviceId } + outcome.peer,
+        )
+        // Where the device actually answered, so the first sync does not have to search
+        // for it again.
+        addressBook.addManual(
+          deviceId = outcome.address.deviceId,
+          name = outcome.address.deviceName,
+          host = outcome.address.host,
+          port = outcome.address.port,
+        )
+        discovered[outcome.peer.deviceId] = outcome.address
+        Result.success(outcome.peer.deviceName)
+      }
+      else -> Result.failure(IllegalStateException(outcome.message ?: "配对失败"))
     }
-
-    response.error?.let { return Result.failure(IllegalStateException(it)) }
-    if (response.secret.isBlank()) {
-      return Result.failure(IllegalStateException("对方未返回配对密钥"))
-    }
-
-    val peerId = if (response.serverDeviceId != 0L) response.serverDeviceId else response.deviceId
-    val peer = TrustedPeer(
-      deviceId = peerId,
-      deviceName = response.serverDeviceName.ifBlank { peerName },
-      sharedSecret = response.secret,
-      pairedAt = System.currentTimeMillis(),
-      lastSeenAt = System.currentTimeMillis(),
-    )
-    preferences.saveTrustedPeers(
-      preferences.trustedPeers().filterNot { it.deviceId == peerId } + peer,
-    )
-    addressBook.addManual(peerId, peer.deviceName, parsed.first, parsed.second)
-    return Result.success(peer.deviceName)
   }
 
-  /** Adds a peer the user typed manually (`host[:port]`) without a handshake. */
-  fun addManualPeer(peerName: String, address: String): Boolean {
-    val parsed = com.livehub.core.sync.transport.parseManualAddress(address, DEFAULT_PORT) ?: return false
-    val deviceId = peerName.hashCode().toLong() and 0x7FFFFFFF
-    addressBook.addManual(deviceId, peerName, parsed.first, parsed.second)
-    engine.completePairing(
-      peerDeviceId = deviceId,
-      peerDeviceName = peerName,
-      code = pairingCode.orEmpty(),
-      expectedCode = pairingCode.orEmpty(),
-    )
-    return true
+  /**
+   * Every address worth offering the code to.
+   *
+   * mDNS sightings come first because they are already known-good and carry names; the
+   * subnet sweep fills in when multicast is blocked. Devices already paired are left out:
+   * re-pairing them would only churn their shared secret.
+   */
+  private fun pairingCandidates(): List<DiscoveredPeer> {
+    val paired = preferences.trustedPeers().map { it.deviceId }.toSet()
+    val known = discoveredPeers().filterNot { paired.contains(it.deviceId) }
+    // The sweep only has to cover what discovery missed, so already-known hosts are
+    // dropped from it rather than tried twice.
+    val knownHosts = known.map { it.host }.toSet()
+    val sweep = SubnetScanner.candidates(listeningPort.takeIf { it > 0 } ?: DEFAULT_PORT)
+      .filterNot { knownHosts.contains(it.host) }
+    return known + sweep
   }
 
   /**

@@ -140,17 +140,3 @@ data class DiscoveredPeer(
 ) {
   val address: String get() = "http://$host:$port"
 }
-
-/** State of the pairing handshake. */
-sealed interface PairingState {
-  data object Idle : PairingState
-
-  /** The local device is showing a code that the peer must enter. */
-  data class Hosting(val code: String, val expiresAt: Long) : PairingState
-
-  data object WaitingForPeer : PairingState
-
-  data class Paired(val peer: TrustedPeer) : PairingState
-
-  data class Failed(val reason: String) : PairingState
-}

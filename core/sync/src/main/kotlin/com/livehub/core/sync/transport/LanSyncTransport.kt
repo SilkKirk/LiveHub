@@ -152,12 +152,14 @@ class LanSyncTransport(
     port: Int,
     path: String,
     envelope: SyncEnvelope,
+    timeoutMillis: Int? = null,
   ): SyncEnvelope {
+    val budget = timeoutMillis ?: this.timeoutMillis
     val body = SyncEnvelope.encode(envelope)
     val response = try {
       Socket().use { socket ->
-        socket.connect(InetSocketAddress(host, port), timeoutMillis)
-        socket.soTimeout = timeoutMillis
+        socket.connect(InetSocketAddress(host, port), budget)
+        socket.soTimeout = budget
 
         val output: OutputStream = BufferedOutputStream(socket.getOutputStream())
         val request = buildString {
@@ -193,7 +195,15 @@ class LanSyncTransport(
     }
 
     if (response.status == 403) {
-      throw SyncTransportException(SyncFailureReason.UNAUTHORIZED, "配对已失效，请重新配对")
+      // The server puts the reason in the envelope body — "配对码已过期", "配对码不正确",
+      // "未配对" … — and that is the text the user needs. Falling back to a fixed string
+      // hid the difference between an expired code and a revoked pairing.
+      val stated = runCatching { SyncEnvelope.decode(response.body).error }
+        .getOrNull()?.takeIf { it.isNotBlank() }
+      throw SyncTransportException(
+        SyncFailureReason.UNAUTHORIZED,
+        stated ?: "配对已失效，请重新配对",
+      )
     }
     if (response.status !in 200..299) {
       throw SyncTransportException(SyncFailureReason.PROTOCOL, "对方返回 HTTP ${response.status}")
@@ -275,5 +285,6 @@ class LanSyncHttpTransport(
     port: Int,
     path: String,
     envelope: SyncEnvelope,
-  ): SyncEnvelope = transport.call(peer, host, port, path, envelope)
+    timeoutMillis: Int?,
+  ): SyncEnvelope = transport.call(peer, host, port, path, envelope, timeoutMillis)
 }

@@ -134,12 +134,23 @@ class AppContainer(
     )
   }
 
+  /**
+   * The port the LAN server is actually bound to.
+   *
+   * Discovery needs it, and the controller needs discovery, so the port lives here where
+   * both can see it without a cycle. It starts at the preferred port and is replaced by
+   * the real one once the server binds — which matters because the server falls back to
+   * an ephemeral port when 47653 is taken, and advertising the constant anyway pointed
+   * every peer at a socket nobody owned ("对方拒绝连接" on a perfectly good network).
+   */
+  @Volatile private var listeningPort: Int = SyncController.DEFAULT_PORT
+
   val peerDiscovery: NsdPeerDiscovery by lazy {
     NsdPeerDiscovery(
       context = applicationContext,
       deviceId = preferences.deviceId,
       deviceName = preferences.deviceName,
-      portProvider = { SyncController.DEFAULT_PORT },
+      portProvider = { listeningPort },
     )
   }
 
@@ -149,6 +160,9 @@ class AppContainer(
       followStore = followStore,
       engine = syncEngine,
       discovery = peerDiscovery,
+      // Lets the container know the real port the moment the server binds, so mDNS
+      // advertises a socket that exists.
+      onListening = { port -> listeningPort = port },
     )
   }
 }

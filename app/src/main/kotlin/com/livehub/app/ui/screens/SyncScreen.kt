@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +34,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,7 +44,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.sync.SyncLogEntry
@@ -49,19 +54,40 @@ import com.livehub.core.sync.SyncScope
 import java.text.SimpleDateFormat
 import java.util.Date
 
-/** Cross-device sync screen: pairing, scopes, peers and the exchange log. */
+/**
+ * Cross-device sync screen.
+ *
+ * Laid out like WeChat's input-method pairing: this device shows a six digit matching
+ * code, the other device types it, and no address is ever read out or retyped. The
+ * scopes and the exchange log sit below the device list.
+ */
 @Composable
 fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val locale = LocalConfiguration.current.locales[0]
   val timeFormat = remember(locale) { SimpleDateFormat("MM-dd HH:mm", locale) }
-  var showPairDialog by remember { mutableStateOf(false) }
+  var showCodeDialog by remember { mutableStateOf(false) }
+
+  // The countdown is derived here rather than read straight off the state: the state only
+  // refreshes when something else changes, so a code issued on arrival would keep claiming
+  // "4 分 28 秒内有效" long after it had actually expired and the other device started
+  // getting "配对码已过期".
+  var secondsLeft by remember { mutableStateOf(state.pairingCodeSecondsLeft) }
+  LaunchedEffect(state.pairingCode, state.pairingCodeSecondsLeft) {
+    secondsLeft = state.pairingCodeSecondsLeft
+    while (secondsLeft > 0) {
+      delay(1_000)
+      secondsLeft -= 1
+    }
+  }
+
+  val shownState = remember(state, secondsLeft) { state.copy(pairingCodeSecondsLeft = secondsLeft) }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
-    item { ThisDeviceCard(state) }
+    item { ThisDeviceCard(shownState, onAction) }
 
     item {
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -72,9 +98,12 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
           Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
           Text(if (state.syncing) "同步中…" else "立即同步")
         }
-        OutlinedButton(onClick = { showPairDialog = true }) {
+        OutlinedButton(
+          onClick = { showCodeDialog = true },
+          enabled = !state.pairing,
+        ) {
           Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-          Text("配对设备")
+          Text(if (state.pairing) "匹配中…" else "关联设备")
         }
         IconButton(onClick = { onAction(UiAction.RefreshPeers) }) {
           Icon(Icons.Filled.Refresh, contentDescription = "刷新")
@@ -84,46 +113,9 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
     item { ScopeCard(state, onAction) }
 
+    item { DeviceListCard(state, onAction) }
+
     item { DiscoveryCard(state, onAction) }
-
-    item {
-      Text("已配对设备", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-    }
-
-    if (state.peers.isEmpty()) {
-      item {
-        Text(
-          text = "还没有配对设备。在另一台设备打开本页面并生成配对码，然后在两台设备上各输入一次即可。",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-    } else {
-      items(state.peers, key = { it.deviceId }) { peer ->
-        Card(modifier = Modifier.fillMaxWidth()) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = peer.deviceName.ifBlank { "未知设备" },
-                style = MaterialTheme.typography.bodyLarge,
-              )
-              Text(
-                text = "配对于 ${timeFormat.format(Date(peer.pairedAt))}" +
-                  if (peer.lastSeenAt > 0) " · 最近 ${timeFormat.format(Date(peer.lastSeenAt))}" else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-            IconButton(onClick = { onAction(UiAction.UnpairPeer(peer.deviceId)) }) {
-              Icon(Icons.Filled.Delete, contentDescription = "解除配对")
-            }
-          }
-        }
-      }
-    }
 
     item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
@@ -146,54 +138,167 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
   }
 
-  if (showPairDialog) {
-    PairDialog(
+  if (showCodeDialog) {
+    MatchingCodeDialog(
       state = state,
-      onDismiss = { showPairDialog = false },
-      onConfirm = { name, address, code ->
-        onAction(UiAction.PairPeer(name, address, code))
-        showPairDialog = false
+      onDismiss = { showCodeDialog = false },
+      onConfirm = { code ->
+        onAction(UiAction.PairWithCode(code))
+        showCodeDialog = false
       },
+      onRefreshCode = { onAction(UiAction.RefreshPairingCode) },
     )
   }
 }
 
+/**
+ * This device: its name and the matching code it is showing.
+ *
+ * The code is the headline rather than a footnote. In the old layout it was buried in a
+ * card above an IP address the user was expected to compare; here it is the one thing the
+ * other device needs.
+ */
 @Composable
-private fun ThisDeviceCard(state: UiState) {
+private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
   Card(modifier = Modifier.fillMaxWidth()) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text("本机", style = MaterialTheme.typography.titleMedium)
-      Text(
-        text = state.deviceName.ifBlank { "LiveHub 设备" },
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("本机", style = MaterialTheme.typography.titleMedium)
+          Text(
+            text = state.deviceName.ifBlank { "LiveHub 设备" },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        TextButton(onClick = { onAction(UiAction.RefreshPairingCode) }) {
+          Text("刷新匹配码")
+        }
+      }
+
+      if (state.pairingCode.isBlank()) {
+        Text(
+          text = "点「刷新匹配码」生成一个六位匹配码。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      } else {
+        Text(
+          text = formatCode(state.pairingCode),
+          style = MaterialTheme.typography.displaySmall,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.fillMaxWidth(),
+          textAlign = TextAlign.Center,
+        )
+        Text(
+          text = if (state.pairingCodeSecondsLeft > 0) {
+            "在另一台设备的「关联设备」里输入这串数字，${state.pairingCodeSecondsLeft / 60} 分 " +
+              "${state.pairingCodeSecondsLeft % 60} 秒内有效"
+          } else {
+            "匹配码已过期，请点「刷新匹配码」重新生成"
+          },
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.fillMaxWidth(),
+          textAlign = TextAlign.Center,
+        )
+      }
+
       if (state.localAddress.isNotBlank()) {
         Text(
-          text = "局域网地址 ${state.localAddress}",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-      if (state.pairingCode.isNotBlank()) {
-        Text(
-          text = "配对码 ${state.pairingCode}",
-          style = MaterialTheme.typography.titleLarge,
-          color = MaterialTheme.colorScheme.primary,
-        )
-        Text(
-          text = "在另一台设备输入该配对码，5 分钟内有效",
+          text = "局域网 ${state.localAddress}",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
       Text(
-        text = "关注、分区订阅和播放设置会在同一局域网内增量同步；删除操作也会同步，不会把旧数据带回来。",
+        text = "关注和播放设置会在同一 Wi-Fi 下增量同步；删除也会同步，不会把旧数据带回来。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
   }
+}
+
+/**
+ * `482913` as `482 913`.
+ *
+ * Only the six digit shape is split. A blank or partial code is passed through untouched
+ * rather than chunked blindly, because `"12".chunked(3)` produces `"12"` and the screen
+ * would show a plausible-looking but meaningless half code.
+ */
+private fun formatCode(code: String): String =
+  if (code.length == 6) code.chunked(3).joinToString(" ") else code
+
+/**
+ * The dialog the other device drives: type the six digits, nothing else.
+ *
+ * Deliberately has no address field. Reading an IP off another screen is the step this
+ * whole change removes, and an optional field would quietly reintroduce it.
+ */
+@Composable
+private fun MatchingCodeDialog(
+  state: UiState,
+  onDismiss: () -> Unit,
+  onConfirm: (String) -> Unit,
+  onRefreshCode: () -> Unit,
+) {
+  var code by remember { mutableStateOf("") }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("关联设备") },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+          value = code,
+          onValueChange = { code = it.filter(Char::isDigit).take(6) },
+          label = { Text("六位匹配码") },
+          placeholder = { Text("123456") },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+          modifier = Modifier.fillMaxWidth(),
+        )
+        // This device's own code is shown for comparison, with its remaining life: the
+        // common mistake is to type your own code into your own device, which looks like
+        // nothing happening.
+        Text(
+          text = if (state.pairingCodeSecondsLeft > 0) {
+            "本机匹配码 ${formatCode(state.pairingCode)}（请勿输入本机码）"
+          } else {
+            "本机匹配码已过期"
+          },
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(onClick = onRefreshCode) { Text("重新生成本机匹配码") }
+        if (state.pairing) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Spacer(modifier = Modifier.size(8.dp))
+            Text(
+              text = "正在附近设备中查找…",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = { onConfirm(code) },
+        enabled = code.length == 6 && !state.pairing,
+      ) { Text("关联") }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+  )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -223,6 +328,66 @@ private fun ScopeCard(state: UiState, onAction: (UiAction) -> Unit) {
       }
     }
   }
+}
+
+@Composable
+private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
+  Card(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text("我的设备", style = MaterialTheme.typography.titleMedium)
+
+      // This device is listed first, the way WeChat's page shows 本机 above the others.
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = state.deviceName.ifBlank { "LiveHub 设备" },
+            style = MaterialTheme.typography.bodyLarge,
+          )
+          Text(
+            text = "本机",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+
+      if (state.peers.isEmpty()) {
+        Text(
+          text = "还没有关联设备。点「关联设备」输入对方屏幕上的六位匹配码即可。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      } else {
+        state.peers.forEach { peer ->
+          HorizontalDivider()
+          Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = peer.deviceName.ifBlank { "未知设备" },
+                style = MaterialTheme.typography.bodyLarge,
+              )
+              Text(
+                text = "关联于 ${timeFormatOrDash(peer.pairedAt)}" +
+                  if (peer.lastSeenAt > 0) " · 最近 ${timeFormatOrDash(peer.lastSeenAt)}" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            IconButton(onClick = { onAction(UiAction.UnpairPeer(peer.deviceId)) }) {
+              Icon(Icons.Filled.Delete, contentDescription = "解除关联")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun timeFormatOrDash(at: Long): String {
+  if (at <= 0) return "—"
+  val locale = LocalConfiguration.current.locales[0]
+  return remember(at, locale) { SimpleDateFormat("MM-dd HH:mm", locale).format(Date(at)) }
 }
 
 @Composable
@@ -259,80 +424,12 @@ private fun SyncLogRow(entry: SyncLogEntry, timeFormat: SimpleDateFormat) {
   }
 }
 
-@Composable
-private fun PairDialog(
-  state: UiState,
-  onDismiss: () -> Unit,
-  onConfirm: (String, String, String) -> Unit,
-) {
-  var name by remember { mutableStateOf("") }
-  // Deliberately empty. This used to default to `state.localAddress`, which is *this* device's
-  // address — so tapping 配对 without editing the field sent the handshake back to the phone
-  // itself and failed with a misleading error. The expected shape is the placeholder.
-  var address by remember { mutableStateOf("") }
-  var code by remember { mutableStateOf("") }
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text("配对设备") },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (state.pairingCode.isNotBlank()) {
-          Text(
-            text = "本机配对码：${state.pairingCode}",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
-          )
-        } else {
-          Text(
-            text = "先在另一台设备生成配对码，再填入下方。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        OutlinedTextField(
-          value = name,
-          onValueChange = { name = it },
-          label = { Text("设备名称") },
-          singleLine = true,
-        )
-        OutlinedTextField(
-          value = address,
-          onValueChange = { address = it },
-          label = { Text("对方局域网地址 (IP:端口)") },
-          placeholder = { Text("192.168.1.10:47653") },
-          singleLine = true,
-          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        )
-        OutlinedTextField(
-          value = code,
-          onValueChange = { code = it.filter(Char::isDigit).take(6) },
-          label = { Text("六位配对码") },
-          singleLine = true,
-          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-        )
-      }
-    },
-    confirmButton = {
-      TextButton(
-        onClick = { onConfirm(name.ifBlank { "新设备" }, address, code) },
-        enabled = code.length == 6 && address.isNotBlank(),
-      ) { Text("配对") }
-    },
-    dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-  )
-}
-
 /**
- * Devices found on the LAN.
+ * Devices discovery has seen but that are not linked yet.
  *
- * Only peers the user has not already paired with are offered, so the list stays
- * actionable instead of repeating the paired-device section below it.
- *
- * Each sighting gets a real 配对 button. The action and its handler already existed
- * (`UiAction.PairDiscovered`), but nothing emitted it, so the discovered list was a
- * dead end: the address was printed as plain text and had to be retyped by hand into
- * the dialog directly underneath.
+ * Shown as information, not as a way to pair: with a matching code in hand the address is
+ * irrelevant, and offering a per-device 配对 button re-introduced the very step (read the
+ * other screen, copy an address) this screen is meant to remove.
  */
 @Composable
 private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
@@ -340,56 +437,12 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
   val candidates = remember(state.discoveredPeers, pairedIds) {
     state.discoveredPeers.filterNot { pairedIds.contains(it.deviceId) }
   }
-  var pendingPeer by remember { mutableStateOf<com.livehub.core.sync.DiscoveredPeer?>(null) }
-  var code by remember { mutableStateOf("") }
-
-  if (pendingPeer != null) {
-    val peer = pendingPeer!!
-    AlertDialog(
-      onDismissRequest = { pendingPeer = null; code = "" },
-      title = { Text("与 ${peer.deviceName} 配对") },
-      text = {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Text(
-            text = "${peer.host}:${peer.port}",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          Text(
-            text = "在对方设备上打开同步页并读出六位配对码，输入后两台设备即可互相同步。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          OutlinedTextField(
-            value = code,
-            onValueChange = { code = it.filter(Char::isDigit).take(6) },
-            label = { Text("六位配对码") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-          )
-        }
-      },
-      confirmButton = {
-        TextButton(
-          enabled = code.length == 6,
-          onClick = {
-            onAction(UiAction.PairDiscovered(peer, code))
-            pendingPeer = null
-            code = ""
-          },
-        ) { Text("配对") }
-      },
-      dismissButton = {
-        TextButton(onClick = { pendingPeer = null; code = "" }) { Text("取消") }
-      },
-    )
-  }
 
   Card(modifier = Modifier.fillMaxWidth()) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-          text = "发现附近设备",
+          text = "附近设备",
           style = MaterialTheme.typography.titleMedium,
           modifier = Modifier.weight(1f),
         )
@@ -406,32 +459,27 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
           text = if (state.discovering) {
             "正在扫描同一 Wi-Fi 下的设备…"
           } else {
-            "未发现其他设备。请确认两台设备连接同一个 Wi-Fi，且路由器没有开启 AP 隔离。"
+            "未发现其他设备。关联时也会按匹配码自动搜索本网段，通常不必等这里出现设备。"
           },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       } else {
         candidates.forEach { peer ->
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
+          Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-              Text(peer.deviceName, style = MaterialTheme.typography.bodyMedium)
+              Text(peer.deviceName.ifBlank { "未命名设备" }, style = MaterialTheme.typography.bodyMedium)
               Text(
                 text = "${peer.host}:${peer.port}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
-            TextButton(onClick = { pendingPeer = peer; code = "" }) {
-              Text("配对")
-            }
           }
         }
+        Spacer(modifier = Modifier.height(2.dp))
         Text(
-          text = "点击「配对」并输入对方设备上显示的六位配对码即可完成配对。",
+          text = "在对方设备上打开本页读出六位匹配码，点「关联设备」输入即可。",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
