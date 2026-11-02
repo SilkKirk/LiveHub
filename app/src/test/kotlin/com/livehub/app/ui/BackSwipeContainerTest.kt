@@ -28,6 +28,10 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * A test that merely composes the screen cannot see this, because there is nothing visibly
  * wrong. These tests drag and count the callbacks.
+ *
+ * Coordinates are given in dp and converted with the container's own density: the
+ * threshold is 60dp, and writing raw pixels here is what made the first version of this
+ * test assert distances that happened to fall on the wrong side of it.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -38,6 +42,7 @@ class BackSwipeContainerTest {
 
   private val closes = AtomicInteger(0)
 
+  /** 400x600dp: comfortably wider than the 8% edge zone and the 60dp threshold. */
   private fun composeContainer() {
     composeRule.setContent {
       Box(modifier = Modifier.size(400.dp, 600.dp)) {
@@ -49,15 +54,21 @@ class BackSwipeContainerTest {
     composeRule.waitForIdle()
   }
 
-  /** Drags from [startX] to [endX] in [steps] frames, the way a finger actually moves. */
-  private fun drag(startX: Float, endX: Float, steps: Int) {
+  /** Converts dp to the pixels this composition actually uses. */
+  private fun px(dp: Int): Float = with(composeRule.density) { dp.dp.toPx() }
+
+  /** Drags from [startDp] to [endDp] in [steps] frames, the way a finger actually moves. */
+  private fun drag(startDp: Int, endDp: Int, steps: Int) {
+    val startX = px(startDp)
+    val endX = px(endDp)
+    val y = px(300)
     composeRule.onNodeWithText("播放器内容").performTouchInput {
-      down(Offset(startX, 300f))
+      down(Offset(startX, y))
       val step = (endX - startX) / steps
       repeat(steps) { index ->
         // Small increments per frame, which is exactly what the old code compared
-        // against the whole 180px threshold.
-        moveTo(Offset(startX + step * (index + 1), 300f))
+        // against the whole threshold.
+        moveTo(Offset(startX + step * (index + 1), y))
       }
       up()
     }
@@ -68,7 +79,7 @@ class BackSwipeContainerTest {
   fun `a swipe from the left edge closes the player`() {
     composeContainer()
 
-    drag(startX = 5f, endX = 300f, steps = 10)
+    drag(startDp = 2, endDp = 300, steps = 10)
 
     assertEquals("a left-edge swipe must close the player", 1, closes.get())
   }
@@ -83,7 +94,7 @@ class BackSwipeContainerTest {
   fun `a swipe closes exactly once, not once per frame`() {
     composeContainer()
 
-    drag(startX = 5f, endX = 380f, steps = 20)
+    drag(startDp = 2, endDp = 390, steps = 20)
 
     assertEquals("one swipe must dispatch one close", 1, closes.get())
   }
@@ -92,9 +103,10 @@ class BackSwipeContainerTest {
   fun `a short swipe does not close the player`() {
     composeContainer()
 
-    drag(startX = 5f, endX = 60f, steps = 6)
+    // 30dp of travel, well under the 60dp threshold.
+    drag(startDp = 2, endDp = 32, steps = 6)
 
-    assertEquals("a tap-length drag must not close the player", 0, closes.get())
+    assertEquals("a short drag must not close the player", 0, closes.get())
   }
 
   /**
@@ -106,7 +118,7 @@ class BackSwipeContainerTest {
   fun `a swipe that starts away from the edge does not close the player`() {
     composeContainer()
 
-    drag(startX = 200f, endX = 390f, steps = 10)
+    drag(startDp = 200, endDp = 390, steps = 10)
 
     assertEquals("a mid-screen drag must not close the player", 0, closes.get())
   }

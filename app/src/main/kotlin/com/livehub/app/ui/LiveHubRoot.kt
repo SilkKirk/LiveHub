@@ -1,7 +1,8 @@
 package com.livehub.app.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -38,6 +39,7 @@ import com.livehub.app.ui.screens.SearchScreen
 import com.livehub.app.ui.screens.SettingsScreen
 import com.livehub.app.ui.screens.SyncScreen
 import com.livehub.core.designsystem.LiveHubTheme
+import kotlin.math.abs
 
 /** Bottom bar destinations, in display order. */
 private enum class Dock(val screen: Screen, val label: String, val icon: ImageVector) {
@@ -120,7 +122,6 @@ internal fun BackSwipeContainer(
   onClose: () -> Unit,
   content: @Composable () -> Unit,
 ) {
-  var dragStartX by remember { mutableStateOf<Float?>(null) }
   // The edge zone is a fraction of the real width, so the pointer handler has to be rebuilt
   // once the layout reports it. Keying `pointerInput` on `Unit` meant the handler captured
   // the initial 0 and never saw the width at all.
@@ -129,26 +130,41 @@ internal fun BackSwipeContainer(
   Box(
     modifier = Modifier
       .fillMaxSize()
-      .onSizeChanged {
-        widthPx = it.width.toFloat()
-        dragStartX = null
-      }
+      .onSizeChanged { widthPx = it.width.toFloat() }
       .pointerInput(widthPx) {
         if (widthPx <= 0f) return@pointerInput
         val edgeZone = widthPx * EDGE_ZONE_FRACTION
-        detectHorizontalDragGestures(
-          onDragStart = { offset -> dragStartX = offset.x },
-          onDragEnd = { dragStartX = null },
-          onDragCancel = { dragStartX = null },
-        ) { change, _ ->
-          change.consume()
-          val start = dragStartX ?: return@detectHorizontalDragGestures
-          if (start > edgeZone) return@detectHorizontalDragGestures
-          // `position.x` is relative to this Box, so this is the distance travelled from
-          // where the finger went down.
-          if (change.position.x - start >= SWIPE_THRESHOLD_PX) {
-            dragStartX = null
-            onClose()
+        val swThresholdPx = SWIPE_THRESHOLD.toPx()
+        val slop = viewConfiguration.touchSlop
+
+        // Hand-rolled rather than `detectHorizontalDragGestures`, because that helper's
+        // `onDragStart` reports the position *after* touch slop has been consumed, not
+        // where the finger went down. Judging "did this start at the edge?" from a point
+        // already tens of pixels inland rejects genuine edge swipes — which is exactly how
+        // the first version of this fix failed its own test.
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false)
+          val startX = down.position.x
+          // Not an edge swipe: leave the events alone so panning the video still works.
+          if (startX > edgeZone) return@awaitEachGesture
+
+          var pastSlop = false
+          while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+
+            if (!pastSlop) {
+              // Ignore the slop distance itself: a vertical-ish drag should not be claimed
+              // by the back gesture just because it drifted sideways a little first.
+              pastSlop = abs(change.position.x - startX) > slop
+            } else {
+              change.consume()
+              if (change.position.x - startX >= swThresholdPx) {
+                onClose()
+                break
+              }
+            }
           }
         }
       },
@@ -172,8 +188,14 @@ private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
   }
 }
 
-/** A finger travel of roughly 60dp counts as a back gesture. */
-private const val SWIPE_THRESHOLD_PX = 180f
+/**
+ * How far the finger must travel before the swipe counts, in dp.
+ *
+ * dp rather than raw pixels: the constant used to be `180f` px with a comment claiming it
+ * was "roughly 60dp", which is only true on a 3x screen. On a 1x screen it demanded three
+ * inches of travel.
+ */
+private val SWIPE_THRESHOLD = 60.dp
 
 /**
  * How close to the left edge a drag has to start to count as "go back".
