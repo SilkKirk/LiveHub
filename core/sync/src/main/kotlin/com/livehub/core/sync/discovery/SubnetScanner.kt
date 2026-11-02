@@ -16,8 +16,8 @@ import java.net.NetworkInterface
  *
  * The sweep is deliberately bounded:
  *
- *  * **/24 only.** Anything wider turns "pair a device" into a network scan; a /16 would
- *    be 65k connect attempts and several minutes.
+ *  * **One /24 only.** Anything wider turns "pair a device" into a network scan; a /16
+ *    would be 65k connect attempts and several minutes.
  *  * **RFC 1918 only.** A routable address here would mean scanning somebody else's
  *    network, which is not something an app should do uninvited.
  */
