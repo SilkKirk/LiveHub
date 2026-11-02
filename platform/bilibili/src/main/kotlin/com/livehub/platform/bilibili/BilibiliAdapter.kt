@@ -12,13 +12,14 @@ import com.livehub.platform.api.DanmakuEvent
 import com.livehub.platform.api.LivePlatformAdapter
 import com.livehub.platform.api.PlatformException
 import com.livehub.platform.api.PlatformProtocolException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -27,7 +28,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
-import kotlin.time.Duration.Companion.milliseconds
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** Bilibili live integration. */
 class BilibiliAdapter(
@@ -105,11 +107,23 @@ class BilibiliAdapter(
     return if (detail != null) source.copy(room = detail) else source
   }
 
+  /**
+   * Live chat for [roomId].
+   *
+   * Reconnection follows the reference client's shape rather than a fixed retry: one
+   * coroutine loops over the endpoint list, and the delay between attempts is exponential
+   * (1.2 s doubling to at most 12 s) while nothing has ever connected, then resets to 1.6 s
+   * once a session was established. A fixed 1.2 s retry hammered Bilibili whenever the room
+   * was risk-controlled or the network was down — exactly the cases where the server wants
+   * fewer connections, not more.
+   *
+   * Endpoints are tried in order within one round, so a single bad host cannot pin the
+   * session, and the loop only leaves the endpoint list early when authentication actually
+   * succeeded (`OP_AUTH_REPLY`), which is the difference between "connected" and "connected
+   * to something that will not push messages".
+   */
   override fun danmaku(roomId: String): Flow<DanmakuEvent> = callbackFlow {
-    var socket: WebSocket? = null
-    var closedByUs = false
-    var heartbeatJob: Job? = null
-    var endpointIndex = 0
+    val socketRef = AtomicReference<WebSocket?>(null)
 
     val info = try {
       api.danmakuInfo(roomId)
@@ -123,100 +137,143 @@ class BilibiliAdapter(
       return@callbackFlow
     }
 
-    fun connect() {
-      val endpoint = info.endpoints[endpointIndex % info.endpoints.size]
-      val request = Request.Builder()
-        .url(endpoint.url)
-        .header("User-Agent", BilibiliApi.UA_CHROME122)
-        .header("Referer", "https://live.bilibili.com/")
-        .header("Origin", "https://live.bilibili.com")
-        .build()
+    val authPacket = BilibiliDanmakuProtocol.authFrame(
+      uid = info.uid,
+      roomId = info.roomId,
+      token = info.token,
+    )
+    val heartbeatPacket = BilibiliDanmakuProtocol.heartbeatFrame()
 
-      socket = webSocketClient.newWebSocket(
-        request,
-        object : WebSocketListener() {
-          override fun onOpen(webSocket: WebSocket, response: Response) {
-            webSocket.send(
-              BilibiliDanmakuProtocol.authFrame(
-                uid = info.uid,
-                roomId = info.roomId,
-                token = info.token,
-              ).toByteString(),
-            )
-            heartbeatJob?.cancel()
-            heartbeatJob = launch {
-              while (true) {
-                delay(BilibiliDanmakuProtocol.HEARTBEAT_INTERVAL_MILLIS)
-                webSocket.send(BilibiliDanmakuProtocol.heartbeatFrame().toByteString())
-              }
+    val job = launch {
+      var backoffMs = RECONNECT_DELAY_INITIAL_MILLIS
+      while (isActive) {
+        var connectedOnce = false
+        var authenticatedOnce = false
+        var lastFailure: Throwable? = null
+
+        for (endpoint in info.endpoints) {
+          if (!isActive) break
+
+          val sessionClosed = CompletableDeferred<Throwable?>()
+          val authenticated = AtomicBoolean(false)
+
+          val request = Request.Builder()
+            .url(endpoint.url)
+            .header("User-Agent", BilibiliApi.UA_CHROME122)
+            .header("Referer", "https://live.bilibili.com/")
+            .header("Origin", "https://live.bilibili.com")
+            .build()
+
+          val listener = object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+              socketRef.set(webSocket)
+              connectedOnce = true
+              webSocket.send(authPacket.toByteString())
             }
-          }
 
-          override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-            BilibiliDanmakuProtocol.decode(bytes.toByteArray()).forEach { packet ->
-              when (packet.operation) {
-                BilibiliDanmakuProtocol.OP_AUTH_REPLY -> trySend(DanmakuEvent.Connected)
-                BilibiliDanmakuProtocol.OP_NOTIFICATION -> {
-                  val chat = BilibiliDanmakuProtocol.parseDanmaku(packet) ?: return@forEach
-                  trySend(
-                    DanmakuEvent.Message(
-                      DanmakuMessage(
-                        roomKey = Streamer.keyOf(platform, roomId),
-                        userName = chat.first,
-                        text = chat.second,
-                        receivedAt = System.currentTimeMillis(),
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+              BilibiliDanmakuProtocol.decode(bytes.toByteArray()).forEach { packet ->
+                when (packet.operation) {
+                  BilibiliDanmakuProtocol.OP_AUTH_REPLY -> {
+                    authenticated.set(true)
+                    authenticatedOnce = true
+                    trySend(DanmakuEvent.Connected)
+                  }
+                  BilibiliDanmakuProtocol.OP_NOTIFICATION -> {
+                    val chat = BilibiliDanmakuProtocol.parseDanmaku(packet) ?: return@forEach
+                    trySend(
+                      DanmakuEvent.Message(
+                        DanmakuMessage(
+                          roomKey = Streamer.keyOf(platform, roomId),
+                          userName = chat.first,
+                          text = chat.second,
+                          receivedAt = System.currentTimeMillis(),
+                        ),
                       ),
-                    ),
-                  )
+                    )
+                  }
                 }
               }
             }
-          }
 
-          override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            if (closedByUs) return
-            endpointIndex++
-            heartbeatJob?.cancel()
-            trySend(DanmakuEvent.Disconnected(t.message ?: "连接中断", willRetry = true))
-            launch {
-              delay(RECONNECT_DELAY_MILLIS.milliseconds)
-              if (!closedByUs) connect()
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+              sessionClosed.complete(t)
+            }
+
+            /**
+             * A clean close must reconnect.
+             *
+             * Bilibili closes a socket that has been idle for a while and expects the client
+             * to come back; stopping here left the chat panel permanently dead.
+             */
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+              sessionClosed.complete(null)
             }
           }
 
-          /**
-           * A clean close must reconnect, and must rotate to the next endpoint.
-           *
-           * Bilibili closes a socket that has been idle for a while and expects the client
-           * to come back; stopping here left the chat panel permanently dead. Rotating the
-           * endpoint on every reconnect also means a single bad node cannot pin the session.
-           */
-          override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            heartbeatJob?.cancel()
-            if (closedByUs) return
-            endpointIndex++
-            trySend(DanmakuEvent.Disconnected(reason.ifBlank { "连接已关闭" }, willRetry = true))
-            launch {
-              delay(RECONNECT_DELAY_MILLIS.milliseconds)
-              if (!closedByUs) connect()
+          val socket = webSocketClient.newWebSocket(request, listener)
+          socketRef.set(socket)
+
+          val heartbeatJob = launch {
+            while (isActive) {
+              delay(BilibiliDanmakuProtocol.HEARTBEAT_INTERVAL_MILLIS)
+              val current = socketRef.get() ?: break
+              // A newer socket replaced this one, or the send failed: stop beating.
+              if (current !== socket) break
+              if (!current.send(heartbeatPacket.toByteString())) break
             }
           }
-        },
-      )
+
+          lastFailure = sessionClosed.await()
+          heartbeatJob.cancel()
+          runCatching { socket.close(1000, "reconnect") }
+
+          if (!isActive) break
+
+          // Only a session that authenticated is worth reusing; otherwise rotate.
+          if (authenticated.get()) break
+        }
+
+        if (!isActive) break
+
+        // One report per round rather than per endpoint: the UI only needs to know the room
+        // is offline and being retried, not which of the six hosts failed last.
+        if (!authenticatedOnce) {
+          trySend(
+            DanmakuEvent.Disconnected(
+              lastFailure?.message ?: "连接已关闭",
+              willRetry = true,
+            ),
+          )
+        }
+
+        // Grow the delay only while we have never managed to connect; a working session that
+        // dropped should come back quickly.
+        backoffMs = if (!connectedOnce) {
+          (backoffMs * 2).coerceAtMost(RECONNECT_DELAY_MAX_MILLIS)
+        } else {
+          RECONNECT_DELAY_AFTER_SUCCESS_MILLIS
+        }
+        delay(backoffMs)
+      }
     }
 
-    connect()
-
     awaitClose {
-      closedByUs = true
-      heartbeatJob?.cancel()
-      socket?.close(1000, "client closed")
-      socket = null
+      socketRef.getAndSet(null)?.close(1000, "client closed")
+      job.cancel()
     }
   }.flowOn(Dispatchers.IO)
 
   companion object {
     const val PAGE_SIZE = 20
-    const val RECONNECT_DELAY_MILLIS = 1_200L
+
+    /** First retry delay; doubles per failed round until it reaches the cap. */
+    const val RECONNECT_DELAY_INITIAL_MILLIS = 1_200L
+
+    /** Ceiling for the exponential backoff, so a dead room is not retried forever at speed. */
+    const val RECONNECT_DELAY_MAX_MILLIS = 12_000L
+
+    /** Delay after a session that had worked dropped: reconnect promptly. */
+    const val RECONNECT_DELAY_AFTER_SUCCESS_MILLIS = 1_600L
   }
 }
