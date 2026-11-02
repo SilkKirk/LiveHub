@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The Android side of cross-device sync.
@@ -191,9 +192,18 @@ class SyncController(
    * validates it against the code it is currently hosting and answers with the
    * per-peer shared secret that both sides then use for every sync request.
    *
+   * Suspending, and dispatched to [Dispatchers.IO], because this opens a socket. The
+   * caller is `viewModelScope`, which runs on the main thread, and Android throws
+   * `NetworkOnMainThreadException` on the first `connect()` made there — with a null
+   * message, so a blocking version of this method surfaced as a bare "同步失败" the
+   * moment the user confirmed the pairing code.
+   *
    * @return the paired device name on success, or a failure describing why.
    */
-  fun pair(peerName: String, address: String, code: String): Result<String> {
+  suspend fun pair(peerName: String, address: String, code: String): Result<String> =
+    withContext(Dispatchers.IO) { pairBlocking(peerName, address, code) }
+
+  private fun pairBlocking(peerName: String, address: String, code: String): Result<String> {
     val parsed = com.livehub.core.sync.transport.parseManualAddress(address, DEFAULT_PORT)
       ?: return Result.failure(IllegalArgumentException("地址格式应为 192.168.1.10 或 192.168.1.10:$DEFAULT_PORT"))
 
@@ -268,12 +278,16 @@ class SyncController(
 
   /**
    * Runs a full exchange. Returns a human readable summary for the snackbar.
+   *
+   * Every step opens a socket, so the whole exchange runs on [Dispatchers.IO]: the
+   * caller is `viewModelScope`, and a blocking socket call on the main thread throws
+   * `NetworkOnMainThreadException`.
    */
-  suspend fun syncNow(): SyncSummary {
-    val currentTransport = transport ?: return SyncSummary(0, 0, "同步服务未启动")
+  suspend fun syncNow(): SyncSummary = withContext(Dispatchers.IO) {
+    val currentTransport = transport ?: return@withContext SyncSummary(0, 0, "同步服务未启动")
     val coordinator = SyncCoordinator(engine, currentTransport)
     val peers = preferences.trustedPeers()
-    if (peers.isEmpty()) return SyncSummary(0, 0, "尚未配对任何设备")
+    if (peers.isEmpty()) return@withContext SyncSummary(0, 0, "尚未配对任何设备")
 
     var pulled = 0
     var pushed = 0
@@ -290,13 +304,13 @@ class SyncController(
       pulled == 0 && pushed == 0 -> "已是最新"
       else -> "同步完成：接收 $pulled，发送 $pushed"
     }
-    return SyncSummary(pulled, pushed, message)
+    SyncSummary(pulled, pushed, message)
   }
 
   /** Probes every paired peer so the UI can show who is online. */
-  suspend fun onlinePeers(): Set<Long> {
-    val currentTransport = transport ?: return emptySet()
-    return preferences.trustedPeers()
+  suspend fun onlinePeers(): Set<Long> = withContext(Dispatchers.IO) {
+    val currentTransport = transport ?: return@withContext emptySet()
+    preferences.trustedPeers()
       .filter { currentTransport.probe(it) }
       .map { it.deviceId }
       .toSet()

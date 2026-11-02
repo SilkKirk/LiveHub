@@ -181,7 +181,15 @@ class LanSyncTransport(
     } catch (error: java.net.ConnectException) {
       throw SyncTransportException(SyncFailureReason.REFUSED, "对方拒绝连接", error)
     } catch (error: Exception) {
-      throw SyncTransportException(SyncFailureReason.UNKNOWN, error.message ?: "同步失败", error)
+      // `message` is null on exceptions that carry no text, `NetworkOnMainThreadException`
+      // being the one that actually bit us: the whole pairing flow reported a bare
+      // "同步失败" because the socket had been opened on the main thread. Fall back to the
+      // exception name so the next such failure names itself instead of hiding.
+      throw SyncTransportException(
+        SyncFailureReason.UNKNOWN,
+        error.message?.takeIf { it.isNotBlank() } ?: (error::class.java.simpleName ?: "同步失败"),
+        error,
+      )
     }
 
     if (response.status == 403) {
