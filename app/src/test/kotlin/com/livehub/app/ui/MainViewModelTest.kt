@@ -54,6 +54,25 @@ class MainViewModelTest {
     shadowOf(Looper.getMainLooper()).idle()
   }
 
+  /**
+   * Idles until [condition] holds, or fails after [timeoutMillis].
+   *
+   * `idle()` alone only runs what is already queued on the main looper. Work that hops to
+   * `Dispatchers.IO` — which the sync path now does, so its sockets stay off the UI thread —
+   * resumes on the main looper only once the background thread is done, so a single idle
+   * observes the state from *before* the call completed.
+   */
+  private fun awaitCondition(timeoutMillis: Long = 5_000, condition: () -> Boolean) {
+    val deadline = System.currentTimeMillis() + timeoutMillis
+    while (System.currentTimeMillis() < deadline) {
+      idle()
+      if (condition()) return
+      Thread.sleep(10)
+    }
+    idle()
+    assertTrue("condition not met within ${timeoutMillis}ms", condition())
+  }
+
   private val state: UiState get() = viewModel.state.value
 
   private fun streamer(roomId: String, name: String, platform: Platform = Platform.DOUYU) =
@@ -367,10 +386,13 @@ class MainViewModelTest {
   @Test
   fun `syncing with no paired device explains why nothing happened`() {
     viewModel.onAction(UiAction.SyncNow)
-    idle()
+    // The exchange runs on Dispatchers.IO, so the snackbar message arrives after the
+    // background hop completes rather than on the next main-loop tick.
+    awaitCondition { !state.syncing && state.message != null }
 
     assertFalse(state.syncing)
     assertNotNull(state.message)
+    assertTrue("a message must explain the outcome", state.message!!.isNotBlank())
   }
 
   @Test
