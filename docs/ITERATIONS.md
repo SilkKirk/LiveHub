@@ -1023,3 +1023,56 @@ detectHorizontalDragGestures { change, dragAmount ->
 - **全屏栏的星标**：横屏全屏时下面没有关注按钮，星标仍然需要，暂时保留。
 - **"够得着"断言**：设置页、同步页日志等长列表，用 `performScrollTo` 覆盖。
 - **视觉对照**：剩余截图尚未逐张检查。
+
+---
+
+## 第十六轮迭代：弹幕"往上刷"，以及排名第一和第二的写法互相抵消
+
+反馈很短："弹幕怎么是往上刷的"。
+
+### 两个错误单独看都讲得通，合起来就是倒退
+
+`DanmakuList` 当时是这样：
+
+```kotlin
+val display = remember(messages) { messages.asReversed() }  // 新的在最上面
+LaunchedEffect(display.size) {
+  if (display.isNotEmpty()) listState.animateScrollToItem(0) // 每次滚回顶部
+}
+```
+
+- `asReversed()`：把最新的放在索引 0，注释写着"chat flows downward from the top"。
+- `animateScrollToItem(0)`：每来一条就滚到顶。
+
+分开看，两者都指向"最新的在最上面"。合起来却是：新消息插到顶上 → 下面所有行**整体
+下移** → 下一帧又被滚回顶部、整体**上移**。屏幕上看到的是旧内容往上走，也就是倒着刷。
+
+真正的顺序问题不在于"新的放上面"，而在于**视口每帧被人为拉回**。直播客户端的惯例
+是旧的在上、新的从底部追加、视口停在尾部，这既符合"往下刷"的直觉，也不需要任何
+反向滚动。
+
+### 修的时候又踩到两个坑
+
+1. **`layoutInfo` 在 composition 里读的是上一帧**。第一版把"是否在底部"写在 effect 里，
+   列表一旦超过一屏就永远判定"不在底部"，跟随尾部直接失效——正好在列表变长之后。
+   改用 `derivedStateOf` 观察实时布局。
+2. **精确判断会差一条**。新消息到达时列表已经比上次布局长一格，`lastVisible ==
+   lastIndex` 对"该滚动的这一条"永远判 false。判断放宽一行。
+
+### 本轮验证
+
+新增 `DanmakuListOrderTest`（3 条）：旧的在新的上方（直接比较 `boundsInRoot.top`）、
+新消息到达后仍然可见、屏蔽词不渲染。断言的是**顺序**而不是动画，因为缺陷是"排序和
+滚动同时错"才显形的。
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（含 `DanmakuListOrderTest`） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+### 下一轮
+
+- **全屏横向弹幕的观感**：`DanmakuOverlay` 的飞行速度固定 8 秒，长弹幕会显得偏慢。
+- **"够得着"断言**：设置页、同步页日志等长列表，用 `performScrollTo` 覆盖。

@@ -58,6 +58,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -898,8 +899,15 @@ private fun SettingsLabel(text: String) {
 
 // ----------------------------------------------------------------- danmaku ---
 
+/**
+ * The portrait danmaku list.
+ *
+ * Internal rather than private so the ordering can be asserted without composing the whole
+ * player — the bug it guards against is an ordering one, and a screenshot cannot tell
+ * "newest at the bottom" from "newest at the top" when both look like chat.
+ */
 @Composable
-private fun DanmakuPanel(state: UiState, modifier: Modifier = Modifier) {
+internal fun DanmakuPanel(state: UiState, modifier: Modifier = Modifier) {
   // Blocked keywords used to be applied only inside the overlay, so the portrait list
   // showed every word the user had explicitly filtered out.
   val visible = remember(state.danmaku, state.blockedKeywords) {
@@ -936,10 +944,43 @@ private fun DanmakuList(
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
-  // Newest first: chat flows downward from the top like every live app.
-  val display = remember(messages) { messages.asReversed() }
-  LaunchedEffect(display.size) {
-    if (display.isNotEmpty()) listState.animateScrollToItem(0)
+  // Oldest at the top, newest appended at the bottom — the order every live chat uses.
+  //
+  // This used to be `asReversed()` plus `animateScrollToItem(0)`: newest at the top, and
+  // the list yanked back to position 0 on every message. The two cancelled out, so a new
+  // message pushed every existing row down for one frame and was then pulled back up with
+  // the rest. On screen that reads as chat scrolling *upwards*, which is why it looked
+  // reversed even though the ordering was documented as "newest first".
+
+  /**
+   * Whether the viewport is close enough to the tail to follow it.
+   *
+   * Two details, both of which broke the naive version:
+   *
+   *  * `layoutInfo` has to be observed through `derivedStateOf`. A plain read during
+   *    composition sees the *previous* frame's layout.
+   *  * The check is tolerant by one row. When a message arrives the list is already one item
+   *    longer than what was last laid out, so an exact `lastVisible == lastIndex` test
+   *    reports "not at the bottom" for the very message that should scroll it — and the
+   *    tail is then never followed at all.
+   */
+  val atBottom by remember {
+    derivedStateOf {
+      val info = listState.layoutInfo
+      if (info.totalItemsCount == 0) return@derivedStateOf true
+      val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+      lastVisible >= info.totalItemsCount - 2
+    }
+  }
+
+  LaunchedEffect(messages.size) {
+    // Only follow the tail when the user is already there, so scrolling back through older
+    // messages is not interrupted by every new danmaku. `atBottom` is read here, not
+    // captured: `derivedStateOf` recomputes from the live layout, so this sees the position
+    // as of the new message rather than the one from when the effect was created.
+    if (messages.isNotEmpty() && atBottom) {
+      listState.animateScrollToItem(messages.lastIndex)
+    }
   }
 
   LazyColumn(
@@ -949,7 +990,7 @@ private fun DanmakuList(
     verticalArrangement = Arrangement.spacedBy(7.dp),
   ) {
     itemsIndexed(
-      display,
+      messages,
       key = { index, message -> "${message.receivedAt}:$index" },
     ) { _, message ->
       DanmakuRow(user = message.userName, content = message.text)
