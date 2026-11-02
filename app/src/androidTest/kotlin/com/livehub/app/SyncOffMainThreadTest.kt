@@ -61,13 +61,28 @@ class SyncOffMainThreadTest {
     controller.stop()
   }
 
-  /** Runs [block] on the real main thread and returns its result. */
-  private fun <T> onMainThread(block: suspend () -> T): Result<T> {
-    val result = AtomicReference<Result<T>>()
+  /**
+   * Runs [block] on the real main thread and returns whatever it returns.
+   *
+   * The value is returned as-is, not wrapped in a `Result`: several callers already return
+   * a `Result` of their own, and wrapping it again (`Result<Result<T>>`) made
+   * `outcome.isFailure` report whether the *harness* threw rather than whether the call
+   * failed — which is how an earlier version of this test passed a pairing that actually
+   * succeeded. A throw from [block] is rethrown here, on the calling thread.
+   */
+  private fun <T> onMainThread(block: suspend () -> T): T {
+    val value = AtomicReference<T>()
+    val failure = AtomicReference<Throwable>()
     InstrumentationRegistry.getInstrumentation().runOnMainSync {
-      result.set(runCatching { runBlocking { block() } })
+      try {
+        value.set(runBlocking { block() })
+      } catch (error: Throwable) {
+        failure.set(error)
+      }
     }
-    return result.get()
+    failure.get()?.let { throw it }
+    @Suppress("UNCHECKED_CAST")
+    return value.get() as T
   }
 
   /**
@@ -128,7 +143,7 @@ class SyncOffMainThreadTest {
    */
   @Test
   fun syncingFromMainThreadCompletes() {
-    val summary = onMainThread { controller.syncNow() }.getOrThrow()
+    val summary = onMainThread { controller.syncNow() }
 
     assertTrue(summary.pulled == 0 && summary.pushed == 0)
     assertTrue(summary.message, summary.message.contains("尚未配对"))
