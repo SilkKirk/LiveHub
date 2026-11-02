@@ -38,7 +38,7 @@ class DouyinAdapter(
    * Persists the negotiated `ttwid`; the app supplies a DataStore-backed one so the value
    * survives restarts, while tests fall back to the in-memory default.
    */
-  private val cookieStore: DouyinCookieStore = DouyinCookieStore.InMemory,
+  private val cookieStore: DouyinCookieStore = DouyinCookieStore.inMemory(),
   private val api: DouyinApi = DouyinApi(http, cookieStore),
   /** Supplies the bundled category table; empty in tests. */
   private val assets: com.livehub.platform.api.AssetReader = com.livehub.platform.api.AssetReader.Empty,

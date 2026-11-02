@@ -43,7 +43,7 @@ class DouyinCookieNegotiationTest {
   @Test
   fun `a negotiated ttwid is used instead of the shipped literal`() = runBlocking {
     val http = FakeHttp(setCookies = listOf("$ttwid; Path=/; Domain=.douyin.com", "UIFID_TEMP=abc; Path=/"))
-    val api = DouyinApi(http, DouyinCookieStore.InMemory)
+    val api = DouyinApi(http, InMemoryDouyinCookieStore())
 
     val header = api.cookieHeader()
 
@@ -54,7 +54,7 @@ class DouyinCookieNegotiationTest {
   @Test
   fun `only the ttwid cookie is kept, not every Set-Cookie`() = runBlocking {
     val http = FakeHttp(setCookies = listOf("UIFID_TEMP=abc; Path=/", "$ttwid; Path=/"))
-    val api = DouyinApi(http, DouyinCookieStore.InMemory)
+    val api = DouyinApi(http, InMemoryDouyinCookieStore())
 
     assertEquals(ttwid, api.cookieHeader())
   }
@@ -62,7 +62,7 @@ class DouyinCookieNegotiationTest {
   @Test
   fun `the value is cached so later calls do not re-negotiate`() = runBlocking {
     val http = FakeHttp(setCookies = listOf(ttwid))
-    val api = DouyinApi(http, DouyinCookieStore.InMemory)
+    val api = DouyinApi(http, InMemoryDouyinCookieStore())
 
     api.cookieHeader()
     api.cookieHeader()
@@ -95,7 +95,7 @@ class DouyinCookieNegotiationTest {
   fun `a failed negotiation still sends the fallback so the request is not cookieless`() = runBlocking {
     // No Set-Cookie at all: Douyin answers an empty body to a cookieless request, which is
     // indistinguishable from "no rooms", so something has to be sent regardless.
-    val api = DouyinApi(FakeHttp(setCookies = emptyList()), DouyinCookieStore.InMemory)
+    val api = DouyinApi(FakeHttp(setCookies = emptyList()), InMemoryDouyinCookieStore())
 
     val header = api.cookieHeader()
 

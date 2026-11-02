@@ -59,7 +59,7 @@ class DouyinApi(
    *
    * Defaults to a no-op so tests and callers that do not care behave exactly as before.
    */
-  private val cookieStore: DouyinCookieStore = DouyinCookieStore.InMemory,
+  private val cookieStore: DouyinCookieStore = DouyinCookieStore.inMemory(),
 ) {
 
   val json = Json {

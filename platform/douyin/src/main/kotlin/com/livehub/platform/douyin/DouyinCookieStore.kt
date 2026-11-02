@@ -19,8 +19,15 @@ interface DouyinCookieStore {
   fun clear()
 
   companion object {
-    /** Process-local store used in tests and when persistence is unavailable. */
-    val InMemory: DouyinCookieStore = InMemoryDouyinCookieStore()
+    /**
+     * A fresh in-process store.
+     *
+     * Deliberately a factory rather than a shared `val`: a single instance would leak one
+     * room's negotiated `ttwid` into every other `DouyinApi`, which is how two of these
+     * tests failed against each other. The app injects `DataStoreDouyinCookies` anyway, so
+     * this exists for tests and for a build without persistence.
+     */
+    fun inMemory(): DouyinCookieStore = InMemoryDouyinCookieStore()
   }
 }
 
