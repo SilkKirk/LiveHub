@@ -16,15 +16,19 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -34,7 +38,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.PlayArrow
@@ -223,13 +226,22 @@ internal fun PlayerContent(
     modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
   ) {
     Column(modifier = Modifier.fillMaxSize()) {
-      if (!fullscreen && !verticalFullBleed) {
-        PlayerHeader(state = state, onAction = onAction, modifier = Modifier.fillMaxWidth())
-      }
+      // No header in portrait: the picture now starts at the top edge, and closing the
+      // player is the left-edge swipe or the system back gesture. A vertical stream in
+      // portrait already used this layout, so this makes the two agree instead of
+      // leaving one of them with a bar nobody needed.
 
       val videoModifier = when {
+        // Full screen and the full-bleed vertical layout are immersive on purpose: the
+        // picture runs under the status bar, which is what "fills the screen" means.
         fullscreen || verticalFullBleed -> Modifier.fillMaxSize()
-        else -> Modifier.fillMaxWidth().aspectRatio(videoAspect ?: (16f / 9f))
+        else -> Modifier
+          .fillMaxWidth()
+          // The header that used to sit above the picture also kept it clear of the status
+          // bar. With the header gone and the activity in edge-to-edge mode, the video would
+          // start underneath the clock and the cutout, so the inset moves here.
+          .windowInsetsPadding(WindowInsets.statusBars)
+          .aspectRatio(videoAspect ?: (16f / 9f))
       }
 
       Box(modifier = videoModifier.background(Color.Black)) {
@@ -276,7 +288,20 @@ internal fun PlayerContent(
         }
 
         if (verticalFullBleed) {
-          PlayerHeader(state = state, onAction = onAction, modifier = Modifier.align(Alignment.TopCenter))
+          // A vertical stream fills the screen, so there is no list underneath and the
+          // streamer name would have nowhere else to go. This one line is all that is
+          // left of the old header, and it carries no buttons.
+          StreamerLine(
+            state = state,
+            modifier = Modifier
+              .align(Alignment.TopCenter)
+              .fillMaxWidth()
+              .background(
+                Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent)),
+              )
+              .padding(horizontal = 12.dp, vertical = 10.dp),
+            onSurface = Color.White,
+          )
         }
 
         // In full screen the bar floats over the picture instead of sitting above it.
@@ -354,7 +379,15 @@ internal fun PlayerContent(
       if (!fullscreen && !verticalFullBleed) {
         RoomActionRow(state = state, onAction = onAction)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-        DanmakuPanel(state = state, modifier = Modifier.weight(1f).fillMaxWidth())
+        // Bottom inset for the same reason as the top one: with edge-to-edge on, the last
+        // danmaku row was drawn under the navigation bar and could not be read.
+        DanmakuPanel(
+          state = state,
+          modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.navigationBars),
+        )
       }
     }
   }
@@ -362,110 +395,60 @@ internal fun PlayerContent(
 
 // ------------------------------------------------------------------- header ---
 
+// The portrait header used to be a floating pill with a back arrow, a star and a close
+// button. All three are gone on purpose:
+//
+//  * back and close both called `ClosePlayer`, so the screen carried two ways to do one
+//    thing while a third — the system back gesture, and the left-edge swipe in
+//    `LiveHubRoot` — already worked everywhere;
+//  * the star duplicated the 关注 button in `RoomActionRow`, which is larger, labelled and
+//    therefore the one a user can actually find.
+//
+// What the pill also showed (streamer, live dot, viewer count) was not decoration, so it
+// moved into `RoomActionRow` rather than disappearing with the container.
+
+/**
+ * Streamer name plus live dot and viewer count.
+ *
+ * Extracted so the full-bleed vertical layout (no list underneath) and the ordinary
+ * portrait layout (list underneath) show the same thing the same way.
+ */
 @Composable
-private fun PlayerHeader(
+private fun StreamerLine(
   state: UiState,
-  onAction: (UiAction) -> Unit,
   modifier: Modifier = Modifier,
+  onSurface: Color = MaterialTheme.colorScheme.onSurface,
+  secondary: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
-  val followed = remember(state.followed, state.room) {
-    state.room?.let { room -> state.followed.any { it.key == room.key } } ?: false
-  }
-
-  Row(
-    modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    Surface(
-      modifier = Modifier.weight(1f).height(40.dp),
-      shape = RoundedCornerShape(20.dp),
-      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-    ) {
-      Row(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Icon(
-          imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-          contentDescription = "返回",
-          tint = MaterialTheme.colorScheme.onSurface,
-          modifier = Modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .clickable { onAction(UiAction.ClosePlayer) }
-            .padding(4.dp),
-        )
-
-        Column(modifier = Modifier.weight(1f).padding(start = 2.dp)) {
-          Text(
-            text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          val viewers = state.room?.viewerCount ?: 0
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            if (state.room?.isLive == true) {
-              Box(
-                modifier = Modifier
-                  .size(5.dp)
-                  .clip(CircleShape)
-                  .background(LiveBadgeColor),
-              )
-              Spacer(Modifier.width(4.dp))
-            }
-            Text(
-              text = if (viewers > 0) {
-                "${ViewerCountFormatter.format(viewers)}人在看"
-              } else {
-                state.room?.platform?.displayName.orEmpty()
-              },
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-            )
-          }
-        }
-
-        Icon(
-          imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
-          contentDescription = if (followed) "取消关注" else "关注",
-          tint = if (followed) {
-            MaterialTheme.colorScheme.primary
-          } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-          },
-          modifier = Modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .clickable(enabled = state.room != null) {
-              state.room?.let { onAction(UiAction.ToggleFollow(it)) }
-            }
-            .padding(5.dp),
-        )
-      }
+  val viewers = state.room?.viewerCount ?: 0
+  Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+    if (state.room?.isLive == true) {
+      Box(
+        modifier = Modifier
+          .size(5.dp)
+          .clip(CircleShape)
+          .background(LiveBadgeColor),
+      )
+      Spacer(Modifier.width(4.dp))
     }
-
-    Surface(
-      modifier = Modifier.size(40.dp),
-      shape = CircleShape,
-      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Icon(
-          imageVector = Icons.Filled.Close,
-          contentDescription = "关闭",
-          tint = MaterialTheme.colorScheme.onSurface,
-          modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .clickable { onAction(UiAction.ClosePlayer) }
-            .padding(9.dp),
-        )
-      }
-    }
+    Text(
+      text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
+      style = MaterialTheme.typography.labelLarge,
+      fontWeight = FontWeight.SemiBold,
+      color = onSurface,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+    Text(
+      text = if (viewers > 0) {
+        " · ${ViewerCountFormatter.format(viewers)}人在看"
+      } else {
+        state.room?.platform?.displayName?.let { " · $it" }.orEmpty()
+      },
+      style = MaterialTheme.typography.labelSmall,
+      color = secondary,
+      maxLines = 1,
+    )
   }
 }
 
@@ -694,6 +677,10 @@ private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
   }
 
   Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+    // The streamer line leads, because the header that used to show it is gone. Title and
+    // platform follow, so the order still reads "who is streaming, what about, where".
+    StreamerLine(state = state)
+    Spacer(Modifier.height(4.dp))
     Text(
       text = state.room?.title.orEmpty().ifBlank { "直播中" },
       style = MaterialTheme.typography.titleSmall,

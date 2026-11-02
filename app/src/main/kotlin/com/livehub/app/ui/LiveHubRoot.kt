@@ -1,13 +1,11 @@
 package com.livehub.app.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -24,11 +22,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.screens.FollowScreen
 import com.livehub.app.ui.screens.HomeScreen
@@ -72,19 +73,7 @@ fun LiveHubRoot(
   LiveHubTheme(mode = state.themeMode) {
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
       if (state.screen == Screen.Player) {
-        // Swipe from the left edge is the gesture users expect for "go back".
-        Box(
-          modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-              detectHorizontalDragGestures { change, dragAmount ->
-                change.consume()
-                if (dragAmount > SWIPE_THRESHOLD_PX) {
-                  onAction(UiAction.ClosePlayer)
-                }
-              }
-            },
-        ) {
+        BackSwipeContainer(onClose = { onAction(UiAction.ClosePlayer) }) {
           PlayerScreen(state = state, onAction = onAction)
         }
       } else {
@@ -107,6 +96,67 @@ fun LiveHubRoot(
   }
 }
 
+/**
+ * Left-edge swipe to leave a full-screen page, the gesture users expect for "back".
+ *
+ * The previous version could not work, for two independent reasons:
+ *
+ *  * `detectHorizontalDragGestures` reports the movement **per frame**, not since the
+ *    gesture began. Comparing that against a 180px threshold meant a fast flick of a few
+ *    dozen pixels per frame never reached it, so the gesture effectively did nothing;
+ *  * when it did trip, it fired on *every* remaining frame, calling `ClosePlayer` dozens of
+ *    times for one swipe.
+ *
+ * The travel is accumulated here and the callback fires once. The gesture also has to
+ * start near the left edge, like the platform back gesture: a horizontal drag in the
+ * middle of the picture is how the video is panned, not how you leave it.
+ *
+ * Internal rather than private so `BackSwipeContainerTest` can drive it; the bug it
+ * guards against (a threshold that a per-frame delta can never reach) is invisible in any
+ * test that only composes the screen and looks at it.
+ */
+@Composable
+internal fun BackSwipeContainer(
+  onClose: () -> Unit,
+  content: @Composable () -> Unit,
+) {
+  var dragStartX by remember { mutableStateOf<Float?>(null) }
+  // The edge zone is a fraction of the real width, so the pointer handler has to be rebuilt
+  // once the layout reports it. Keying `pointerInput` on `Unit` meant the handler captured
+  // the initial 0 and never saw the width at all.
+  var widthPx by remember { mutableStateOf(0f) }
+
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .onSizeChanged {
+        widthPx = it.width.toFloat()
+        dragStartX = null
+      }
+      .pointerInput(widthPx) {
+        if (widthPx <= 0f) return@pointerInput
+        val edgeZone = widthPx * EDGE_ZONE_FRACTION
+        detectHorizontalDragGestures(
+          onDragStart = { offset -> dragStartX = offset.x },
+          onDragEnd = { dragStartX = null },
+          onDragCancel = { dragStartX = null },
+        ) { change, _ ->
+          change.consume()
+          val start = dragStartX ?: return@detectHorizontalDragGestures
+          if (start > edgeZone) return@detectHorizontalDragGestures
+          // `position.x` is relative to this Box, so this is the distance travelled from
+          // where the finger went down.
+          if (change.position.x - start >= SWIPE_THRESHOLD_PX) {
+            dragStartX = null
+            onClose()
+          }
+        }
+      },
+  ) {
+    content()
+  }
+}
+
 @Composable
 private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
   NavigationBar {
@@ -124,3 +174,11 @@ private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
 
 /** A finger travel of roughly 60dp counts as a back gesture. */
 private const val SWIPE_THRESHOLD_PX = 180f
+
+/**
+ * How close to the left edge a drag has to start to count as "go back".
+ *
+ * Matches the platform edge-back zone closely enough to feel the same, and keeps a
+ * horizontal drag across the middle of the picture from closing the player.
+ */
+private const val EDGE_ZONE_FRACTION = 0.08f
