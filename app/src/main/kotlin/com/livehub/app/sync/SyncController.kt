@@ -278,17 +278,25 @@ class SyncController(
    * Every address worth offering the code to.
    *
    * mDNS sightings come first because they are already known-good and carry names; the
-   * subnet sweep fills in when multicast is blocked. Devices already paired are left out:
-   * re-pairing them would only churn their shared secret.
+   * subnet sweep fills in when multicast is blocked.
+   *
+   * Already-linked devices are excluded, and they have to be excluded **by address as well
+   * as by id**: sweep entries carry `deviceId = 0` because an address alone says nothing
+   * about identity, so filtering on the id alone let a freshly linked peer's IP straight
+   * back into the next sweep, where it would be re-paired and have its secret churned.
    */
   private fun pairingCandidates(): List<DiscoveredPeer> {
-    val paired = preferences.trustedPeers().map { it.deviceId }.toSet()
-    val known = discoveredPeers().filterNot { paired.contains(it.deviceId) }
+    val peers = preferences.trustedPeers()
+    val pairedIds = peers.map { it.deviceId }.toSet()
+    // Addresses of linked peers. A `TrustedPeer` does not carry one, so it comes from the
+    // address book and from whatever discovery last saw under that id.
+    val pairedHosts = peers.mapNotNull { peer -> addressBook.addressFor(peer)?.host }.toSet()
+    val known = discoveredPeers().filterNot { pairedIds.contains(it.deviceId) }
     // The sweep only has to cover what discovery missed, so already-known hosts are
     // dropped from it rather than tried twice.
     val knownHosts = known.map { it.host }.toSet()
     val sweep = SubnetScanner.candidates(listeningPort.takeIf { it > 0 } ?: DEFAULT_PORT)
-      .filterNot { knownHosts.contains(it.host) }
+      .filterNot { knownHosts.contains(it.host) || pairedHosts.contains(it.host) }
     return known + sweep
   }
 
