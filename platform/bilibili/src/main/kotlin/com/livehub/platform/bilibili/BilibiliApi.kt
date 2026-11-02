@@ -58,10 +58,54 @@ class BilibiliApi(
   // ------------------------------------------------------------------ categories
 
   /**
-   * Static fallback used only when the shipped table is unavailable. The adapter tries
-   * the bundled catalogue first, so this is a last resort rather than the source.
+   * Category tree fetched from the live API.
+   *
+   * The bundled table (`assets/categories/bilibili_categories.json`) is the primary source
+   * because it needs no network. It goes stale as Bilibili adds areas, though — the shipped
+   * copy carried 386 sub-categories while the live tree had 456, and 9 ids that no longer
+   * exist — so this is the fallback that keeps the list complete when the asset is missing
+   * or a refresh is wanted. `room/v1/Area/getList` is used rather than
+   * `web-interface/v1/index/getAreaList`, which 404s.
    */
-  suspend fun categories(): List<Category> = emptyList()
+  suspend fun categories(): List<Category> {
+    val response = runCatching {
+      http.get(
+        URL_AREA_LIST,
+        headers = mapOf(
+          "User-Agent" to UA_MOBILE,
+          "Referer" to "https://live.bilibili.com/",
+        ),
+      )
+    }.getOrNull() ?: return emptyList()
+    val root = runCatching { parseObject(response.body, "Area/getList") }.getOrNull()
+      ?: return emptyList()
+    if (root["code"]?.jsonPrimitive?.intOrNull != 0) return emptyList()
+    val groups = root["data"] as? JsonArray ?: return emptyList()
+
+    val out = mutableListOf<Category>()
+    var order = 0
+    groups.forEach { groupElement ->
+      val group = groupElement as? JsonObject ?: return@forEach
+      val parentId = group["id"]?.jsonPrimitive?.intOrNull ?: return@forEach
+      val groupName = group.str("name") ?: return@forEach
+      val subs = group["list"] as? JsonArray ?: return@forEach
+      subs.forEach { subElement ->
+        val sub = subElement as? JsonObject ?: return@forEach
+        // `id` arrives as a string in this endpoint, unlike the bundled table.
+        val areaId = sub["id"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: return@forEach
+        val name = sub.str("name") ?: return@forEach
+        out += Category(
+          platform = Platform.BILIBILI,
+          id = "$parentId:$areaId",
+          name = name,
+          parentId = parentId.toString(),
+          parentName = groupName,
+          sortOrder = order++,
+        )
+      }
+    }
+    return out
+  }
 
   // ---------------------------------------------------------------------- rooms
 
@@ -76,20 +120,20 @@ class BilibiliApi(
   /**
    * One page of a category.
    *
-   * `second/getList` is risk-controlled: a `w_webid` that the server has started
-   * rejecting (which happens after the playback endpoints touch the same client) is
-   * answered with `code = -352`, not with an HTTP error. The identifier is therefore
-   * dropped and re-scraped once before the failure is surfaced, which is what makes a
-   * category keep working after the user watches a stream and comes back.
+   * `second/getList` is risk-controlled: it answers `code = -352` instead of an HTTP error.
+   * The cause is the cookie — see [LIST_COOKIE] — so a rejection is retried once with a
+   * freshly scraped `w_webid`, which is the part that can actually go stale.
+   *
+   * The retry used to call `cookieStore.clear()`. That was actively harmful: the store also
+   * holds `SESSDATA`, so a category that hit -352 silently logged the user out of Bilibili.
+   * Nothing here needs to touch the jar; the list request no longer reads it at all.
    */
   private suspend fun areaRooms(area: BilibiliArea, page: Int): Pair<List<Streamer>, Boolean> {
     val first = requestAreaPage(area, page, accessId())
     if (first["code"]?.jsonPrimitive?.intOrNull == RISK_CONTROL_CODE) {
-      // Drop both halves of the session: a stale access_id alone is not enough, because
-      // the pair (cookie, access_id) is what the server risk-checks.
+      // Only the scraped identifier is discarded; the user's session is left alone.
       cachedAccessId = null
       accessIdFetchedAt = 0
-      cookieStore.clear()
       val retry = requestAreaPage(area, page, accessId())
       ensureSuccess(retry, "B站分区列表获取失败")
       return parseAreaPage(retry)
@@ -120,7 +164,9 @@ class BilibiliApi(
       headers = mapOf(
         "User-Agent" to UA_MOBILE,
         "Referer" to "https://www.bilibili.com/",
-        "Cookie" to cookieStore.header().ifBlank { PLACEHOLDER_COOKIE },
+        // Always the fixed placeholder, never the stored jar — see LIST_COOKIE for why a
+        // real buvid makes this endpoint answer -352.
+        "Cookie" to LIST_COOKIE,
       ),
     )
     return response.requireSuccess().let { parseObject(it.body, "second/getList") }
@@ -400,35 +446,42 @@ class BilibiliApi(
 
   // -------------------------------------------------------------------- helpers
 
-  /** Scrapes the `access_id` used as `w_webid`; cached for 30 minutes. */
+  /**
+   * Scrapes the `access_id` used as `w_webid`; cached for 30 minutes.
+   *
+   * The token is a tenant-scoped JWT (24h TTL) embedded in the category page. Two rules,
+   * both measured against the live endpoint:
+   *
+   *  * The scrape must use the **same** cookie value the list request later sends, so it
+   *    uses [LIST_COOKIE] rather than the jar.
+   *  * A value that is not a real JWT is worthless: the previously hardcoded fallback made
+   *    every request answer -352. When the scrape fails we therefore return an empty string
+   *    and let the caller surface a real error, instead of sending a token that cannot work.
+   */
   suspend fun accessId(): String {
     val cached = cachedAccessId
     if (cached != null && System.currentTimeMillis() - accessIdFetchedAt < ACCESS_ID_TTL_MILLIS) {
       return cached
     }
-    // The access_id is a session-scoped JWT. Fetching it without the cookie the list
-    // request later sends makes the two disagree, and the server answers the list with
-    // code -352. Verified: the same signed query returns 40 rooms with `buvid3=i;` and
-    // -352 with no cookie at all.
-    val cookie = cookieStore.header().ifBlank { PLACEHOLDER_COOKIE }
     val html = runCatching {
       http.get(
         "https://live.bilibili.com/lol",
         headers = mapOf(
           "User-Agent" to UA_MOBILE,
           "Referer" to "https://www.bilibili.com/",
-          "Cookie" to cookie,
+          "Cookie" to LIST_COOKIE,
         ),
       ).requireSuccess().body
     }.getOrNull().orEmpty()
     val id = ACCESS_ID_REGEX.find(html)?.groupValues?.getOrNull(1)
-    if (!id.isNullOrBlank()) {
+    if (!id.isNullOrBlank() && id.count { it == '.' } == 2) {
       cachedAccessId = id
       accessIdFetchedAt = System.currentTimeMillis()
       return id
     }
-    // A stale value keeps the list endpoint working even when the page changes.
-    return cached ?: FALLBACK_ACCESS_ID
+    // A previously scraped value outlives a transient page change; the hardcoded constant
+    // did not, because it was never a valid token in the first place.
+    return cached.orEmpty()
   }
 
   /**
@@ -567,6 +620,8 @@ class BilibiliApi(
   companion object {
     const val URL_SECOND_LIST = "https://api.live.bilibili.com/xlive/web-interface/v1/second/getList"
     const val URL_INDEX_LIST = "https://api.live.bilibili.com/xlive/web-interface/v1/index/getList"
+    /** The authoritative area tree; `web-interface/v1/index/getAreaList` 404s. */
+    const val URL_AREA_LIST = "https://api.live.bilibili.com/room/v1/Area/getList?show_pinyin=1"
     const val URL_SEARCH = "https://api.bilibili.com/x/web-interface/search/type"
     const val URL_ROOM_INFO = "https://api.live.bilibili.com/room/v1/Room/get_info"
     const val URL_PLAY_INFO = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo"
@@ -588,9 +643,26 @@ class BilibiliApi(
      */
     const val PLACEHOLDER_COOKIE = "buvid3=i;"
 
-    // Stable fallbacks: used only when the live endpoints are unreachable so the
-    // feature degrades instead of failing outright.
-    const val FALLBACK_ACCESS_ID = "1c6c1b4b8d1f4c0c9a3f5cf1e2a70b3c"
+    /**
+     * Cookie `second/getList` must carry, verbatim.
+     *
+     * Measured against the live endpoint (area 2:86, six scrape-cookie × list-cookie
+     * combinations): the placeholder yields `code = 0` and 40 rooms in **every** case, while
+     * a real `buvid3` from `finger/spi` — or any other value, even a well-formed UUID — yields
+     * `-352`. The endpoint accepts an anonymous placeholder and rejects a real device
+     * fingerprint that it has no session for.
+     *
+     * This is why the list request must not read the cookie jar. The jar holds a real
+     * `buvid3` as soon as the user has searched anything (`search` persists what
+     * `ensureBuvidCookie` negotiates) or logged in, and from then on every category would
+     * fail with -352 while search kept working — exactly the reported symptom.
+     */
+    const val LIST_COOKIE = "buvid3=i;"
+
+    // Stable fallback used only when the nav endpoint is unreachable, so WBI signing
+    // degrades instead of failing outright. There is deliberately no equivalent for the
+    // list `access_id`: that one is a JWT the server validates, and a hardcoded stand-in
+    // answered -352 on every request.
     const val FALLBACK_IMG_KEY = "7cd084941338484aae1ad9425b84077c"
     const val FALLBACK_SUB_KEY = "4932caff0ff746eab6f01bf08b70ac45"
 

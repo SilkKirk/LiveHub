@@ -11,9 +11,14 @@ import org.junit.jupiter.api.Test
 /**
  * The shipped Bilibili catalogue.
  *
- * 13 groups and 386 sub-categories. Each id is encoded `"<parentAreaId>:<areaId>"`,
- * which is exactly what `BilibiliArea.decode` and `second/getList` expect, so a bad
- * encode here silently returns the wrong area's rooms rather than failing.
+ * 12 groups and 456 sub-categories, regenerated from `room/v1/Area/getList`. Each id is
+ * encoded `"<parentAreaId>:<areaId>"`, which is exactly what `BilibiliArea.decode` and
+ * `second/getList` expect, so a bad encode here silently returns the wrong area's rooms
+ * rather than failing.
+ *
+ * The counts are asserted because they are the contract with the asset: a table that
+ * silently shrinks drops tabs from the UI with no error at all. Update them together with
+ * the asset — the failure message says so.
  */
 class BilibiliCategoriesTest {
 
@@ -27,7 +32,7 @@ class BilibiliCategoriesTest {
   fun `the shipped table parses into every declared category`() {
     val categories = BilibiliCategories.parse(raw)
 
-    assertEquals(386, categories.size)
+    assertEquals(456, categories.size, "regenerate the asset from room/v1/Area/getList")
     assertTrue(categories.all { it.platform == Platform.BILIBILI })
   }
 
@@ -68,13 +73,13 @@ class BilibiliCategoriesTest {
   }
 
   @Test
-  fun `the groups are the thirteen Bilibili tabs`() {
+  fun `the groups are the twelve Bilibili tabs`() {
     val groups = BilibiliCategories.parse(raw).mapNotNull { it.parentName }.distinct()
 
     assertEquals(
       listOf(
-        "网游", "手游", "单机游戏", "虚拟主播", "娱乐", "电台", "赛事",
-        "聊天室", "生活", "知识", "帮我玩", "互动玩法", "购物",
+        "网游", "手游", "单机游戏", "娱乐", "电台", "虚拟主播",
+        "聊天室", "生活", "知识", "赛事", "互动玩法", "购物",
       ),
       groups,
     )

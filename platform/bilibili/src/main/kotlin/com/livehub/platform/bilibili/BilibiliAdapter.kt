@@ -42,8 +42,10 @@ class BilibiliAdapter(
   override val platform: Platform = Platform.BILIBILI
 
   /**
-   * The shipped table carries 13 groups and 386 sub-categories, each id encoded as
-   * `"<parentAreaId>:<areaId>"`.
+   * The shipped table carries 12 groups and 456 sub-categories, each id encoded as
+   * `"<parentAreaId>:<areaId>"`. It is generated from `room/v1/Area/getList`, but that
+   * endpoint is only consulted when the asset is missing: the table changes a few times a
+   * year while the app opens this on every launch.
    */
   override suspend fun categories(): List<Category> =
     BilibiliCategories.load(assets).ifEmpty { api.categories() }

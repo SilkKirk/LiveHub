@@ -56,12 +56,17 @@ class DouyinAdapter(
   /**
    * One page of rooms for [categoryId].
    *
-   * The partition endpoint is preferred because it is the only one that can filter. It is
-   * also the one Douyin currently refuses: verified live, it answers HTTP 200 with a
-   * zero-length body for every partition. When it yields nothing — which is the normal case
-   * today, not an error — the anonymous recommendation feed is used instead. The feed
-   * ignores the partition but returns real rooms, so the tab stays useful rather than
-   * permanently empty; the trade-off is visible in the UI, which labels it 推荐.
+   * The partition endpoint is the real source: measured with a valid `a_bogus`, it returns
+   * `status_code = 0` and 15 distinct rooms per partition. It needs the signature though —
+   * unsigned it answers HTTP 444 on `/room/` and an *empty 200* on `/room/v2/`, which is what
+   * previously looked like "this partition has no rooms" and made the tab fall back to the
+   * recommendation feed for every category.
+   *
+   * The feed fallback below is kept for the case the signature is rejected (an expired
+   * `msToken`, or Douyin tightening the check again). It is a genuine degradation, not the
+   * normal path: it ignores the partition, so the tab shows 推荐 content instead of a
+   * filtered list. When that happens the UI is showing the wrong label for the data, which
+   * is why the failure is not silent in the log.
    */
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1

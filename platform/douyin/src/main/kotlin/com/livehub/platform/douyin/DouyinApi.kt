@@ -60,31 +60,27 @@ class DouyinApi(private val http: HttpClient) {
     coerceInputValues = true
   }
 
-  suspend fun categories(): List<Category> = DouyinCategories.all()
-
   /**
-   * Live rooms for a partition.
+   * Partition tree from the bundled catalogue.
    *
-   * `webcast/web/partition/detail/room` now answers HTTP 444 (Douyin's anti-bot status)
-   * for requests that do not carry a full browser fingerprint, including ones with a
-   * valid `ttwid`. `webcast/feed` still serves JSON to an anonymous client.
-   *
-   * Two hard platform limits follow from that substitution:
-   *  * **No partition filtering.** The feed ignores `partition`, `partition_type` and
-   *    `tag_id`; every combination returns the same rooms.
-   *  * **No pagination.** `offset` is ignored and `count` is capped at 6 items whatever
-   *    value is sent, so the result is always a single page of 6.
-   *
-   * The adapter reports `hasMore = false` rather than letting an infinite-scroll list
-   * spin forever on duplicates.
+   * The adapter loads the asset first; this is the network-side equivalent and intentionally
+   * does not invent a tree. Douyin publishes no partition endpoint that returns the
+   * catalogue (the `partition` parameter *filters* rooms, it does not enumerate sections), so
+   * an empty list here means "the asset is missing", which the UI can report honestly.
    */
+  suspend fun categories(): List<Category> = emptyList()
+
   /**
    * One page of rooms for a partition.
    *
-   * This is the endpoint that actually honours `partition`/`partition_type`; the
-   * anonymous `webcast/feed` path ignored every partition parameter and capped at six
-   * rooms. It requires an `a_bogus` signature — without it Douyin answers HTTP 200 with
-   * an empty body, which previously looked like "this partition has no rooms".
+   * This is the endpoint that actually honours `partition`/`partition_type`. It requires an
+   * `a_bogus` signature: unsigned, `/room/` answers HTTP 444 and `/room/v2/` answers HTTP 200
+   * with a zero-length body — the latter is what previously looked like "this partition has
+   * no rooms" and drove the adapter onto the recommendation feed for every category. With a
+   * valid signature it returns `status_code = 0` and real, partition-filtered rooms.
+   *
+   * The rooms it returns carry `room.status == 0` while `webcast/feed` uses `2`, so status is
+   * not a live flag on either path; [isRoomOnAir] deliberately ignores it.
    */
   suspend fun rooms(
     partition: String,
@@ -151,10 +147,11 @@ class DouyinApi(private val http: HttpClient) {
       coverUrl = firstImage(room?.get("cover")),
       avatarUrl = firstImage(owner?.get("avatar_thumb")),
       viewerCount = viewers,
-      // The partition endpoint only returns rooms that are on air, so no status check is
-      // needed here. Reading `room.status` was wrong: that field is not the live flag in
-      // this payload, and it marked every card as 未开播.
-      isLive = true,
+      // Judged by the same rule as roomDetail: a pull URL must exist. This endpoint only
+      // lists rooms it considers live, so `true` here was a reasonable shortcut for a card —
+      // but it disagreed with the detail page, which reported 没有直播 for a room whose
+      // `stream_url` was empty. The card is what the user taps, so both sides have to agree.
+      isLive = isRoomOnAir(room?.get("stream_url")?.jsonObject),
       updatedAt = System.currentTimeMillis(),
     )
   }
@@ -213,7 +210,6 @@ class DouyinApi(private val http: HttpClient) {
       ?: return null
     if (idText.isBlank() || idText == "0") return null
     val owner = room["owner"] as? JsonObject
-    val status = room["status"]?.jsonPrimitive?.intOrNull
     val viewers = room["stats"]?.jsonObject?.get("total_user")?.jsonPrimitive?.longOrNull
       ?: room["user_count"]?.jsonPrimitive?.longOrNull
       ?: room.str("user_count_str")?.let { parseCount(it) }
@@ -226,7 +222,9 @@ class DouyinApi(private val http: HttpClient) {
       coverUrl = firstImage(room["cover"]) ?: firstImage(room["dynamic_cover"]),
       avatarUrl = firstImage(owner?.get("avatar_thumb")),
       viewerCount = viewers,
-      isLive = status == null || status == 2,
+      // Same rule as the detail page, so a feed card never promises a stream the player
+      // cannot open.
+      isLive = isRoomOnAir(room["stream_url"]?.jsonObject),
       updatedAt = System.currentTimeMillis(),
     )
   }
@@ -330,7 +328,6 @@ class DouyinApi(private val http: HttpClient) {
         "抖音直播间信息获取失败，该直播间可能未开播",
         Platform.DOUYIN,
       )
-    val status = room["status"]?.jsonPrimitive?.intOrNull ?: 2
     val owner = room["owner"]?.jsonObject
     val streamUrl = room["stream_url"]?.jsonObject
     // `enter` puts the anchor on `data.user`; the feed items carry it on the room's `owner`.
@@ -351,9 +348,34 @@ class DouyinApi(private val http: HttpClient) {
         ?.jsonPrimitive?.longOrNull
         ?: room["user_count_str"]?.jsonPrimitive?.contentOrNull?.let { parseCount(it) }
         ?: 0,
-      isLive = status == 2,
+      // A pull URL is the only honest evidence that a room is on air; see isRoomOnAir.
+      isLive = isRoomOnAir(streamUrl),
       variants = parseVariants(streamUrl),
     )
+  }
+
+  /**
+   * Decides whether a room is on air, from the pull URLs alone.
+   *
+   * `room.status` is not a usable live flag and never was. Measured across the two endpoints
+   * that serve it: `webcast/feed` reports `status = 2` for every card including rooms whose
+   * `stream_url` is empty, while `partition/detail/room/v2` reports `status = 0` for all 15
+   * genuinely live rooms. Reading it therefore produced both failure modes at once — offline
+   * cards shown as 直播中, and live partition rooms hidden.
+   *
+   * The pull URLs are the honest signal: Douyin only fills them for a room it is actually
+   * streaming, and they are exactly what the player needs. A signature parameter is gone with
+   * this change; the caller no longer passes `status`.
+   */
+  private fun isRoomOnAir(streamUrl: JsonObject?): Boolean {
+    if (streamUrl == null) return false
+    val hls = streamUrl["hls_pull_url_map"] as? JsonObject
+    val flv = streamUrl["flv_pull_url"] as? JsonObject
+    val rtmp = streamUrl["rtmp_pull_url"]?.jsonPrimitive?.contentOrNull
+    fun hasUrl(map: JsonObject?): Boolean = map?.values?.any { element ->
+      element.jsonPrimitive.contentOrNull?.isNotBlank() == true
+    } == true
+    return hasUrl(hls) || hasUrl(flv) || !rtmp.isNullOrBlank()
   }
 
   suspend fun playback(roomId: String): List<StreamVariant> {
@@ -482,7 +504,6 @@ class DouyinApi(private val http: HttpClient) {
       ?: room["id"]?.jsonPrimitive?.longOrNull?.toString()
       ?: return null
     val owner = room["owner"]?.jsonObject
-    val status = room["status"]?.jsonPrimitive?.intOrNull
     return Streamer(
       platform = Platform.DOUYIN,
       roomId = idText,
@@ -495,7 +516,8 @@ class DouyinApi(private val http: HttpClient) {
       viewerCount = room["stats"]?.jsonObject?.get("total_user")?.jsonPrimitive?.longOrNull
         ?: room["user_count_str"]?.jsonPrimitive?.contentOrNull?.let { parseCount(it) }
         ?: 0,
-      isLive = status == null || status == 2,
+      // Same rule as the detail page, so a search hit never promises an unplayable stream.
+      isLive = isRoomOnAir(room["stream_url"]?.jsonObject),
       updatedAt = System.currentTimeMillis(),
     )
   }

@@ -15,8 +15,8 @@ import kotlinx.serialization.json.jsonPrimitive
 /**
  * Bilibili's full category tree.
  *
- * Shipped as `assets/categories/bilibili_categories.json`: 13 groups and 386
- * sub-categories. The shape is:
+ * Shipped as `assets/categories/bilibili_categories.json`: 12 groups and 456
+ * sub-categories, generated from `room/v1/Area/getList`. The shape is:
  *
  * ```json
  * [ { "title": "网游", "subcategories": [ { "title": "英雄联盟", "id": "86", "parent_id": "2" } ] } ]

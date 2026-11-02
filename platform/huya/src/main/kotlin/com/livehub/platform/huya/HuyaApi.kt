@@ -68,12 +68,17 @@ class HuyaApi(private val http: HttpClient) {
   // ----------------------------------------------------------------- categories
 
   /**
-   * Huya publishes its category list as a JS array on the live site; the JSON endpoint
-   * is used where available and falls back to the curated static list otherwise.
-   */
-  /**
-   * Static fallback used only when the shipped table is unavailable. The adapter tries
-   * the bundled catalogue first, so this is a last resort rather than the source.
+   * No network source for Huya's category tree.
+   *
+   * Every public endpoint that could serve it is gone: `liveHttpUI/getLiveCateList` and
+   * `getCateList` answer HTTP 500, and the category page only carries `data-gid` attributes
+   * describing page state (46 of them, including `0`), not the two-level catalogue. The
+   * adapter therefore always uses the bundled `assets/categories/huya_categories.json`.
+   *
+   * That table is worth keeping: sampled against `getLiveList`, 15 of 20 gids returned
+   * rooms, and the 5 empty ones are niche game categories nobody was streaming at the time
+   * rather than retired ids. Returns an empty list so a missing asset degrades to "no
+   * categories" instead of inventing a wrong tree.
    */
   suspend fun categories(): List<Category> = emptyList()
 

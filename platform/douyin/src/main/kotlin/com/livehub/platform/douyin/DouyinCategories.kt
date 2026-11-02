@@ -4,19 +4,22 @@ import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 
 /**
- * Douyin live partitions.
+ * Douyin live partitions — fallback only.
  *
- * Douyin's partition-scoped list endpoint now answers HTTP 444 to anonymous clients, and
- * the `webcast/feed` endpoint that still works ignores every partition parameter. LiveHub
- * therefore exposes a **single** category instead of a list of tabs that would all show
- * the same rooms: a filter that silently does nothing is worse than no filter.
+ * The real catalogue is `assets/categories/douyin_categories.json` (9 groups, 306
+ * partitions), parsed by [DouyinCategoryCatalog]. The partition-scoped endpoint
+ * `webcast/web/partition/detail/room/v2` serves those partitions correctly once the request
+ * carries a valid `a_bogus` signature: measured with one, it returns `status_code = 0` and 15
+ * distinct rooms per partition. Without the signature it answers HTTP 444 on `/room/` and an
+ * empty 200 on `/room/v2/`, which is what made every tab look empty.
  *
- * The partition names are kept in [KNOWN_PARTITIONS] so the mapping can be restored the
- * moment a working partition endpoint is found.
+ * This object is the fallback for a build whose asset is missing. A single honestly labelled
+ * 推荐 tab beats 306 tabs that cannot resolve, so [all] returns one entry rather than
+ * inventing a tree.
  */
 object DouyinCategories {
 
-  /** Partition ids accepted by the (currently unreachable) partition endpoint. */
+  /** Partition ids the endpoint accepts, used when the bundled table is unavailable. */
   val KNOWN_PARTITIONS: List<Pair<String, String>> = listOf(
     "720" to "热门",
     "1" to "游戏",
@@ -35,10 +38,7 @@ object DouyinCategories {
     "14" to "旅行",
   )
 
-  /**
-   * What the UI shows. One tab labelled honestly: the feed is a recommendation stream,
-   * not a browsable catalogue.
-   */
+  /** The one tab shown when the bundled catalogue is unavailable. */
   fun all(): List<Category> = listOf(
     Category(
       platform = Platform.DOUYIN,
