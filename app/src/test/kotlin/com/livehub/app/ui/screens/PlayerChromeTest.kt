@@ -121,22 +121,21 @@ class PlayerChromeTest {
   /**
    * Taps a point of the video surface.
    *
-   * `detectTapGestures` runs its down/up handling under coroutine timeouts, so the tap is
-   * dispatched with the automatic clock on and the clock is frozen again immediately after —
-   * otherwise the gesture never completes and the test fails for a reason unrelated to the
-   * defect.
+   * The click is followed by 500 ms of virtual time: `detectTapGestures` is given an
+   * `onDoubleTap`, so it holds every tap until the double-tap timeout expires before it calls
+   * `onTap` — on a frozen clock that timeout never elapses and the tap is silently dropped.
+   * 500 ms is well inside the 3 s after which the chrome hides itself again, so the assertion
+   * that follows still sees what the tap produced.
    *
    * [y] is explicit because the portrait video is a 16:9 band at the top of the window: the
    * centre of the *window* there is the danmaku list, not the picture, so a tap at the centre
    * would test nothing.
    */
   private fun tapPicture(y: Float) {
-    composeRule.mainClock.autoAdvance = true
     composeRule.onRoot().performTouchInput {
       click(Offset(center.x, y))
     }
-    composeRule.mainClock.autoAdvance = false
-    composeRule.mainClock.advanceTimeByFrame()
+    composeRule.mainClock.advanceTimeBy(500L)
     composeRule.waitForIdle()
   }
 
@@ -188,9 +187,7 @@ class PlayerChromeTest {
       onAction = { actions += it },
     )
 
-    composeRule.mainClock.autoAdvance = true
     composeRule.onAllNodesWithText("重试")[0].performClick()
-    composeRule.mainClock.autoAdvance = false
     composeRule.waitForIdle()
 
     assertEquals(1, actions.size)

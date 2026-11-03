@@ -273,16 +273,23 @@ internal fun PlayerContent(
         // [FULLSCREEN_HIDE_DELAY_MILLIS] and nothing else brought it back, so 设置, 重载 and
         // 退出全屏 stayed unreachable for the rest of the session. The picture still starts
         // clean — the chrome is visible on entry and only comes back when tapped.
-        Box(
-          modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-              detectTapGestures(
-                onTap = { controlsVisible = !controlsVisible },
-                onDoubleTap = { paused = !paused },
-              )
-            },
-        )
+        //
+        // Only over a picture, though. The error, offline and loading states put their own
+        // buttons (重试, 返回) inside this box, and a full-size gesture layer drawn on top of
+        // them takes every one of those taps: pressing 重试 only toggled the chrome. That is
+        // the same mistake as declaring the layer after the controls, one level down.
+        if (effectiveVariant != null && state.playerError == null) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .pointerInput(Unit) {
+                detectTapGestures(
+                  onTap = { controlsVisible = !controlsVisible },
+                  onDoubleTap = { paused = !paused },
+                )
+              },
+          )
+        }
 
         if (verticalFullBleed) {
           // A vertical stream fills the screen, so there is no list underneath and the
