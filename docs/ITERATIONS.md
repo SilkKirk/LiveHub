@@ -2096,3 +2096,90 @@ val hasMore = list.isNotEmpty()
 - `DouyuAdapter.rooms` 的 `slug` 形参现在是纯接口占位（`LivePlatformAdapter.rooms` 要求它，
   但斗鱼已不用 HTML 抓取）。要不要从接口上撤掉，等虎牙/抖音/B 站一起看。
 - `关联设备` 弹层的截断疑点（第二十一轮记）仍在，要动先量到。
+---
+
+## 第二十四轮迭代：虎牙的两个真缺陷（房间页抓两遍、观众数恒为 0）
+
+> 本轮的工作提交在 `ef29847` 与 `f33cf40`，但记录没写——执行这一轮的循环在收尾前中断了。
+> 下面这节是在事后按提交内容与代码现状补写的，每条结论都对着当前代码核过。
+
+### 缺陷一：打开一个直播间，房间页要下载两遍
+
+`HuyaAdapter.playback` 先调 `api.playback(roomId)` 拿流地址，紧接着又调
+`api.roomInfo(roomId)` 重建 `Streamer`。`https://www.huya.com/{roomId}` 这一页装着整个
+播放器配置加房间标记，是首帧之前的主要等待，所以点一次卡片就把它下两遍。
+
+更糟的不是慢：第二次下载是这条路径上**唯一没有 `runCatching` 保护**的调用。第一次已经
+拿到可用地址了，冗余的那次只要抖一下就直接抛「虎牙房间页加载失败」，房间根本播不了。
+
+修法是把两次合成一次——`api.playback` 返回 `HuyaPlayback`（页面 + 变体），适配器用同一份
+响应重建 `Streamer`：
+
+```kotlin
+val resolved = api.playback(roomId)
+return PlaybackSource(
+  room = resolved.room.toStreamer(),
+  variants = ordered,
+  defaultVariant = ordered.firstOrNull(),
+)
+```
+
+横向对比说明这不是虎牙独有的写法问题：斗鱼一次调用就返回完整 `PlaybackSource`，B 站的
+第二次 `roomDetail` 包了 `runCatching`，只有虎牙和抖音是裸的（抖音留到下一轮）。
+
+### 缺陷二：观众数的正则只认字符串形态
+
+```kotlin
+// 旧
+Regex(""""(?:activityCount|totalCount)"\s*:\s*"?(\d+)"""")
+```
+
+模式是「可选开引号 + 数字 + **必需**闭引号」。没有任何 JSON 会把数字编码成 `12345"`，
+所以它实际只匹配字符串形态；房间页若把 `activityCount` 写成数字，`parseRoomHtml` 一路落到
+`0L`，播放页的观众数永远显示 0。改成两端引号都可选：
+
+```kotlin
+Regex(""""(?:activityCount|totalCount)"\s*:\s*"?(\d+)"?""")
+```
+
+房间页从未被录制过（`platform/huya/src/test/resources/fixtures` 里只有列表页），所以两种
+编码都得接受，没有依据丢掉任何一种。
+
+### 顺带纠正的一条注释
+
+`HuyaSigner.postProcess` 的注释说 `ctype` 是 `signQuery` 产出的第一个查询参数，所以裸
+`&ctype=` 会静默失配。实际 `signQuery` 的顺序是 `wsSecret/wsTime/seqid/ctype`，`ctype` 是
+第四个，`&ctype=` 照样能匹配——那条理由不成立。行为不变，只改注释，并补一条走真实
+`buildStreamUrl` 的 `tx` 改写测试，让参数顺序由生产代码决定而不是在测试里手写一遍。
+
+### 本轮验证
+
+新增 `HuyaPlaybackTest` 八条，其中 `opening a room downloads its page once` 直接断言请求
+计数，旧代码下必红：
+
+- `opening a room downloads its page once`
+- `a failing second request cannot break a playback that already resolved`
+- `the room metadata comes from the page that produced the streams`
+- `variants are ordered by cdn preference and downgraded to http`
+- `the preferred quality is moved to the front instead of dropped`
+- `the viewer count is read whether it is a number or a string`
+- `a room with no stream list is offline rather than unplayable`
+- `a page with no stream config retries once with the mobile user agent`
+
+外加 `HuyaSignerTest.postProcess rewrites tx on a url built by the signer`。
+
+`parseRoomHtml` 的正则在提交前用 Python 对新旧两种模式各跑六种输入核对过：旧模式
+`numeric=None`、`string=12345`；新模式两种都是 `12345`、字段缺失时仍是 `None`。
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（含 `HuyaPlaybackTest` 8 条） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+### 下一轮
+
+- 抖音是同类缺陷（第二次请求没有 `runCatching`），按本轮方法处理。
+- 待办第 6 条虎牙审计的其余部分：分类、翻页、Tars 弹幕。
+- `关联设备` 弹层的截断疑点仍在，要动先量到。
