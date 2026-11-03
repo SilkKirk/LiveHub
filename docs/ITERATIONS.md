@@ -1917,3 +1917,182 @@ the six digit field is reachable in the landscape dialog — java.lang.OutOfMemo
 - `关联设备` 弹层的截断疑点（第二十一轮记）仍在，要动先量到。
 - 小事：`createComposeRule` 的 deprecated 提示仍在，要迁到
   `androidx.compose.ui.test.junit4.v2.createComposeRule` 就所有 Robolectric/仪器测试一起迁。
+
+---
+
+## 第二十三轮迭代：斗鱼审计（一）——分区列表"到底"的判断是错的
+
+本轮开工的是待办第 5 条「斗鱼：三级分类、翻页、直播源清晰度、弹幕协议」。四项逐条对照
+`E:\app\_ref\dtv_mobile` 读完，只有**翻页**这一项是真错，其余三项的核对结论见下面「审计结论」。
+
+### 缺陷是什么
+
+首页选一个斗鱼二级分类往下滚。只要 Douyu 返回的某一页里有房间被映射器丢掉，列表就会判成
+"到底"，底部出现「已经到底了 · 斗鱼当前只提供这些直播」，而该分类剩下的房间再也拉不到——
+只能下拉刷新，而刷新只回到第一页。
+
+根因在 `DouyuApi.rooms` 的一行：
+
+```kotlin
+// `limit` is honoured server side, so a short page means the category is exhausted.
+val hasMore = rooms.size >= limit
+```
+
+### 为什么会这样
+
+这个判断建立在两个都站不住的前提上。
+
+**前提一："`limit` 服务端会遵守"。项目自己的录制数据就证伪了。**
+`platform/douyu/src/test/resources/fixtures/douyu-mixlistv1.json` 是
+`DouyuMixListFixtureTest` 里写明的一次真实请求——`mixListV1/2_1/1?limit=20`——而它回来
+**40 条**房间（`assertEquals(40, rooms.size)`）。服务端自己定页大小，`limit` 只是被忽略的
+参数。于是 `rooms.size >= limit` 拿的是两个不相干的数：40 和 30。
+
+**前提二："映射后的条数能代表这一页的条数"。不能。**
+`rooms` 是 `list.mapNotNull { DouyuParser.mixListRoom(it) }` 的结果，而 `mixListRoom` 会丢掉
+`rid` 为空或 `"0"` 的行（`if (roomId.isBlank() || roomId == "0") return null`）。一页 40 条
+里有 11 条坏行 → 映射出 29 条 → `29 >= 30` 不成立 → 这一页被判成最后一页。`mixListRoom`
+丢行本身是对的（没有 room id 的卡片没法点开），错的是拿它的结果去数页。
+
+**正确规则在参考项目里是明确的。**
+`douyu_spec.md` §1.4（转录自 `DouyuCate2DirectoryApi.kt` / `DouyuCate3DirectoryApi.kt`，
+共享模型 `DouyuMixListV1Response` 声明在后者）：
+
+> No `total`, no page-count field is returned; end of list is detected by an empty `data.rl`.
+
+参考项目的 `DouyuMixListV1Data` 只有一个 `rl` 字段、没有 total，所以"空 `rl`"是它唯一能用的
+终止信号；`DouyuCate2DirectoryApi` / `DouyuCate3DirectoryApi` 的 `fetchMixListV1` 也只做
+`page <= 0 → 1` 的修正和拼 URL，不做任何条数判断。
+
+**最刺眼的一点：正确的规则本来就在这个仓库里，只是没人调用它。**
+`DouyuParser.mixList` 写的是 `nextOffset = if (rooms.isNotEmpty()) (page + 1) else null`——
+方向是对的（不拿 `limit` 比），而且有一条测试 `mixList ends on an empty page` 钉着它。但
+`mixList` **只被测试调用**，线上跑的是 `DouyuApi.rooms` 里那份重复实现的错规则。正确的规则
+被测着、不生效；错的规则生效着、没被测。（它用映射后的 `rooms` 判空，遇到"整页都被丢弃"
+仍会误判，所以本轮把规则落在原始 `data.rl` 上。）
+
+而 `CategoryPaginationTest` 反过来被这个缺陷驯化了：它的 fake 必须正好吐
+`DouyuAdapter.PAGE_SIZE` 条房间，注释还写着"a short page would end the sequence and
+`LoadMore` would return without ever making a request"——一条测试为了迁就 bug 而伪造数据，
+等于把这个 bug 固化了。
+
+### 怎么修的 / 踩了什么坑
+
+`DouyuApi.rooms` 改成按**原始** `data.rl` 判断：
+
+```kotlin
+val hasMore = list.isNotEmpty()
+```
+
+用原始 `list` 而不是映射后的 `rooms`，这样丢行不影响翻页。代价是每个分类末尾多一次请求
+（最后一页非空 → 报"还有下一页" → 下一次拿到空 `rl` 才停），这与参考项目的行为一致，也已
+写进注释。
+
+顺手清掉同一批死代码（都是"从未被生产代码调用"，不是为了让 CI 变绿）：
+
+| 删掉的 | 依据 |
+| --- | --- |
+| `DouyuParser.recList` + `roomFromListElement` | `newRecList` 已退役；`URL_REC_LIST` 无人引用，`recList` 只被测试调用 |
+| `DouyuParser.mixList` | 与 `rooms()` 重复的映射，正是"两份规则"的来源 |
+| `DouyuApi.intField` | `internal` 但全仓库零调用 |
+| `DouyuApi.companion.jsonArraySafe` | `private` 且零调用 |
+| `DouyuApi.rooms(slug = …)` | HTML 抓取路径撤掉后没有任何调用方传它 |
+| `DouyuParser` 的 `StreamVariant`、`jsonObject`；`DouyuApi` 的 `RoomPage`/`StreamVariant`/`Streamer`/`Crypto`/`JsonElement`/`longOrNull` | 未使用的 import |
+
+删掉 4 条测试（`recList` 三条 + `mixList` 一条），同时把它们的价值搬到真实代码路径上：
+新增 `platform/douyu/src/test/.../DouyuPaginationTest.kt`（6 条），**打的是真的
+`DouyuApi.rooms()`**（`FakeDouyuHttp` 只实现 `HttpClient.execute` 回放一段 JSON），而不是
+再测一个解析辅助函数——这样规则没法再从线上代码旁边溜走。
+
+| 测试 | 断言的东西 | 旧代码 |
+| --- | --- | --- |
+| `a short page still offers the next page` | 3 条房间的短页 → `nextOffset == "2"` | 红（3 >= 30 不成立） |
+| `a page the mapper drops rooms from still offers the next page` | 30 条里 10 条 `rid:0` → 映射 20 条，仍 `nextOffset == "3"` | 红（20 >= 30 不成立） |
+| `an empty page ends the list` | 空 `rl` → `nextOffset == null` | 绿（回归保护） |
+| `a page zero cursor is requested as page one` | `page = 0` → URL 是 `/mixListV1/2_1/1` | 绿 |
+| `a third level category is requested on the three prefix` | `level = 3` → `/mixListV1/3_3683/2`，且仍带 `limit=30` | 绿 |
+| `a non zero code is a protocol error, not an empty category` | `code:1` → `PlatformProtocolException`（消息含 `code=1`） | 绿 |
+
+前两条是真正复现缺陷的：旧代码下必然红。
+
+`CategoryPaginationTest` 的 fake 也改回**短页**（3 条），注释重写成"短页是合法答复，序列必须
+继续"。于是 `scrolling further stays inside the third level category` 从"迁就 bug"变成"钉住
+修复"——它在旧代码下会超时失败（`LoadMore` 压根不发请求）。
+
+### 审计结论（本轮一并核对，未改动的部分）
+
+**三级分类：我们的实现是对的，参考项目的字段名是错的。**
+参考项目 `DouyuThreeCateApi.kt` 读 `tagId ?: cateId` / `tagName ?: cateName`；而录制的真实
+响应（`fixtures/douyu-threecate.json`，`getThreeCate?tag_id=1`）是**扁平的 `id`/`name`**：
+`{"id":"3683","name":"S15"}`。按参考项目的字段链取，`id` 与 `name` 都会是空字符串，九个三级
+分类会被全部丢光。我们读 `id`/`name`，`DouyuMixListFixtureTest` 的
+`the three-cate fixture uses flat id and name keys` 已经钉住这一点。**这里不跟参考项目走，
+依据是录制数据。** 三级房间走 `mixListV1/3_<tagId>`，与参考项目 §2 的导航路径一致。
+
+**直播源清晰度：与参考项目一致，两处有意的偏离。**
+探针 body（`cdn=&rate=-1&ver=…&iar=1&ive=1&hevc=0&fa=0`）、`rate==0` 即原画、CDN 排序
+（非 `scdn` 优先，再按字典序，默认 `ws-h5`）、`rtmp_url + "/" + htmlUnescape(rtmp_live)`
+全部对得上（§4.2–§4.5）。偏离一：最终取流那次请求我们多带了 `ver/iar/ive/hevc/fa`，参考项目
+只发 `{signData}&cdn=&rate=`——代码注释记录了"少带会 403"，保留。偏离二：参考项目只解析被
+选中的那一个 rate，我们把每个 advertised rate 都并发解析，否则清晰度菜单只有一个 chip、等于
+不可用（第十九轮记）。另记一处小疑点未动：`DouyuQuality.labelFor(3)` 返回 `"画质3"`，而
+`DouyuApi` 自己注释里记录的实测探针是 `原画720P30:0 | 超清:3 | 高清:2`——3 应该是超清。它只在
+接口没给 name 时当兜底标签用，而 4 映射成什么同样没有依据，所以本轮不猜。
+
+**弹幕协议：帧格式与参考项目逐字节一致。**
+出站帧 `len = payload + 9` 连写两遍、`int16 689`、两个 0 字节、payload、NUL（总长
+`payload + 13`）；入站 `size < 13` 丢弃、payload 取 `[12, size-1)`；`@S`→`/`、`@A`→`@` 且先
+`@S` 后 `@A`；`loginreq` → `joingroup`（`gid@=1`）→ 每 45s `mrkl`；只派发 `type@=chatmsg`，
+`nn`/`txt` 取自对应字段。唯一差异是我们只取 `nn`/`txt`，参考项目还映射
+`level`→userLevel、`bl`→fansClubLevel、`col`→color。**这三项本轮不补**：参考项目的
+`PlayerScreen.kt` 弹幕层用的是固定颜色（`userFg`/`contentFg`），从头到尾没读过
+`DanmakuMessage.color`，也就是说它收了 `col` 也没渲染；而 `col` 的编码（24 位 RGB 还是调色板
+序号）在参考项目里没有任何一处被解释，它的模型类型是 `String?` 直接透传。我们的
+`DanmakuMessage.color` 是 `Int?` 且 `DanmakuOverlay.kt:239` 用 `Color(it)` 当 ARGB 用——把
+`col` 直接塞进去会得到 alpha=0 的透明弹幕。**没有依据就不发明**，这条留在待办里，等能拿到
+实测 `col` 取值再定。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ 3 个 job 全绿；本轮 +6（`DouyuPaginationTest`）−4（随死代码移除），净 +2 |
+| 仪器测试 | ✅ 未改动 androidTest |
+| Release assembly（R8） | ✅ |
+| CI 三 job | ✅ run 41580478756（commit cfa6a9b）全绿 |
+
+`ci.py logs --job "Build & test"` 本轮取不到日志：下载回来的日志包不是 zip，
+`zipfile.BadZipFile: File is not a zip file`（`ci.py:255`），不带 `--tail` 也一样。
+`status` / `wait` / `shots` / `runs` 都正常。按 runbook 不自行改 `ci.py`，因此上面的测试条数
+是按"删除 4 条 + 新增 6 条"静态推算的净增量，**没有从 CI 侧的 XML 里核对到总数**。
+
+### 截图里看到了什么
+
+28 张，与 r22 **逐字节全同**（28/28，SHA256 两两比对，无一张变化）。
+
+这不是"没看"，而是本轮改动的必然结果：截图测试（`ScreenshotTest`）直接喂 `UiState`，根本不
+经过 `DouyuAdapter`，所以一条分页规则的改动在截图里不可能有像素差异。反过来说，这也说明
+**截图对分页零覆盖**——本轮的真实证据是 JVM 单测与 `CategoryPaginationTest`。
+
+抽查的几张确认渲染没有回归：
+
+- `01-home`：平台标签一行（斗鱼高亮 + 下划线），分类行 `[网游 ▾] 英雄联盟 绝地求生`，三排
+  卡片（6 张）全部可见，底栏五个入口。
+- `03b-home-subcategory`：三级行 `全部 / 峡谷之巅 / 云顶之弈 / 排位赛`，两排卡片，下方
+  「已经到底了 · 斗鱼当前只提供这些直播」。这句提示来自 `UiState.hasNextPage = false` 的
+  **构造状态**，不是本轮那条规则算出来的——正好说明截图证明不了分页。
+- `17c-player-fullscreen-danmaku`：全屏播放器，右侧弹幕列表五条（「这波操作太秀了」
+  「666666」「主播声音好听」「刚来，错过了什么」「主播能开个麦吗」），右侧三个圆形按钮。
+- `21-bilibili-home`：哔哩哔哩标签高亮，`网游` 分组 chip，英雄联盟 / DOTA2 两个分类，两张
+  卡片 + 到底提示。
+
+### 下一轮
+
+- 待办第 5 条剩下的两项已在上面给出结论（清晰度一致、弹幕帧一致）。若要继续挖：
+  `DouyuQuality.labelFor(3)` 与 `col` 的编码，两者都需要先拿到实测取值，不要猜。
+- 待办第 6 条虎牙（分类、翻页、直播源、Tars 弹幕）可以按本轮同一套方法开工：先读
+  `E:\app\_ref\dtv_mobile` 对应文件，再逐字段对照，最后用能复现缺陷的测试钉住。
+- `DouyuAdapter.rooms` 的 `slug` 形参现在是纯接口占位（`LivePlatformAdapter.rooms` 要求它，
+  但斗鱼已不用 HTML 抓取）。要不要从接口上撤掉，等虎牙/抖音/B 站一起看。
+- `关联设备` 弹层的截断疑点（第二十一轮记）仍在，要动先量到。
