@@ -54,10 +54,18 @@ class HuyaAdapter(
     return RoomPage(rooms = rooms, nextCursor = if (hasMore) (page + 1).toString() else null)
   }
 
+  /**
+   * Search pages are addressed by the server's `start` offset, not by a page number.
+   *
+   * Huya returns a different number of documents depending on `start` (20 for the first
+   * page, 40 afterwards), so the next offset is whatever the previous response consumed —
+   * the API hands that back rather than letting the adapter multiply a page count by a
+   * page size that does not exist.
+   */
   override suspend fun search(keyword: String, cursor: String?): RoomPage {
-    val page = cursor?.toIntOrNull() ?: 1
-    val (rooms, hasMore) = api.search(keyword = keyword, page = page)
-    return RoomPage(rooms = rooms, nextCursor = if (hasMore) (page + 1).toString() else null)
+    val start = cursor?.toIntOrNull() ?: 0
+    val page = api.search(keyword = keyword, start = start)
+    return RoomPage(rooms = page.rooms, nextCursor = page.nextStart?.toString())
   }
 
   override suspend fun roomDetail(roomId: String): Streamer? = try {

@@ -67,6 +67,12 @@ data class HuyaPlayback(
   val variants: List<StreamVariant>,
 )
 
+/** One page of search results plus the `start` the next request must use. */
+data class HuyaSearchPage(
+  val rooms: List<Streamer>,
+  val nextStart: Int?,
+)
+
 /** HTTP + parsing layer for Huya. */
 class HuyaApi(private val http: HttpClient) {
 
@@ -149,10 +155,24 @@ class HuyaApi(private val http: HttpClient) {
 
   // --------------------------------------------------------------------- search
 
-  suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
-    val start = (page - 1) * SEARCH_PAGE_SIZE
+  /**
+   * One page of anchor search results.
+   *
+   * `start` is the offset the server's own `docs` window begins at, not a page number:
+   * verified live, the endpoint answers **20** documents for `start=0` but **40** for any
+   * `start > 0`, whatever `rows` says (10, 20 and 30 all came back as 40). Counting rows
+   * against a fixed page size therefore cannot decide "is there another page" — the
+   * previous `rooms.size >= SEARCH_PAGE_SIZE` test was true for every page and only ended
+   * when the server returned nothing.
+   *
+   * The response carries `numFound` and echoes `start`, which give the exact rule:
+   * announce another page while `start + docs.size < numFound`. @return the page's rooms
+   * and the `start` to ask for next, or `null` at the end.
+   */
+  suspend fun search(keyword: String, start: Int): HuyaSearchPage {
+    val safeStart = start.coerceAtLeast(0)
     val url = "$URL_SEARCH?m=Search&do=getSearchContent&q=${encode(keyword)}" +
-      "&uid=0&v=1&typ=-5&livestate=0&rows=$SEARCH_PAGE_SIZE&start=$start"
+      "&uid=0&v=1&typ=-5&livestate=0&rows=$SEARCH_PAGE_SIZE&start=$safeStart"
     val response = http.get(
       url,
       headers = mapOf(
@@ -163,10 +183,36 @@ class HuyaApi(private val http: HttpClient) {
       ),
     )
     val root = response.requireSuccess().let { parseObject(it.body, "search") }
-    val docs = root["response"]?.jsonObject?.get("1")?.jsonObject?.get("docs")?.jsonArray
-      ?: JsonArray(emptyList())
+    val bucket = root["response"]?.jsonObject?.get("1")?.jsonObject
+    val docs = bucket?.get("docs")?.jsonArray ?: JsonArray(emptyList())
     val rooms = docs.mapNotNull { parseSearchRoom(it) }
-    return rooms to (rooms.size >= SEARCH_PAGE_SIZE)
+    return HuyaSearchPage(
+      rooms = rooms,
+      nextStart = nextSearchStart(bucket, safeStart, docs.size),
+    )
+  }
+
+  /**
+   * Decides the `start` of the next search page, or `null` at the end.
+   *
+   * Extracted so the rule is testable without a network round trip. Two properties matter
+   * and neither is obvious from a single response:
+   *
+   * - The advance is the number of **documents** the server sent, not the number of rooms
+   *   that survived [parseSearchRoom]: a page whose documents are dropped for having no
+   *   room id still consumed that many results, and advancing by the mapped count would
+   *   re-request them forever.
+   * - An empty page ends the sequence even when `numFound` still promises more. Huya stops
+   *   serving somewhere past `start` ≈ 1520 for a 1507-result query — verified live, a
+   *   `start=1540` request answers `numFound: 0` with no documents — so the total alone
+   *   would keep the pager asking for pages that never arrive.
+   */
+  internal fun nextSearchStart(bucket: JsonObject?, requestedStart: Int, docCount: Int): Int? {
+    if (bucket == null || docCount == 0) return null
+    val total = bucket.long("numFound") ?: return null
+    val reportedStart = bucket.int("start") ?: requestedStart
+    val consumed = reportedStart.toLong() + docCount
+    return if (consumed < total) consumed.toInt() else null
   }
 
   // --------------------------------------------------------------------- detail
@@ -322,7 +368,16 @@ class HuyaApi(private val http: HttpClient) {
     )
   }
 
-  private fun parseSearchRoom(element: JsonElement): Streamer? {
+  /**
+   * Maps one search document.
+   *
+   * The document carries the room's popularity as `game_activityCount` — the same
+   * "人气" value `getLiveList` reports as `lUserCount`, and the number huya.com prints on
+   * the card. This used to be left at 0, and `StreamerCard` only draws the viewer badge
+   * when the count is positive, so every Huya search result silently lost its popularity
+   * while the category and follow lists showed theirs.
+   */
+  internal fun parseSearchRoom(element: JsonElement): Streamer? {
     val obj = element as? JsonObject ?: return null
     val roomId = obj["room_id"]?.jsonPrimitive?.longOrNull?.toString()
       ?: obj.str("room_id")
@@ -338,7 +393,7 @@ class HuyaApi(private val http: HttpClient) {
       title = obj.str("live_intro").orEmpty().ifBlank { "暂无标题" },
       avatarUrl = obj.str("game_avatarUrl180")?.let { Texts.normalizeUrl(it) },
       coverUrl = null,
-      viewerCount = 0,
+      viewerCount = obj.long("game_activityCount") ?: 0,
       isLive = liveFlag,
       updatedAt = System.currentTimeMillis(),
     )
