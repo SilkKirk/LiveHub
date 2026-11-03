@@ -331,16 +331,30 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
+  /**
+   * The category the room list is really filtered by: the third level when one is picked,
+   * otherwise the second level.
+   *
+   * A sub-category narrows the list *without* replacing [UiState.selectedCategory] — the
+   * parent chip has to stay selected, otherwise the user loses their place in the two level
+   * selector. That makes `selectedCategory` the wrong thing to read for a room request:
+   * [loadMore] and [refresh] both did, so scrolling inside 三级分类 appended rooms from the
+   * whole 二级分类 and a pull-to-refresh silently threw the third level away. The reference
+   * client resolves `selectedCate3 ?: selectedCate2` on every page for the same reason.
+   */
+  private fun activeCategory(state: UiState): Category? =
+    state.selectedSubCategory ?: state.selectedCategory
+
   private fun loadMore() {
     val current = _state.value
-    val category = current.selectedCategory ?: return
+    val category = activeCategory(current) ?: return
     if (current.loading || current.loadingMore || current.refreshing || nextCursor == null) return
     loadRooms(current.platform, category, reset = false)
   }
 
   private fun refresh() {
     val current = _state.value
-    val category = current.selectedCategory
+    val category = activeCategory(current)
     if (category == null) {
       loadCategories(current.platform)
     } else {

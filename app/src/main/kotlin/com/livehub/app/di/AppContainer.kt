@@ -29,6 +29,15 @@ import okhttp3.OkHttpClient
 class AppContainer(
   context: Context,
   private val debugLogging: Boolean = false,
+  /**
+   * Replaces the platform adapters, for tests.
+   *
+   * Production passes nothing and gets the four real adapters. A test installs a scripted
+   * adapter here so it can drive [com.livehub.app.ui.MainViewModel] end to end and observe
+   * the requests that actually leave the app — the only place a wrong category id in a
+   * paginated request is visible.
+   */
+  adaptersOverride: List<LivePlatformAdapter>? = null,
 ) {
   private val applicationContext: Context = context.applicationContext
 
@@ -74,7 +83,7 @@ class AppContainer(
   }
 
   val adapters: List<LivePlatformAdapter> by lazy {
-    listOf(
+    adaptersOverride ?: listOf(
       DouyuAdapter(
         http = httpClient,
         webSocketClient = webSocketClient,
