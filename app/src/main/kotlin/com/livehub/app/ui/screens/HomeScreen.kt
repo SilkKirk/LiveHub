@@ -167,13 +167,19 @@ private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
 }
 
 /**
- * Two level category selector.
+ * The category selector: up to three chip rows.
  *
  * Row 1 is the group ("网游" / "手游" / …) for platforms that publish one; row 2 is the
  * concrete category inside the active group; row 3 is the third level, which only Douyu
- * publishes. Nothing here is pinnable — a subscribed-categories row and its 订阅 toggle used
- * to sit above these, adding a permanent button to every screen for a feature that only
- * repeated what selecting a category already does.
+ * publishes, led by 全部 so the level can be cleared again.
+ *
+ * Rows 1 and 2 are a narrowing pair and row 3 is a *filter inside* row 2, not a replacement:
+ * selecting a third level leaves `selectedCategory` on the parent so row 2 keeps its
+ * highlight and the user can still tell which category they are inside.
+ *
+ * Nothing here is pinnable — a subscribed-categories row and its 订阅 toggle used to sit above
+ * these, adding a permanent button to every screen for a feature that only repeated what
+ * selecting a category already does.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -220,8 +226,11 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
     ) {
       items(visibleCategories, key = { it.key }) { category ->
         FilterChip(
-          selected = state.selectedCategory?.key == category.key &&
-            state.selectedSubCategory == null,
+          // The parent stays highlighted while a third level is open, so the row still says
+          // which category the list is inside. It used to require
+          // `selectedSubCategory == null`, which left both rows looking unselected and made
+          // "go back to the whole category" look like a no-op.
+          selected = state.selectedCategory?.key == category.key,
           onClick = { onAction(UiAction.SelectCategory(category)) },
           label = { Text(category.name) },
         )
@@ -234,6 +243,17 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
+        // The reference client leads this row with 全部 (`Cate3Chips` in
+        // DouyuHomeScreen.kt) so the level can be cleared without hunting for the parent
+        // chip. Without it the only exit was re-tapping the parent, which was not marked
+        // as selected.
+        item(key = "sub-all") {
+          FilterChip(
+            selected = state.selectedSubCategory == null,
+            onClick = { onAction(UiAction.SelectSubCategory(null)) },
+            label = { Text("全部") },
+          )
+        }
         items(state.subCategories, key = { "sub-${it.key}" }) { category ->
           FilterChip(
             selected = state.selectedSubCategory?.key == category.key,

@@ -13,6 +13,7 @@ import com.livehub.core.network.HttpResponse
 import com.livehub.platform.douyu.DouyuAdapter
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -154,6 +155,34 @@ class CategoryPaginationTest {
     assertTrue(
       "a refresh must not fall back to the parent category, got $lastRoomsUrl",
       lastRoomsUrl.contains("mixListV1/3_3683/1"),
+    )
+  }
+
+  /**
+   * The 全部 chip that leads the third row.
+   *
+   * The reference client's `Cate3Chips` starts with a 全部 pill whose `onSelect` passes null,
+   * so the level can be cleared in one tap. Our row had no such chip, and the parent chip was
+   * rendered unselected while a third level was open, so "show the whole category again" had
+   * no visible control at all.
+   */
+  @Test
+  fun `clearing the third level goes back to the parent category`() {
+    selectSubCategoryAndSettle()
+
+    awaitNewRoomsRequest { viewModel.onAction(UiAction.SelectSubCategory(null)) }
+
+    assertTrue(
+      "clearing the third level must request the parent category, got $lastRoomsUrl",
+      lastRoomsUrl.contains("mixListV1/2_1/1"),
+    )
+    assertNull(
+      "the third level chip must be deselected",
+      viewModel.state.value.selectedSubCategory,
+    )
+    assertTrue(
+      "the parent must stay selected so the row still says where the list is",
+      viewModel.state.value.selectedCategory?.key == cate2.key,
     )
   }
 

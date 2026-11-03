@@ -101,7 +101,13 @@ sealed interface UiAction {
 
   data class SelectCategory(val category: Category) : UiAction
 
-  data class SelectSubCategory(val category: Category) : UiAction
+  /**
+   * Opens a third level category, or widens back to the whole parent when [category] is null.
+   *
+   * The null case is the 全部 chip that leads the third row; without it the only way out of a
+   * third level was to find and re-tap the parent chip, which the row did not mark as selected.
+   */
+  data class SelectSubCategory(val category: Category?) : UiAction
 
   data class MoveFollow(val streamer: Streamer, val toIndex: Int) : UiAction
 

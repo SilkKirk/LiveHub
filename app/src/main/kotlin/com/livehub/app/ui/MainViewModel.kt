@@ -241,6 +241,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           )
         }
         if (first != null) {
+          // The third level has to arrive with the category, not after the user taps it:
+          // see [loadSubCategories].
+          loadSubCategories(platform, first)
           loadRooms(platform, first, reset = true)
         } else {
           _state.update { it.copy(loading = false) }
@@ -271,21 +274,44 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
     nextCursor = null
     loadRooms(_state.value.platform, category, reset = true)
+    loadSubCategories(_state.value.platform, category)
+  }
 
+  /**
+   * Fetches the third level of [category] and publishes it as the extra chip row.
+   *
+   * This runs for every category the app *selects*, not just for one the user tapped.
+   * [loadCategories] picks the first category on its own — on a cold start and on every
+   * platform switch — and the children used to be fetched only from [selectCategory], so a
+   * fresh launch showed a two level selector with no third row even though Douyu had one
+   * waiting. The only way to reveal it was to tap the chip that was already selected, which
+   * looks like a no-op. The reference client fetches on `selectedCate2?.id` with a
+   * `LaunchedEffect`, which fires for the initial selection too.
+   */
+  private fun loadSubCategories(platform: Platform, category: Category) {
     subCategoriesJob?.cancel()
     subCategoriesJob = viewModelScope.launch {
       val children = runCatching {
-        container.platformRepository.subCategories(_state.value.platform, category.id)
+        container.platformRepository.subCategories(platform, category.id)
       }.getOrDefault(emptyList())
+      // A slow answer for a category the user has already left must not repopulate the row.
       _state.update { if (it.selectedCategory?.key == category.key) it.copy(subCategories = children) else it }
     }
   }
 
-  /** Narrows the list to a third level category, keeping the parent selected. */
-  private fun selectSubCategory(category: Category) {
+  /**
+   * Narrows the list to a third level category, or widens it back to the parent when
+   * [category] is null.
+   *
+   * A third level never replaces [UiState.selectedCategory]: the parent chip keeps its
+   * selection so the user can still see which category they are inside, and the reference
+   * client keeps `selectedCate2` alive alongside `selectedCate3` for the same reason.
+   */
+  private fun selectSubCategory(category: Category?) {
+    val parent = _state.value.selectedCategory ?: return
     _state.update { it.copy(selectedSubCategory = category, rooms = emptyList()) }
     nextCursor = null
-    loadRooms(_state.value.platform, category, reset = true)
+    loadRooms(_state.value.platform, category ?: parent, reset = true)
   }
 
   private fun loadRooms(platform: Platform, category: Category, reset: Boolean, pullToRefresh: Boolean = false) {

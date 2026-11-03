@@ -112,6 +112,43 @@ class ScreenshotTest {
     Category(Platform.DOUYU, "4", "户外", "8", "娱乐", sortOrder = 4),
   )
 
+  /**
+   * The third level Douyu publishes under 英雄联盟.
+   *
+   * Ids carry the adapter's `c3:` prefix, which is what makes `DouyuAdapter.rooms` pick
+   * `mixListV1/3_<id>` instead of `2_<id>`.
+   */
+  private val douyuSubCategories = listOf(
+    Category(Platform.DOUYU, "c3:3683", "峡谷之巅", parentId = "86", sortOrder = 3683),
+    Category(Platform.DOUYU, "c3:3684", "云顶之弈", parentId = "86", sortOrder = 3684),
+    Category(Platform.DOUYU, "c3:3685", "排位赛", parentId = "86", sortOrder = 3685),
+  )
+
+  /**
+   * Two groups from Huya's shipped table.
+   *
+   * The shape follows `HuyaCategories.parse`: `id` is the numeric `iGid` that
+   * `getLiveList` expects and `parentName` is the group title, so the group row has more than
+   * one chip to choose between.
+   */
+  private val huyaCategories = listOf(
+    Category(Platform.HUYA, "1", "英雄联盟", "网游", "网游", sortOrder = 0),
+    Category(Platform.HUYA, "2", "王者荣耀", "网游", "网游", sortOrder = 1),
+    Category(Platform.HUYA, "3", "星秀", "娱乐", "娱乐", sortOrder = 2),
+  )
+
+  /**
+   * Two groups from Bilibili's shipped table.
+   *
+   * `BilibiliCategories.parse` encodes the id as `"<parentAreaId>:<areaId>"`, both numeric,
+   * because those are the `parent_area_id` / `area_id` that `second/getList` takes.
+   */
+  private val bilibiliCategories = listOf(
+    Category(Platform.BILIBILI, "2:86", "英雄联盟", "2", "网游", sortOrder = 0),
+    Category(Platform.BILIBILI, "2:87", "DOTA2", "2", "网游", sortOrder = 1),
+    Category(Platform.BILIBILI, "1:21", "王者荣耀", "1", "手游", sortOrder = 2),
+  )
+
   private fun baseState(): UiState = UiState(
     screen = Screen.Home,
     platform = Platform.DOUYU,
@@ -159,9 +196,36 @@ class ScreenshotTest {
   @Test
   fun homeFollowed() = capture("02-home-followed", baseState().copy(followed = douyuRooms.take(3)))
 
+  /**
+   * A category other than the one the app selects by itself.
+   *
+   * This render was called `03-home-pinned` and its comment implied a pinned category. Nothing
+   * is pinnable: `CategoryRow` documents that the subscribed-categories row was removed
+   * precisely because it duplicated selecting a category. So the name described a state the
+   * app cannot reach, and the file only ever proved that tapping a chip moves the highlight
+   * and the grid.
+   */
   @Test
-  fun homePinnedCategories() =
-    capture("03-home-pinned", baseState().copy(selectedCategory = douyuCategories[2]))
+  fun homeOtherCategory() =
+    capture("03-home-other-category", baseState().copy(selectedCategory = douyuCategories[2]))
+
+  /**
+   * The third chip row, which only Douyu publishes.
+   *
+   * Nothing rendered this before: `CategoryRow` shows the row only when `subCategories` is
+   * non-empty, and no state in this file ever set it. The row that the third-level pagination
+   * bug lived in therefore had no visual coverage at all — a broken or invisible row would
+   * have passed every screenshot review.
+   */
+  @Test
+  fun homeSubCategory() = capture(
+    "03b-home-subcategory",
+    baseState().copy(
+      subCategories = douyuSubCategories,
+      selectedSubCategory = douyuSubCategories.first(),
+      rooms = douyuRooms.take(4),
+    ),
+  )
 
   @Test
   fun homeLoading() = capture("04-home-loading", baseState().copy(rooms = emptyList(), loading = true))
@@ -293,13 +357,23 @@ class ScreenshotTest {
     ),
   )
 
+  /**
+   * A platform switch, which has to move the category selection with the platform.
+   *
+   * Both of these used to swap `platform` and `categories` but leave `selectedCategory`
+   * pointing at a 斗鱼 category, so the renders showed states the app cannot produce: 虎牙
+   * with no chip selected at all, and 哔哩哔哩 with a group highlighted and no area inside it.
+   * `selectPlatform` clears the selection and `loadCategories` picks the new platform's first
+   * category, so the fixture has to do the same or the screenshot lies.
+   */
   @Test
   fun huyaHome() = capture(
     "20-huya-home",
     baseState().copy(
       platform = Platform.HUYA,
       rooms = huyaRooms,
-      categories = listOf(Category(Platform.HUYA, "1", "网游", "热门", "热门", sortOrder = 0)),
+      categories = huyaCategories,
+      selectedCategory = huyaCategories.first(),
     ),
   )
 
@@ -312,10 +386,8 @@ class ScreenshotTest {
         streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
         streamer(Platform.BILIBILI, "21", "老番茄", "新视频首发", 88_000),
       ),
-      categories = listOf(
-        Category(Platform.BILIBILI, "1", "虚拟主播", "热门", "热门", sortOrder = 0),
-        Category(Platform.BILIBILI, "2", "英雄联盟", "网游", "网游", sortOrder = 1),
-      ),
+      categories = bilibiliCategories,
+      selectedCategory = bilibiliCategories.first(),
     ),
   )
 
