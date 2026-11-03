@@ -2060,7 +2060,7 @@ val hasMore = list.isNotEmpty()
 | JVM 单元测试 | ✅ 3 个 job 全绿；本轮 +6（`DouyuPaginationTest`）−4（随死代码移除），净 +2 |
 | 仪器测试 | ✅ 未改动 androidTest |
 | Release assembly（R8） | ✅ |
-| CI 三 job | ✅ run 41580478756（commit cfa6a9b）全绿 |
+| CI 三 job | ✅ run 41580478756（commit cfa6a9b，代码）与 run 41581437087（commit d0c7475，本文档）全绿 |
 
 `ci.py logs --job "Build & test"` 本轮取不到日志：下载回来的日志包不是 zip，
 `zipfile.BadZipFile: File is not a zip file`（`ci.py:255`），不带 `--tail` 也一样。
