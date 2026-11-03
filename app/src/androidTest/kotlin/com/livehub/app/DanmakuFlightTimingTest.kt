@@ -42,8 +42,14 @@ class DanmakuFlightTimingTest {
     text = text,
   )
 
+  /**
+   * camelCase on purpose: `minSdk` is 26, and D8 refuses method names containing spaces for
+   * any DEX version below 040 — a backticked name like `a long danmaku outlives ...` fails
+   * `:app:dexBuilderDebugAndroidTest` outright. JVM tests are never dexed, which is why only
+   * this source set has to spell its names out.
+   */
   @Test
-  fun `a long danmaku outlives the old fixed eight seconds`() {
+  fun longDanmakuOutlivesTheOldFixedEightSeconds() {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
       DanmakuOverlay(
