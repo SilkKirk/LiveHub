@@ -164,6 +164,119 @@ fun StreamerCard(
   }
 }
 
+/**
+ * A search result, as a wide row rather than a grid tile.
+ *
+ * The reference client has a second card shape for search (`StreamerCardStyle.Search` in
+ * `dtv_mobile`: a `104x66` cover beside the text, not the 16:10 tile the grids use), and the
+ * two shapes carry different amounts of text: the tile has room for one ellipsized title line,
+ * while a search result can afford two, plus the viewer count as a normal label instead of a
+ * small overlay on the cover. Results are also always one platform, so the platform chip the
+ * tile shows would repeat the search field's own label on every row.
+ *
+ * The follow affordance stays the star the rest of the app uses, not the reference's heart:
+ * the same action should not change icon when it appears on a different screen.
+ */
+@Composable
+fun StreamerSearchCard(
+  streamer: Streamer,
+  followed: Boolean,
+  onClick: () -> Unit,
+  onToggleFollow: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(12.dp))
+      .clickable(onClick = onClick),
+    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(width = 104.dp, height = 66.dp)
+          .clip(RoundedCornerShape(8.dp)),
+      ) {
+        CoverImage(streamer = streamer)
+
+        Surface(
+          color = if (streamer.isLive) LiveBadgeColor else Color.Black.copy(alpha = 0.55f),
+          shape = RoundedCornerShape(4.dp),
+          modifier = Modifier.padding(5.dp).align(Alignment.TopStart),
+        ) {
+          Text(
+            text = if (streamer.isLive) "LIVE" else "未开播",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+            fontWeight = if (streamer.isLive) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+          )
+        }
+      }
+
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+          text = streamer.title.ifBlank { streamer.streamerName },
+          style = MaterialTheme.typography.bodyMedium,
+          fontWeight = FontWeight.Medium,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+            text = streamer.streamerName.ifBlank { "未知主播" },
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          if (streamer.viewerCount > 0) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Outlined.Visibility,
+                contentDescription = null,
+                modifier = Modifier.size(11.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              Text(
+                text = ViewerCountFormatter.format(streamer.viewerCount),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+              )
+            }
+          }
+        }
+      }
+
+      IconButton(onClick = onToggleFollow, modifier = Modifier.size(36.dp)) {
+        Icon(
+          imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
+          contentDescription = if (followed) "取消关注" else "关注",
+          tint = if (followed) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          modifier = Modifier.size(20.dp),
+        )
+      }
+    }
+  }
+}
+
 @Composable
 private fun CoverImage(streamer: Streamer) {
   if (streamer.coverUrl.isNullOrBlank()) {

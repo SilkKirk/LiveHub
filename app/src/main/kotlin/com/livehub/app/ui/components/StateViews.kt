@@ -4,12 +4,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -150,6 +153,46 @@ fun StreamerGridSkeleton(
         )
         SkeletonBar(widthFraction = 0.9f, topPadding = 8.dp)
         SkeletonBar(widthFraction = 0.55f, topPadding = 6.dp, height = 10.dp)
+      }
+    }
+  }
+}
+
+/**
+ * The list-shaped version of [StreamerGridSkeleton], for screens that render rows.
+ *
+ * The search screen switched from a two-column grid to a single-column list of result rows;
+ * the grid skeleton would have promised a layout that never arrives, and the change of shape
+ * mid-load is more distracting than no skeleton at all.
+ */
+@Composable
+fun StreamerListSkeleton(
+  modifier: Modifier = Modifier,
+  itemCount: Int = 6,
+) {
+  LazyColumn(
+    modifier = modifier.fillMaxSize(),
+    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+    userScrollEnabled = false,
+  ) {
+    items(count = itemCount) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(width = 104.dp, height = 66.dp)
+            .background(
+              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+              RoundedCornerShape(8.dp),
+            ),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+          SkeletonBar(widthFraction = 0.9f, topPadding = 6.dp)
+          SkeletonBar(widthFraction = 0.55f, topPadding = 8.dp, height = 10.dp)
+        }
       }
     }
   }

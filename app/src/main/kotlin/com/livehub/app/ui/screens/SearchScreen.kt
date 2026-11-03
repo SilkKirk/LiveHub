@@ -7,12 +7,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -32,38 +30,41 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.InlineLoader
 import com.livehub.app.ui.components.RefreshableBox
-import com.livehub.app.ui.components.StreamerCard
-import com.livehub.app.ui.components.StreamerGridSkeleton
+import com.livehub.app.ui.components.StreamerListSkeleton
+import com.livehub.app.ui.components.StreamerSearchCard
 import com.livehub.core.model.Platform
 
 /**
  * Search screen.
  *
- * Three distinct states, each rendered deliberately:
- *  * nothing searched yet  -> recent searches with a "clear" action
- *  * searching            -> skeleton grid, not a bare spinner
- *  * results / no results -> grid, or an empty state that offers to clear the query
+ * Four distinct states, each rendered deliberately:
+ *  * nothing searched yet  -> recent searches, plus a hint for what this platform accepts
+ *  * searching             -> a skeleton of the result rows, not a bare spinner
+ *  * results / no results  -> the list, or an empty state that offers to clear the query
+ *  * failure               -> the platform's message and a retry
+ *
+ * "Nothing searched yet" is its own state rather than "no results": the field changes on every
+ * keystroke but a search only runs on submit, so a page that keyed the empty state on the field
+ * text announced "没有找到「英」" one character into typing.
  */
 @Composable
 fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val followedKeys = remember(state.followed) { state.followed.map { it.key }.toSet() }
-  val gridState = rememberLazyGridState()
+  val listState = rememberLazyListState()
 
   val shouldLoadMore by remember {
     derivedStateOf {
-      val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-      state.searchHasMore && last >= state.searchResults.size - 4 && state.searchResults.isNotEmpty()
+      val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+      state.searchHasMore && last >= state.searchResults.size - 3 && state.searchResults.isNotEmpty()
     }
   }
 
@@ -74,9 +75,9 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
   Column(modifier = Modifier.fillMaxSize()) {
     SearchField(state = state, onAction = onAction)
 
-    val hasQuery = state.searchQuery.isNotBlank()
-    val hasResults = state.searchResults.isNotEmpty()
-    val idle = !hasQuery && !hasResults
+    val idle = state.searchQuery.isBlank() && state.lastSearchQuery.isBlank()
+    // A search has actually run — as opposed to the field merely having text in it.
+    val searched = state.lastSearchQuery.isNotBlank()
 
     if (idle && state.searchHistory.isNotEmpty()) {
       RecentSearches(
@@ -88,9 +89,12 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize()) {
       when {
-        state.loading -> StreamerGridSkeleton()
+        state.loading -> StreamerListSkeleton()
 
-        state.error != null && !hasResults -> EmptyState(
+        // `error` is shared with the home screen, so it only means "search failed" once a
+        // search has been submitted; otherwise a category that failed to load would show up
+        // here as a search failure.
+        state.error != null && searched -> EmptyState(
           icon = Icons.Outlined.SearchOff,
           title = "搜索失败",
           description = state.error,
@@ -98,35 +102,19 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
           onAction = { onAction(UiAction.SubmitSearch) },
         )
 
-        idle -> EmptyState(
-          icon = Icons.Filled.Search,
-          title = "搜索主播或直播间",
-          description = SEARCH_HINTS[state.platform] ?: "输入关键词后按回车搜索。",
-        )
-
-        !hasResults -> EmptyState(
-          icon = Icons.Outlined.SearchOff,
-          title = "没有找到「${state.searchQuery}」",
-          description = "换个关键词试试，或者切换到其他平台再搜索。",
-          actionLabel = "清空",
-          onAction = { onAction(UiAction.UpdateQuery("")) },
-        )
-
-        else -> RefreshableBox(
+        state.searchResults.isNotEmpty() -> RefreshableBox(
           refreshing = state.refreshing,
           onRefresh = { onAction(UiAction.SubmitSearch) },
           modifier = Modifier.fillMaxSize(),
         ) {
-          LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            state = gridState,
-            contentPadding = PaddingValues(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxSize(),
           ) {
             items(items = state.searchResults, key = { it.key }) { streamer ->
-              StreamerCard(
+              StreamerSearchCard(
                 streamer = streamer,
                 followed = followedKeys.contains(streamer.key),
                 onClick = { onAction(UiAction.OpenRoom(streamer)) },
@@ -134,10 +122,24 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
               )
             }
             if (state.loadingMore) {
-              item(span = { GridItemSpan(maxLineSpan) }) { InlineLoader() }
+              item { InlineLoader() }
             }
           }
         }
+
+        searched -> EmptyState(
+          icon = Icons.Outlined.SearchOff,
+          title = "没有找到「${state.lastSearchQuery}」",
+          description = "换个关键词试试，或者切换到其他平台再搜索。",
+          actionLabel = "清空",
+          onAction = { onAction(UiAction.UpdateQuery("")) },
+        )
+
+        else -> EmptyState(
+          icon = Icons.Filled.Search,
+          title = "搜索主播或直播间",
+          description = SEARCH_HINTS[state.platform] ?: "输入关键词后按回车搜索。",
+        )
       }
     }
   }

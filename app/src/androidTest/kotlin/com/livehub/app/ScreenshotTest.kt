@@ -273,6 +273,7 @@ class ScreenshotTest {
     categories = huyaCategories,
     selectedCategory = huyaCategories.first(),
     searchQuery = "英雄联盟",
+    lastSearchQuery = "英雄联盟",
     searchResults = listOf(
       streamer(Platform.HUYA, "660000", "Uzi", "复出首播，感谢大家支持", 17_863_363),
       streamer(Platform.HUYA, "660001", "骚男", "快乐游戏，快乐生活", 88_000),
@@ -289,6 +290,7 @@ class ScreenshotTest {
     categories = bilibiliCategories,
     selectedCategory = bilibiliCategories.first(),
     searchQuery = "英雄联盟",
+    lastSearchQuery = "英雄联盟",
     searchResults = listOf(
       streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
       streamer(Platform.BILIBILI, "21", "老番茄", "新视频首发", 88_000),
@@ -419,15 +421,71 @@ class ScreenshotTest {
     baseState().copy(
       screen = Screen.Search,
       searchQuery = "英雄联盟",
+      lastSearchQuery = "英雄联盟",
       searchResults = douyuRooms.take(4),
       searchHistory = listOf("英雄联盟", "户外"),
+    ),
+  )
+
+  /**
+   * The keyword was submitted and the first page has not arrived yet.
+   *
+   * No render ever showed this: the loading state has its own skeleton, and the search screen's
+   * skeleton was a two-column grid until this round, which promised a layout the results never
+   * used.
+   */
+  @Test
+  fun searchLoading() = capture(
+    "11d-search-loading",
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "英雄联盟",
+      lastSearchQuery = "英雄联盟",
+      loading = true,
     ),
   )
 
   @Test
   fun searchNoResult() = capture(
     "12-search-no-result",
-    baseState().copy(screen = Screen.Search, searchQuery = "不存在的直播间"),
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "不存在的直播间",
+      lastSearchQuery = "不存在的直播间",
+    ),
+  )
+
+  /**
+   * A failed search, which had no render and could not have had one.
+   *
+   * The failure state only renders when there is nothing else to show, and a failed *second*
+   * search used to leave the first keyword's rooms on screen — so this state was unreachable
+   * from the UI until the view model started clearing them.
+   */
+  @Test
+  fun searchFailed() = capture(
+    "12b-search-failed",
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "英雄联盟",
+      lastSearchQuery = "英雄联盟",
+      error = "斗鱼返回了网页而不是数据，请稍后重试",
+    ),
+  )
+
+  /**
+   * Text in the field, but no search submitted yet.
+   *
+   * The screen used to read "没有找到「英雄联盟」" here — a verdict on a search that had not run.
+   * The render is the visual half of `SearchScreenTest`'s first assertion.
+   */
+  @Test
+  fun searchTyping() = capture(
+    "12c-search-typing",
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "英雄联盟",
+    ),
   )
 
   @Test

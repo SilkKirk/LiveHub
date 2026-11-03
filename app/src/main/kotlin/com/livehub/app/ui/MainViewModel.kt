@@ -11,6 +11,7 @@ import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.core.sync.SyncScope
 import com.livehub.platform.api.PlatformException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -92,7 +93,31 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SelectLine -> selectQuality(quality = null, line = action.line)
       is UiAction.PlayerFailed -> _state.update { it.copy(playerError = action.message) }
       is UiAction.ToggleFollow -> toggleFollow(action.streamer)
-      is UiAction.UpdateQuery -> _state.update { it.copy(searchQuery = action.query) }
+      is UiAction.UpdateQuery -> {
+        if (action.query.isBlank()) {
+          // Emptying the field ends the search that was on screen. Without this the 清空 button
+          // in the "没有找到" state cleared the text but left `lastSearchQuery` behind, so the
+          // page kept announcing a result for a keyword no longer in the field. An in-flight
+          // search for the erased keyword goes too, and the flags it owns have to be reset by
+          // hand — a cancelled job never reaches its own `loading = false`.
+          searchJob?.cancel()
+          searchCursor = null
+          _state.update {
+            it.copy(
+              searchQuery = action.query,
+              lastSearchQuery = "",
+              searchResults = emptyList(),
+              searchHasMore = false,
+              loading = false,
+              refreshing = false,
+              loadingMore = false,
+              error = null,
+            )
+          }
+        } else {
+          _state.update { it.copy(searchQuery = action.query) }
+        }
+      }
       UiAction.SubmitSearch -> submitSearch()
       UiAction.LoadMoreSearch -> loadMoreSearch()
       UiAction.ClearSearchHistory -> clearSearchHistory()
@@ -220,6 +245,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         rooms = emptyList(),
         searchResults = emptyList(),
         searchHasMore = false,
+        lastSearchQuery = "",
         screen = Screen.Home,
         error = null,
       )
@@ -404,15 +430,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     searchJob?.cancel()
     searchCursor = null
     searchJob = viewModelScope.launch {
-      _state.update {
-        it.copy(
+      _state.update { current ->
+        // Re-running the *same* keyword is a refresh: keep the list on screen and turn the
+        // indicator instead of blanking it to the skeleton. A different keyword replaces the
+        // list, because those rooms were searched for something else — leaving them up showed
+        // the previous keyword's rooms under the new keyword's name.
+        val sameKeyword = current.lastSearchQuery == query
+        current.copy(
           screen = Screen.Search,
-          // A pull-to-refresh re-runs the same search: keep the grid on screen and show
-          // the indicator instead of blanking it to the skeleton.
-          refreshing = it.searchResults.isNotEmpty(),
-          loading = it.searchResults.isEmpty(),
+          lastSearchQuery = query,
+          refreshing = sameKeyword && current.searchResults.isNotEmpty(),
+          loading = !sameKeyword || current.searchResults.isEmpty(),
           loadingMore = false,
-          searchResults = if (it.searchResults.isEmpty()) emptyList() else it.searchResults,
+          searchResults = if (sameKeyword) current.searchResults else emptyList(),
           searchHasMore = false,
           error = null,
           searchHistory = container.preferences.settings.searchHistory,
@@ -429,9 +459,25 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             refreshing = false,
           )
         }
+      } catch (cancelled: CancellationException) {
+        // A superseded search must not report its own cancellation as a failure: the job that
+        // replaced it owns the state now. `CancellationException` extends `Exception`, so
+        // without this clause `searchJob?.cancel()` above set `error` to "Job was cancelled".
+        throw cancelled
       } catch (error: Exception) {
+        searchCursor = null
         _state.update {
-          it.copy(loading = false, refreshing = false, error = error.message ?: "搜索失败")
+          // The results on screen no longer answer the keyword that was asked about, so they
+          // go. Keeping them also hid the failure: the search screen only shows its error
+          // state when there is nothing else to show, so a failed second search looked like a
+          // successful one over the first keyword's rooms.
+          it.copy(
+            searchResults = emptyList(),
+            searchHasMore = false,
+            loading = false,
+            refreshing = false,
+            error = error.message ?: "搜索失败",
+          )
         }
       }
     }
@@ -440,7 +486,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   /** Appends the next page of search results, if the platform reported one. */
   private fun loadMoreSearch() {
     val current = _state.value
-    val query = current.searchQuery.trim()
+    // The keyword that produced `searchCursor`, not what the field says now: editing the
+    // field without submitting used to send the *new* text together with the *old* cursor,
+    // so the appended page belonged to a search the user never made.
+    val query = current.lastSearchQuery.trim()
     val cursor = searchCursor
     if (query.isEmpty() || cursor == null || current.loading || current.loadingMore) return
 
@@ -456,6 +505,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             loadingMore = false,
           )
         }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
       } catch (error: Exception) {
         _state.update {
           it.copy(loadingMore = false, message = error.message ?: "加载更多失败")

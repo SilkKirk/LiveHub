@@ -27,6 +27,16 @@ data class UiState(
   val rooms: List<Streamer> = emptyList(),
   val followed: List<Streamer> = emptyList(),
   val searchQuery: String = "",
+  /**
+   * The keyword [searchResults] were searched with, and the one the next page is requested for.
+   *
+   * Kept apart from [searchQuery], which is the live text field: the field changes on every
+   * keystroke, while a search only runs when the user submits one. Reading the field where the
+   * *searched* keyword is meant made the empty state claim "没有找到「英」" as soon as the first
+   * character was typed, and made 加载更多 request the next cursor's page for a keyword nobody had
+   * searched.
+   */
+  val lastSearchQuery: String = "",
   val searchResults: List<Streamer> = emptyList(),
   val searchHistory: List<String> = emptyList(),
   /** Cursor for the next page of search results, null when exhausted. */
