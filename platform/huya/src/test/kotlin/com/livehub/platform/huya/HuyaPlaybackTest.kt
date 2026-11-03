@@ -62,13 +62,21 @@ class HuyaPlaybackTest {
     .encodeToString("abcdef_1699999999999_abc".toByteArray())
     .let { URLEncoder.encode(it, "UTF-8") }
 
+  /**
+   * One `gameStreamInfoList` entry.
+   *
+   * [host] is separate from [cdn] because Huya publishes several `sCdnType` aliases per
+   * machine (`AL`/`AL13` → `al-game.flv.huya.com`); the default keeps them the same for
+   * tests that do not care about the distinction.
+   */
   private fun stream(
     cdn: String,
     name: String = "660000-abc",
     suffix: String = "flv",
     ctype: String = "huya_live",
     fs: String = "bgct",
-  ): String = """{"sCdnType":"$cdn","sFlvUrl":"https://$cdn.flv.huya.com/src",""" +
+    host: String = cdn,
+  ): String = """{"sCdnType":"$cdn","sFlvUrl":"https://$host.flv.huya.com/src",""" +
     """"sStreamName":"$name","sFlvUrlSuffix":"$suffix",""" +
     """"sFlvAntiCode":"fm=$fm&ctype=$ctype&fs=$fs"}"""
 
@@ -136,7 +144,7 @@ class HuyaPlaybackTest {
 
     val source = adapter(http).playback(roomId = "660000", preferredQuality = null, preferredLine = null)
 
-    assertEquals(2, source.variants.size, "both CDNs from the first response must survive")
+    assertEquals(listOf("al", "tx"), source.lines, "both CDNs from the first response must survive")
     assertEquals(1, http.urls.size, "no second page load may happen at all: ${http.urls}")
   }
 
@@ -156,8 +164,70 @@ class HuyaPlaybackTest {
     assertTrue(source.room.isLive)
   }
 
+  /**
+   * The regression this round exists for: six CDN entries, three hosts, **one** chip.
+   *
+   * A real room page publishes `AL`/`AL13`, `TX`/`TX15` and `HS`/`HS24`, and each pair
+   * resolves to the same host. Emitting one variant per entry gave the 清晰度 row six chips
+   * all labelled 原画 — indistinguishable, and duplicating two thirds of the CDNs. The
+   * hosts are what the user can actually choose between, so they belong to the line axis.
+   */
   @Test
-  fun `variants are ordered by cdn preference and downgraded to http`() = runBlocking {
+  fun `six cdn entries on three hosts collapse to one quality and three lines`() = runBlocking {
+    val http = FakeHuyaHttp { _, _ ->
+      HttpResponse(
+        200,
+        page(
+          listOf(
+            stream("AL", host = "al-game"),
+            stream("AL13", host = "al-game"),
+            stream("TX", host = "tx"),
+            stream("TX15", host = "tx"),
+            stream("HS", host = "hs-game"),
+            stream("HS24", host = "hs-game"),
+          ),
+        ),
+        emptyMap(),
+        "",
+      )
+    }
+
+    val source = adapter(http).playback(roomId = "660000", preferredQuality = null, preferredLine = null)
+
+    assertEquals(1, source.variants.size, "one quality means one chip: ${source.variants}")
+    assertEquals("原画", source.variants.single().qualityLabel)
+    assertEquals(listOf("AL", "HS", "TX"), source.lines, "one line per host, best CDN first")
+    assertEquals("AL", source.selectedLine)
+    assertEquals(3, source.lines.distinct().size, "a host must not be offered twice")
+  }
+
+  /**
+   * Aliases of one host are not a choice: the better ranked alias names the line.
+   *
+   * `AL13` is `AL`'s alias on the same machine, so the line list must contain it once, and
+   * the URL must be the one the preferred alias produced.
+   */
+  @Test
+  fun `two aliases of one host produce a single line`() = runBlocking {
+    val http = FakeHuyaHttp { _, _ ->
+      HttpResponse(
+        200,
+        page(listOf(stream("AL13", host = "al-game"), stream("AL", host = "al-game"))),
+        emptyMap(),
+        "",
+      )
+    }
+
+    val source = adapter(http).playback(roomId = "660000", preferredQuality = null, preferredLine = null)
+
+    assertEquals(listOf("AL"), source.lines, "sorted by cdn rank, so the nominal alias wins")
+    assertEquals("AL", source.selectedLine)
+    assertTrue(source.variants.single().url.startsWith("http://"), "CDN hosts break Android TLS")
+    assertTrue(source.variants.single().url.contains("al-game.flv.huya.com"), source.variants.single().url)
+  }
+
+  @Test
+  fun `lines are ordered by cdn preference and downgraded to http`() = runBlocking {
     // Declared worst-first on purpose: the resolver has to reorder, not preserve.
     val http = FakeHuyaHttp { _, _ ->
       HttpResponse(200, page(listOf(stream("tx"), stream("hs"), stream("al"))), emptyMap(), "")
@@ -165,23 +235,74 @@ class HuyaPlaybackTest {
 
     val source = adapter(http).playback(roomId = "660000", preferredQuality = null, preferredLine = null)
 
-    assertEquals(listOf("al", "hs", "tx"), source.variants.map { it.lineName })
-    assertTrue(source.variants.all { it.url.startsWith("http://") }, "CDN hosts break Android TLS")
-    assertEquals("al", source.defaultVariant?.lineName)
+    assertEquals(listOf("al", "hs", "tx"), source.lines)
+    assertTrue(source.variants.single().url.startsWith("http://"), "CDN hosts break Android TLS")
+    assertTrue(source.variants.single().url.contains("al.flv.huya.com"), source.variants.single().url)
   }
 
+  /**
+   * The line selector is the axis Huya really has, so picking one has to change the URL.
+   *
+   * Before the CDN became a line, `HuyaAdapter.playback` ignored `preferredLine` entirely:
+   * tapping a line chip re-resolved the room and came back with the same first CDN.
+   */
   @Test
-  fun `the preferred quality is moved to the front instead of dropped`() = runBlocking {
+  fun `the preferred line decides which cdn url is resolved`() = runBlocking {
     val http = FakeHuyaHttp { _, _ ->
       HttpResponse(200, page(listOf(stream("al"), stream("hs"), stream("tx"))), emptyMap(), "")
     }
 
-    // tx ranks last, so without the preference it would never be the default variant.
-    val preferred = HuyaSigner.cdnRank("tx")
-    val source = adapter(http).playback(roomId = "660000", preferredQuality = preferred, preferredLine = null)
+    val source = adapter(http).playback(
+      roomId = "660000",
+      preferredQuality = null,
+      preferredLine = "tx",
+    )
 
-    assertEquals(3, source.variants.size, "a preference reorders, it does not filter")
-    assertEquals("tx", source.defaultVariant?.lineName)
+    assertEquals("tx", source.selectedLine)
+    assertEquals("tx", source.variants.single().lineName)
+    assertTrue(source.variants.single().url.contains("tx.flv.huya.com"), source.variants.single().url)
+    assertEquals(listOf("al", "hs", "tx"), source.lines, "the list still offers every line")
+  }
+
+  @Test
+  fun `an unknown line falls back to the best ranked cdn`() = runBlocking {
+    val http = FakeHuyaHttp { _, _ ->
+      HttpResponse(200, page(listOf(stream("hs"), stream("tx"))), emptyMap(), "")
+    }
+
+    val source = adapter(http).playback(
+      roomId = "660000",
+      preferredQuality = null,
+      preferredLine = "ws",
+    )
+
+    assertEquals("hs", source.selectedLine, "a stale preference must not fail the playback")
+    assertTrue(source.variants.single().url.contains("hs.flv.huya.com"), source.variants.single().url)
+  }
+
+  /**
+   * A remembered quality cannot reorder anything, because there is one quality.
+   *
+   * The code used to be `HuyaSigner.cdnRank(cdnType)`, so the quality the app persisted for
+   * Huya was really a CDN rank — a value that means nothing on the next room and collided
+   * with real Douyu rates (1 = 标清, 2 = 高清).
+   */
+  @Test
+  fun `a remembered quality neither filters nor reorders the single variant`() = runBlocking {
+    val http = FakeHuyaHttp { _, _ ->
+      HttpResponse(200, page(listOf(stream("al"), stream("hs"))), emptyMap(), "")
+    }
+
+    val source = adapter(http).playback(
+      roomId = "660000",
+      preferredQuality = HuyaSigner.cdnRank("hs"),
+      preferredLine = null,
+    )
+
+    assertEquals(1, source.variants.size)
+    assertEquals(HuyaApi.ORIGINAL_QUALITY, source.variants.single().qualityCode)
+    assertEquals("原画", source.variants.single().qualityLabel)
+    assertEquals("al", source.selectedLine, "the CDN preference is what selects, not the quality")
   }
 
   /**

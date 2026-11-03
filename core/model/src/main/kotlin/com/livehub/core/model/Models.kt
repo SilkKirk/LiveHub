@@ -132,11 +132,12 @@ data class PlaybackSource(
   /** The variant the resolver recommends. */
   val defaultVariant: StreamVariant? = variants.firstOrNull(),
   /**
-   * Every CDN / line the platform advertises for this room, when it publishes a list
-   * separately from the resolved variants (Douyu's `cdnsWithName`).
+   * Every CDN / line the platform advertises for this room.
    *
-   * Empty for platforms where a line *is* a variant (Huya, Bilibili), because there each
-   * line already produced its own [StreamVariant].
+   * Populated by every platform that has a CDN axis: Douyu's `cdnsWithName`, Huya's distinct
+   * `gameStreamInfoList` hosts, Bilibili's candidate hosts. It used to be empty for "platforms
+   * where a line *is* a variant", which is what made Huya list one variant per CDN entry and
+   * the quality row draw six identical 原画 chips.
    */
   val lines: List<String> = emptyList(),
   /** The line the resolver actually used, so the UI can mark it as selected. */

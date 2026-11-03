@@ -93,23 +93,26 @@ class HuyaAdapter(
    * Resolves a room for playback from **one** page load.
    *
    * `api.playback` hands back the page it parsed, so the `Streamer` is rebuilt from the
-   * same response that produced the URLs. Re-fetching it (as this used to) doubled the
+   * same response that produced the URL. Re-fetching it (as this used to) doubled the
    * wait before the first frame and made a working stream fail whenever the redundant
    * second request did.
+   *
+   * `preferredQuality` is unused on purpose: Huya publishes a single quality (原画) and the
+   * reference resolver does not offer a rate choice either, so there is nothing to honour.
+   * The CDN axis is real and goes through `preferredLine`.
    */
   override suspend fun playback(
     roomId: String,
     preferredQuality: Int?,
     preferredLine: String?,
   ): PlaybackSource {
-    val resolved = api.playback(roomId)
-    val ordered = preferredQuality
-      ?.let { wanted -> resolved.variants.sortedBy { if (it.qualityCode == wanted) 0 else 1 } }
-      ?: resolved.variants
+    val resolved = api.playback(roomId, preferredLine)
     return PlaybackSource(
       room = resolved.room.toStreamer(),
-      variants = ordered,
-      defaultVariant = ordered.firstOrNull(),
+      variants = resolved.variants,
+      defaultVariant = resolved.variants.firstOrNull(),
+      lines = resolved.lines,
+      selectedLine = resolved.selectedLine,
     )
   }
 

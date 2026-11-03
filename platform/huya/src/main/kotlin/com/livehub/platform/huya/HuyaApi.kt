@@ -57,7 +57,8 @@ data class HuyaRoomInfo(
 }
 
 /**
- * A resolved room: the page that was parsed and the variants built from it.
+ * A resolved room: the page that was parsed, the variant built from it, and the CDN lines
+ * that variant could have come from.
  *
  * The page is returned rather than thrown away because the caller needs the room metadata
  * as well, and a room page costs a full HTML download. See [HuyaApi.playback].
@@ -65,6 +66,10 @@ data class HuyaRoomInfo(
 data class HuyaPlayback(
   val room: HuyaRoomInfo,
   val variants: List<StreamVariant>,
+  /** Distinct CDN hosts, best first, as the line selector shows them. */
+  val lines: List<String> = emptyList(),
+  /** The line [variants] was built for. */
+  val selectedLine: String? = null,
 )
 
 /** One page of search results plus the `start` the next request must use. */
@@ -312,40 +317,63 @@ class HuyaApi(private val http: HttpClient) {
   }
 
   /**
-   * Resolves the playable variants for a room, ordered by CDN preference.
+   * Resolves the playable variant for a room.
    *
-   * Returns the parsed page next to the variants. The previous shape returned only the
-   * variants, so `HuyaAdapter.playback` downloaded the very same page a second time just
-   * to rebuild the `Streamer` — doubling the wait before the first frame, and worse, that
-   * second download was unguarded: any transient failure there threw and took down a
-   * playback whose stream URLs had already been resolved successfully.
+   * A Huya room page publishes **one quality** (原画) on several CDNs, so the two axes the
+   * player UI knows are filled like this: [HuyaPlayback.variants] carries the single
+   * variant and [HuyaPlayback.lines] carries the distinct CDN hosts, with
+   * [HuyaPlayback.selectedLine] naming the one whose URL was built.
+   *
+   * This used to emit one variant per `gameStreamInfoList` entry. A real room page lists
+   * six entries for three hosts — `AL`/`AL13` → `al-game.flv.huya.com`, `TX`/`TX15` →
+   * `tx.flv.huya.com`, `HS`/`HS24` → `hs-game.flv.huya.com` — and every entry became a
+   * variant labelled 原画, so the 清晰度 row drew six identical chips. Nothing distinguished
+   * them, and two out of every three were the same CDN as another entry.
+   *
+   * The reference resolver has no quality axis either: it sorts the same entries by CDN and
+   * plays the first one (`HuyaStreamUrlResolverAndroid.resolve`). Collapsing them into one
+   * variant therefore drops no choice the reference offers, and the host — not `sCdnType`,
+   * which differs per alias — is what identifies a CDN.
+   *
+   * @param preferredLine the CDN to resolve, as [HuyaPlayback.lines] names it. An unknown
+   *   value falls back to the best ranked CDN instead of failing, so a stale preference
+   *   from a room whose CDN list changed still plays.
    */
-  suspend fun playback(roomId: String): HuyaPlayback {
+  suspend fun playback(roomId: String, preferredLine: String? = null): HuyaPlayback {
     val info = roomInfo(roomId)
     if (info.streams.isEmpty()) {
       throw PlatformOfflineException("主播未开播", Platform.HUYA)
     }
-    val variants = info.streams
+    val candidates = info.streams
       .sortedBy { HuyaSigner.cdnRank(it.cdnType) }
-      .map { stream ->
-        val url = HuyaSigner.buildStreamUrl(
-          flvUrl = stream.flvUrl,
-          streamName = stream.streamName,
-          suffix = stream.suffix,
-          antiCode = stream.antiCode,
-        )
-        StreamVariant(
-          qualityLabel = "原画",
-          url = HuyaSigner.postProcess(url, stream.cdnType),
-          lineName = stream.cdnType,
-          isHls = stream.suffix.contains("m3u8", ignoreCase = true),
-          qualityRank = HuyaSigner.cdnRank(stream.cdnType),
-          qualityCode = HuyaSigner.cdnRank(stream.cdnType),
-        )
-      }
-      .distinctBy { it.url }
-    return HuyaPlayback(room = info, variants = variants)
+      .distinctBy { hostOf(it.flvUrl) }
+    val chosen = candidates.firstOrNull { it.cdnType.equals(preferredLine, ignoreCase = true) }
+      ?: candidates.first()
+    val url = HuyaSigner.buildStreamUrl(
+      flvUrl = chosen.flvUrl,
+      streamName = chosen.streamName,
+      suffix = chosen.suffix,
+      antiCode = chosen.antiCode,
+    )
+    val variant = StreamVariant(
+      qualityLabel = "原画",
+      url = HuyaSigner.postProcess(url, chosen.cdnType),
+      lineName = chosen.cdnType,
+      isHls = chosen.suffix.contains("m3u8", ignoreCase = true),
+      qualityRank = 0,
+      qualityCode = ORIGINAL_QUALITY,
+    )
+    return HuyaPlayback(
+      room = info,
+      variants = listOf(variant),
+      lines = candidates.map { it.cdnType },
+      selectedLine = chosen.cdnType,
+    )
   }
+
+  /** The host of a stream URL — the identity of a CDN, unlike its per-alias `sCdnType`. */
+  private fun hostOf(url: String): String =
+    url.substringAfter("://", url).substringBefore('/').lowercase()
 
   // -------------------------------------------------------------------- helpers
 
@@ -416,6 +444,16 @@ class HuyaApi(private val http: HttpClient) {
     const val URL_SEARCH = "https://search.cdn.huya.com/"
     const val URL_ROOM = "https://www.huya.com"
     const val SEARCH_PAGE_SIZE = 20
+
+    /**
+     * The quality code of Huya's only selectable quality, 原画.
+     *
+     * Constant rather than derived: this field used to hold `HuyaSigner.cdnRank(cdnType)`,
+     * which is a *line* preference. Because the player persists the code as the platform's
+     * preferred quality, picking a CDN on one room wrote a "quality" that no other room
+     * could honour — and for a two-CDN page the codes collided with real Douyu rates.
+     */
+    const val ORIGINAL_QUALITY = 0
 
     const val UA_DESKTOP =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
