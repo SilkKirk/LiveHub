@@ -1662,3 +1662,132 @@ JVM 51 个 XML 共 447 条，仪器 1 个 XML 共 33 条（上一轮 32 条，�
 - **首页 chip 密度**（待办第 4 条）：斗鱼三级分类时四行 chip 占掉约 1/3 屏高。
 - 审计项 5-12 仍未做（四家平台协议细节、搜索页密度、直播页横竖屏与手势、跨设备同步）。
 - 小事：`createComposeRule` 的 deprecated 提示仍在，要迁就一起迁。
+## 第二十一轮迭代：设置页与同步页的底部，第一次被证明够得着
+
+### 缺陷是什么
+
+runbook 待办第 3 条说"设置页、同步页日志等长列表没有 `performScrollTo` 覆盖，横屏或小屏下
+**可能有**控件够不着而测试全绿"。上一轮的摸底把后半句写得更重：`13-sync.png` 里「我的设备」
+标题被底栏切掉一半、日志一条都看不见。
+
+先把这个猜测验掉：两个页面**本来就是 `LazyColumn`**（`SettingsScreen.kt:38`、
+`SyncScreen.kt:85`），`LazyColumn` 按像素滚动，比视口高的单个 `item` 也照样能滚完。所以
+"控件够不着"对这两页**不成立**——这一条待办的真实内容是"断言缺失"，不是"缺陷已确认"。
+`13-sync.png` 里日志看不见只是它在折叠线以下，正常。
+
+那为什么还是要写？因为这条保证**没有任何东西钉住**。把 `LazyColumn` 换成 `Column`、或者把
+同步日志塞进一个高高的 `item {}`，日志立刻变得够不着，而当时的测试会**全绿**——这两页在
+本轮之前**一条测试都没有**（`PlayerSettingsTest` 只覆盖播放器设置弹层，`DanmakuListOrderTest`
+只覆盖弹幕面板）。
+
+### 为什么会这样
+
+`performScrollTo` 类断言缺位的经典后果：`assertExists` 对"在树里但画在视口外"的节点是
+**通过**的。第十九轮和第二十轮已经各撞过一次同样的机制（弹幕停在框外、面板选项在折叠线
+以下），这是第三次，只是这次换成了整页。
+
+### 怎么修的
+
+新增 `app/src/test/.../ui/screens/LongListReachabilityTest.kt`（Robolectric，
+`@Config(qualifiers = "w320dp-h640dp")`，把内容套在 `Box(Modifier.size(320.dp, 640.dp))`
+里，跟 `PlayerSettingsTest` 同一套做法），四条断言：
+
+| 测试 | 断言的东西 |
+| --- | --- |
+| `the last sync log row is reachable on a 320x640 screen` | 滚到八条日志的**最后一行**并 `assertIsDisplayed` |
+| `the sync log heading is reachable on a 320x640 screen` | 「同步记录」标题也够得着 |
+| `the about section is reachable on a 320x640 screen` | 设置页滚到「关于」里的 `LiveHub` |
+| `the about section is still reachable behind a long keyword list` | 十个屏蔽词之后再滚到「关于」 |
+
+用 `performScrollToNode` 而不是 `assertExists`，是因为它**在目标不在树里、或树里没有可滚
+节点时都会抛**，正好把"区块被组合了"和"用户能到达"两件事一起钉住；再用 `assertIsDisplayed`
+挡掉"滚了但还停在视口外"。
+
+日志 fixture 用八条而不是三条，且最后一条的 scope（`搜索历史`）在前七条里不重复——否则
+matcher 可能撞上靠前的那一行，测试没滚就绿了。
+
+截图侧给 `capture()` 加了 `scrollToText: String? = null`（默认 `null`，其余 25 张零改动），
+滚动的几帧要**临时把 `mainClock.autoAdvance` 打开**：懒列表的滚动落在帧边界上，而截图用的
+是冻结时钟，不放开时钟就滚不动。
+
+新增两张：
+
+- `13b-sync-log`：滚到 `播放设置 · 小米平板 6`（日志最后一行）
+- `15b-settings-about`：滚到 `LiveHub`（关于卡片）
+
+### 踩的坑（两次红灯，都记下来）
+
+**坑一：`onNode` 不是可以 import 的扩展函数。** 第一版三个文件都写了
+`import androidx.compose.ui.test.onNode`，`Build & test` 直接
+`Unresolved reference 'onNode'`（`LongListReachabilityTest.kt:11:33`）。`onNode` /
+`onAllNodes` 是 `SemanticsNodeInteractionsProvider` 的**接口成员**，`composeRule.onNode(...)`
+本来就能调；`onNodeWithText` / `onRoot` / `performScrollToNode` / `hasScrollAction` 才是顶层
+扩展。仪器测试 job 同时也红了——`ScreenshotTest.kt` 里有同一行，`compileDebugAndroidTestKotlin`
+挂在同一处，所以连截图都没产出。
+
+**坑二：`关联设备` 弹层的滚动改动，撤回了。** 本轮一开始顺手改了 `MatchingCodeDialog`：
+它的正文是普通 `Column`，而 `AlertDialog` 的 text 槽会被窗口高度截断且自己不滚，横屏
+（640×360 减掉弹层边距）或大字号下底部几行会被裁掉，最后一个正是「重新生成本机匹配码」。
+加上 `verticalScroll` 后配了 `SyncDialogReachabilityTest`（`w640dp-h360dp-land`）。
+
+结果这条测试在 Robolectric 下**根本跑不起来**：
+
+```
+the regenerate code button is reachable in the landscape dialog — AppNotIdleException:
+Compose did not get idle after 125201 attempts in 60 SECONDS
+the six digit field is reachable in the landscape dialog — java.lang.OutOfMemoryError: Java heap space
+```
+
+于是整条改动撤回，`SyncScreen.kt` 逐字节回到 `450d52e`（`git diff 450d52e -- SyncScreen.kt`
+为空），`SyncDialogReachabilityTest.kt` 删除。理由写在这里而不是含糊过去：这个改动**既没
+被证明必要**（默认字号下正文到底有没有溢出，本机没有 SDK，量不出来），**也没被证明安全**
+（弹层里的 `verticalScroll` 很可能就是那个无限测量循环的来源）。带着一个未经验证的布局
+改动进主干，比留着一个写明了的疑点更糟。疑点已写进 runbook 待办第 3 条，下次要动它得先在
+真机上量到截断。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ 451 条（上轮 447，+4），0 失败 0 跳过 |
+| 仪器测试 | ✅ 35 条（上轮 33，+2），0 失败 0 跳过 |
+| Release assembly（R8） | ✅ |
+| CI 三 job | ✅ run 41573016413（commit 29fa137）全绿 |
+
+条数是从 run 的 artifact 里逐条累加的：`test-reports` 52 个 XML 共 451 条；`instrumented-reports`
+的 `TEST-test(AVD) - 14.xml` 头部 `tests="35" failures="0" errors="0" skipped="0"`。两个新截图
+测试的耗时：`syncLog` 0.751s、`settingsAbout` 0.693s。四条 JVM 断言耗时
+0.347 / 0.222 / 0.097 / 0.104 秒。
+
+### 截图里看到了什么
+
+27 张（上一轮 25 张），逐张 `read_image`，并与 `r20` 做 SHA256 两两比对：
+
+| 结果 | 张数 | 说明 |
+| --- | --- | --- |
+| 与 r20 逐字节相同 | 25 | `scrollToText` 默认 `null`，没有连带改动 |
+| 新增 | 2 | `13b-sync-log.png`（48740 字节）、`15b-settings-about.png`（39247 字节） |
+
+`13b-sync-log` 里第一次看见完整的「同步记录」：三行日志，`↓ 关注列表 · 小米平板 6 /
+11-14 22:15 接收 3 条`、`↑ 分区订阅 · 小米平板 6 / 11-14 22:14 发送 2 条`、
+`↑ 播放设置 · 小米平板 6 / 11-14 22:14 发送 0 条 · 对方拒绝连接`。上面「我的设备」卡片这次
+是完整的：本机 Pixel 7，下面小米平板 6，带垃圾桶解除按钮和"关联于 … · 最近 …"。滚动位置
+正好让最后一行贴着底栏上沿——这也是"够得着"的视觉证据。
+
+`15b-settings-about` 里第一次看见「账号」和「关于」：「哔哩哔哩账号」卡片带说明和「扫码登录」
+按钮；「关于」卡片里 `LiveHub` 与"聚合直播客户端，支持斗鱼、虎牙、抖音与哔哩哔哩。仅用于
+学习交流。"。上面还能看到屏蔽词 广告 / 刷屏 / 666 各自带「移除」。
+
+顺带确认：`13-sync` 与 `15-settings` 与 r20 **逐字节相同**，说明把状态抽成 `syncState()` /
+`settingsState()` 两个函数没有改变任何渲染。
+
+### 下一轮
+
+- **首页 chip 密度**（待办第 4 条）：斗鱼三级分类时四行 chip（平台行在 320dp 下还折两行）
+  占掉约 1/3 屏高，只剩不到两排卡片；参考项目把平台放底部导航、分类收进「选择分类」弹层。
+  要动先想清楚平台切换器放哪儿。
+- 待办 5-12 的审计仍未做（四平台协议细节、搜索页密度、直播页横竖屏与手势、跨设备同步）。
+- `关联设备` 弹层的截断疑点（见上），要先能量到再改。
+- 小事：`createComposeRule` 的 deprecated 提示仍在，要迁到
+  `androidx.compose.ui.test.junit4.v2.createComposeRule` 就所有 Robolectric/仪器测试一起迁。
