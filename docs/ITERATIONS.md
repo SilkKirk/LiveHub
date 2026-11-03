@@ -2258,6 +2258,17 @@ Regex(""""(?:activityCount|totalCount)"\s*:\s*"?(\d+)"?""")
 `METHOD_GIFT`、`ACK_INTERVAL_MILLIS`、`FIELD_PAYLOAD_ENCODING`、`URL_PARTITION`
 （非 v2 那条）四个常量全仓库只有定义处命中，文档与测试都没有引用，删掉。
 
+### 顺带更正 README 的一条过时结论
+
+README 的"抖音已知限制"写着 `/partition/detail/room` 对匿名客户端恒返回 HTTP 444、
+因此抖音只显示一个推荐分区、列表就是 feed 的 6 个房间。**当前代码不是这样**：
+`DouyinApi.rooms()` 走 `/v2/` 且带 `a_bogus`，注释里记录了实测 `status_code = 0`、
+每个分区 15 个真实房间；分区目录 9 组 306 个随 APK 打包；推荐流是签名被拒时的降级路径。
+
+按"runbook 与代码不符时以代码为准"，README 已按当前实现改写，并把两种失败形态分开写：
+`/room/` 返回 444，`/room/v2/` 返回 **HTTP 200 + 零长度 body**（后者看起来就像"分区为空"，
+是最容易被误判成缺陷的一种）。
+
 ### 本轮逐项审计的其余结论（有依据，无改动）
 
 - **分区**：`app/src/main/assets/categories/douyin_categories.json` 与参考项目
