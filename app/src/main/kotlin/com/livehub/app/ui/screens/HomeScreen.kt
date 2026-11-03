@@ -1,43 +1,56 @@
 package com.livehub.app.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.Icons
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.ErrorState
@@ -47,12 +60,40 @@ import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 
 /** Below this count a single-page result gets an explicit end-of-list hint. */
 private const val NO_MORE_HINT_THRESHOLD = 21
 
-/** Home screen: platform switcher, category pills and the room grid. */
+/**
+ * The category tree, resolved once and shared by the inline row and the picker.
+ *
+ * @property groups the distinct group names the platform publishes ("网游" / "手游" / …), in
+ *   the order the platform lists them.
+ * @property activeGroup the group the selected category belongs to, null before a selection.
+ * @property visible the categories of [activeGroup] — or every category when the platform
+ *   publishes a single group, because then the grouping carries no information and hiding the
+ *   rest behind a picker would be pure cost.
+ */
+private data class CategoryLevels(
+  val groups: List<String>,
+  val activeGroup: String?,
+  val visible: List<Category>,
+)
+
+private fun categoryLevelsOf(state: UiState): CategoryLevels {
+  val groups = state.categories.mapNotNull { it.parentName }.distinct()
+  val active = state.selectedCategory?.parentName
+  val visible = if (groups.size > 1 && active != null) {
+    state.categories.filter { it.parentName == active }
+  } else {
+    state.categories
+  }
+  return CategoryLevels(groups = groups, activeGroup = active, visible = visible)
+}
+
+/** Home screen: platform switcher, one category row and the room grid. */
 @Composable
 fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val gridState = rememberLazyGridState()
@@ -71,92 +112,121 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
         state.rooms.isNotEmpty()
     }
   }
+  val levels = remember(state.categories, state.selectedCategory) { categoryLevelsOf(state) }
+  // Keyed on the platform: the panel lists the tree of the platform that was showing, and a
+  // switch must not leave it open over a tree that no longer exists.
+  var pickerOpen by remember(state.platform) { mutableStateOf(false) }
 
   LaunchedEffect(shouldLoadMore, state.rooms.size) {
     if (shouldLoadMore) onAction(UiAction.LoadMore)
   }
 
-  Column(modifier = Modifier.fillMaxSize()) {
-    PlatformBar(state = state, onAction = onAction)
-    CategoryRow(state = state, onAction = onAction)
+  // Back closes the panel rather than the app. `LiveHubRoot` only claims back for other
+  // destinations, so without this the panel would be a trap on the one screen that has none.
+  BackHandler(enabled = pickerOpen) { pickerOpen = false }
 
-    RefreshableBox(
-      refreshing = refreshing,
-      enabled = !state.loading,
-      onRefresh = { onAction(UiAction.Refresh) },
-      modifier = Modifier.fillMaxSize(),
-    ) {
-      if (state.rooms.isEmpty() && state.loading) {
-        StreamerGridSkeleton()
-      } else if (state.rooms.isEmpty() && state.error != null) {
-        ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
-      } else if (state.rooms.isEmpty()) {
-        EmptyState(
-          title = "这个分区暂时没有直播",
-          description = "${state.selectedCategory?.name ?: ""} 还没有人在播，换个分区看看？",
-          actionLabel = "刷新",
-          onAction = { onAction(UiAction.Refresh) },
-        )
-      } else {
-        LazyVerticalGrid(
-          columns = GridCells.Fixed(2),
-          state = gridState,
-          contentPadding = PaddingValues(12.dp),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp),
-          modifier = Modifier.fillMaxSize(),
-        ) {
-          items(items = state.rooms, key = { it.key }) { streamer ->
-            StreamerCard(
-              streamer = streamer,
-              followed = followedKeys.contains(streamer.key),
-              onClick = { onAction(UiAction.OpenRoom(streamer)) },
-              onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
-            )
-          }
-          if (state.loadingMore) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-              InlineLoader()
-            }
-          } else if (!state.hasNextPage && state.rooms.size < NO_MORE_HINT_THRESHOLD) {
-            // Douyin's feed caps at six rooms and Douyu's directory serves one page;
-            // saying so beats an endless empty scroll.
-            item(span = { GridItemSpan(maxLineSpan) }) {
-              Text(
-                text = "已经到底了 · ${state.platform.displayName}当前只提供这些直播",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+  Box(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+      PlatformTabs(state = state, onAction = onAction)
+      CategoryRow(
+        state = state,
+        levels = levels,
+        onOpenPicker = { pickerOpen = true },
+        onAction = onAction,
+      )
+
+      RefreshableBox(
+        refreshing = refreshing,
+        enabled = !state.loading,
+        onRefresh = { onAction(UiAction.Refresh) },
+        modifier = Modifier.fillMaxSize(),
+      ) {
+        if (state.rooms.isEmpty() && state.loading) {
+          StreamerGridSkeleton()
+        } else if (state.rooms.isEmpty() && state.error != null) {
+          ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
+        } else if (state.rooms.isEmpty()) {
+          EmptyState(
+            title = "这个分区暂时没有直播",
+            description = "${state.selectedCategory?.name ?: ""} 还没有人在播，换个分区看看？",
+            actionLabel = "刷新",
+            onAction = { onAction(UiAction.Refresh) },
+          )
+        } else {
+          LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            state = gridState,
+            contentPadding = PaddingValues(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize(),
+          ) {
+            items(items = state.rooms, key = { it.key }) { streamer ->
+              StreamerCard(
+                streamer = streamer,
+                followed = followedKeys.contains(streamer.key),
+                onClick = { onAction(UiAction.OpenRoom(streamer)) },
+                onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
               )
+            }
+            if (state.loadingMore) {
+              item(span = { GridItemSpan(maxLineSpan) }) {
+                InlineLoader()
+              }
+            } else if (!state.hasNextPage && state.rooms.size < NO_MORE_HINT_THRESHOLD) {
+              // Douyin's feed caps at six rooms and Douyu's directory serves one page;
+              // saying so beats an endless empty scroll.
+              item(span = { GridItemSpan(maxLineSpan) }) {
+                Text(
+                  text = "已经到底了 · ${state.platform.displayName}当前只提供这些直播",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  textAlign = TextAlign.Center,
+                  modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                )
+              }
             }
           }
         }
       }
     }
+
+    if (pickerOpen) {
+      CategoryPicker(
+        state = state,
+        levels = levels,
+        onDismiss = { pickerOpen = false },
+        onAction = onAction,
+      )
+    }
   }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * The platform switcher, one line tall.
+ *
+ * It used to be a wrapping `FlowRow` of `FilterChip`s, and four of those need about 296dp of
+ * label plus padding — more than the 256dp a 320dp phone leaves beside the refresh button. So
+ * 哔哩哔哩 always wrapped onto a line of its own, under a row of three and level with nothing,
+ * and the bar cost 96dp of a 640dp screen on *every* home render. Text tabs need about 232dp
+ * for the same four labels and stay on one line, and a platform is a top-level destination
+ * rather than a filter, which is the shape a tab already means.
+ */
 @Composable
-private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
+private fun PlatformTabs(state: UiState, onAction: (UiAction) -> Unit) {
   Row(
-    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    // A horizontally scrolling row clipped the last chip to "哔" on narrow screens and
-    // gave no hint that more existed. Wrapping keeps every platform fully readable and
-    // still fits on one line whenever the screen is wide enough.
-    FlowRow(
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalArrangement = Arrangement.spacedBy(4.dp),
-      modifier = Modifier.weight(1f, fill = true),
+    LazyRow(
+      horizontalArrangement = Arrangement.spacedBy(2.dp),
+      modifier = Modifier.weight(1f),
     ) {
-      Platform.entries.forEach { platform ->
-        FilterChip(
+      items(Platform.entries, key = { it.name }) { platform ->
+        PlatformTab(
+          label = platform.displayName,
           selected = state.platform == platform,
           onClick = { onAction(UiAction.SelectPlatform(platform)) },
-          label = { Text(platform.displayName, maxLines = 1, softWrap = false) },
         )
       }
     }
@@ -166,87 +236,107 @@ private fun PlatformBar(state: UiState, onAction: (UiAction) -> Unit) {
   }
 }
 
-/**
- * The category selector: up to three chip rows.
- *
- * Row 1 is the group ("网游" / "手游" / …) for platforms that publish one; row 2 is the
- * concrete category inside the active group; row 3 is the third level, which only Douyu
- * publishes, led by 全部 so the level can be cleared again.
- *
- * Rows 1 and 2 are a narrowing pair and row 3 is a *filter inside* row 2, not a replacement:
- * selecting a third level leaves `selectedCategory` on the parent so row 2 keeps its
- * highlight and the user can still tell which category they are inside.
- *
- * Nothing here is pinnable — a subscribed-categories row and its 订阅 toggle used to sit above
- * these, adding a permanent button to every screen for a feature that only repeated what
- * selecting a category already does.
- */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
+private fun PlatformTab(label: String, selected: Boolean, onClick: () -> Unit) {
+  val color =
+    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+  Column(
+    modifier = Modifier
+      .clip(RoundedCornerShape(10.dp))
+      .clickable(onClick = onClick)
+      .padding(horizontal = 10.dp, vertical = 4.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(2.dp),
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelLarge,
+      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+      color = color,
+      maxLines = 1,
+    )
+    // The marker is a fixed-width underline rather than a filled pill: a tab whose background
+    // grows with the label would shift every neighbour as the selection moves.
+    Box(
+      modifier = Modifier
+        .width(16.dp)
+        .height(2.dp)
+        .clip(RoundedCornerShape(1.dp))
+        .background(if (selected) color else Color.Transparent),
+    )
+  }
+}
+
+/**
+ * The category selector: one row.
+ *
+ * It used to be up to three stacked chip rows — group, category, third level — which at 320dp
+ * cost 112dp of chips under a two-line platform row and left less than two rows of cards
+ * visible. The reference client keeps exactly one chip row above its grid
+ * (`screenshots/douyu.jpeg`) and puts the rest of the tree behind a "选择分类" sheet
+ * (`DouyuHomeScreen.kt`), so the group is now a single chip that opens [CategoryPicker]
+ * instead of a row of its own.
+ *
+ * The third level stays inline. It is a filter *inside* the selected category rather than a
+ * sibling of it, and the reference keeps its `Cate3Chips` row inline for the same reason.
+ * 全部 leads it so the level can be cleared without hunting for the parent chip — without it
+ * the only exit was re-tapping the parent, which was not marked as selected.
+ */
+@Composable
+private fun CategoryRow(
+  state: UiState,
+  levels: CategoryLevels,
+  onOpenPicker: () -> Unit,
+  onAction: (UiAction) -> Unit,
+) {
   if (state.categories.isEmpty()) return
-  val parents = remember(state.categories) {
-    state.categories.mapNotNull { it.parentName }.distinct()
-  }
-  // Categories of the group the user is currently in. With a single group (Douyin,
-  // Huya) this is simply every category.
-  val activeParent = state.selectedCategory?.parentName
-  val visibleCategories = remember(state.categories, activeParent, parents.size) {
-    if (parents.size > 1 && activeParent != null) {
-      state.categories.filter { it.parentName == activeParent }
-    } else {
-      state.categories
-    }
-  }
 
   Column(modifier = Modifier.fillMaxWidth()) {
-    // Row 1: the group tabs, only when the platform actually has groups.
-    if (parents.size > 1) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      // Only when there is something to hide: a platform with a single group shows every
+      // category inline, so a picker would be a second way to do what the row already does.
+      if (levels.groups.size > 1) {
+        AssistChip(
+          onClick = onOpenPicker,
+          label = { Text(levels.activeGroup ?: "选择分类", maxLines = 1) },
+          trailingIcon = {
+            Icon(
+              imageVector = Icons.Filled.ArrowDropDown,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+          },
+          modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+        )
+      }
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        state = rememberLazyListState(),
+        modifier = Modifier.weight(1f),
       ) {
-        items(parents) { parent ->
-          val first = state.categories.firstOrNull { it.parentName == parent }
+        items(levels.visible, key = { it.key }) { category ->
           FilterChip(
-            selected = activeParent == parent,
-            onClick = { first?.let { onAction(UiAction.SelectCategory(it)) } },
-            label = { Text(parent, fontWeight = FontWeight.Medium) },
+            // The parent stays highlighted while a third level is open, so the row still says
+            // which category the list is inside. It used to require
+            // `selectedSubCategory == null`, which left both rows looking unselected and made
+            // "go back to the whole category" look like a no-op.
+            selected = state.selectedCategory?.key == category.key,
+            onClick = { onAction(UiAction.SelectCategory(category)) },
+            label = { Text(category.name, maxLines = 1) },
           )
         }
       }
     }
 
-    // Row 2: the concrete categories inside the active group.
-    LazyRow(
-      contentPadding = PaddingValues(horizontal = 12.dp),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      state = rememberLazyListState(),
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      items(visibleCategories, key = { it.key }) { category ->
-        FilterChip(
-          // The parent stays highlighted while a third level is open, so the row still says
-          // which category the list is inside. It used to require
-          // `selectedSubCategory == null`, which left both rows looking unselected and made
-          // "go back to the whole category" look like a no-op.
-          selected = state.selectedCategory?.key == category.key,
-          onClick = { onAction(UiAction.SelectCategory(category)) },
-          label = { Text(category.name) },
-        )
-      }
-    }
-
-    // Row 3: the third level, offered only by platforms that publish one (Douyu).
     if (state.subCategories.isNotEmpty()) {
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        // The reference client leads this row with 全部 (`Cate3Chips` in
-        // DouyuHomeScreen.kt) so the level can be cleared without hunting for the parent
-        // chip. Without it the only exit was re-tapping the parent, which was not marked
-        // as selected.
         item(key = "sub-all") {
           FilterChip(
             selected = state.selectedSubCategory == null,
@@ -262,6 +352,115 @@ private fun CategoryRow(state: UiState, onAction: (UiAction) -> Unit) {
           )
         }
       }
+    }
+  }
+}
+
+/**
+ * The rest of the category tree: groups on top, the chosen group's categories below.
+ *
+ * A sheet is what the reference client does for the same job, but this is drawn in the
+ * activity window rather than as a `ModalBottomSheet`, for two reasons. A dialog-hosted sheet
+ * is a separate window, and the screenshot harness captures `onRoot()` of the activity — a
+ * render is the only visual proof this page has, so the panel has to be in it. And the panel
+ * needs no animation, so a frozen-clock capture shows it fully open instead of mid-slide.
+ *
+ * Switching the group here is a browse step, not a selection: it only changes the list below.
+ * Picking a category is what changes the page, and it closes the panel.
+ */
+@Composable
+private fun CategoryPicker(
+  state: UiState,
+  levels: CategoryLevels,
+  onDismiss: () -> Unit,
+  onAction: (UiAction) -> Unit,
+) {
+  var group by remember { mutableStateOf(levels.activeGroup) }
+  val listed = remember(state.categories, group) {
+    if (group == null) state.categories else state.categories.filter { it.parentName == group }
+  }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    // Scrim: tapping outside closes the panel, as the reference sheet's scrim does.
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.45f))
+        .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+    )
+    Surface(
+      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.62f).align(Alignment.BottomCenter),
+      shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+      color = MaterialTheme.colorScheme.surface,
+      tonalElevation = 3.dp,
+      shadowElevation = 8.dp,
+    ) {
+      Column(modifier = Modifier.fillMaxSize().padding(top = 16.dp)) {
+        Text(
+          text = "选择分类",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.SemiBold,
+          modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        if (levels.groups.size > 1) {
+          LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+          ) {
+            items(levels.groups, key = { it }) { name ->
+              FilterChip(
+                selected = name == group,
+                onClick = { group = name },
+                label = { Text(name) },
+              )
+            }
+          }
+        }
+        LazyColumn(
+          contentPadding = PaddingValues(vertical = 8.dp),
+          modifier = Modifier.fillMaxWidth().weight(1f),
+        ) {
+          items(listed, key = { it.key }) { category ->
+            CategoryPickerRow(
+              name = category.name,
+              selected = category.key == state.selectedCategory?.key,
+              onClick = {
+                onAction(UiAction.SelectCategory(category))
+                onDismiss()
+              },
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun CategoryPickerRow(name: String, selected: Boolean, onClick: () -> Unit) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clickable(onClick = onClick)
+      .padding(horizontal = 16.dp, vertical = 14.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = name,
+      style = MaterialTheme.typography.bodyLarge,
+      fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+      color =
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+      modifier = Modifier.weight(1f),
+    )
+    if (selected) {
+      Icon(
+        imageVector = Icons.Filled.Check,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(18.dp),
+      )
     }
   }
 }

@@ -10,12 +10,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -233,6 +235,21 @@ class ScreenshotTest {
   @Test
   fun homeOtherCategory() =
     capture("03-home-other-category", baseState().copy(selectedCategory = douyuCategories[2]))
+
+  /**
+   * The category picker, which is where every group but the active one now lives.
+   *
+   * The home screen used to stack one chip row per level. Collapsing that into a single row
+   * moved the group list behind this panel, so the panel is the only thing that still shows
+   * 手游 and 娱乐 — and it had no render at all, because it cannot be reached without a tap.
+   */
+  @Test
+  fun homeCategoryPicker() = capture(
+    "01b-home-category-picker",
+    baseState(),
+    clickText = "网游",
+    expectText = "选择分类",
+  )
 
   /**
    * The third chip row, which only Douyu publishes.
@@ -463,6 +480,11 @@ class ScreenshotTest {
    *   fold. Reaching it is part of what the render asserts: the scroll fails outright when the
    *   list cannot scroll, so a page that merely *contains* a section cannot pass as one that
    *   can show it.
+   * @param clickText text to tap before capturing, for state the render has to be put into.
+   *   The panel it opens is drawn in the activity window with no animation, so one frozen frame
+   *   after the tap is the whole thing.
+   * @param expectText text the render must show *after* the tap. Without it a tap that did
+   *   nothing would still produce a plausible-looking screenshot of the screen underneath.
    */
   private fun capture(
     name: String,
@@ -471,6 +493,8 @@ class ScreenshotTest {
     advanceMillis: Long = 0L,
     onScreenText: String? = null,
     scrollToText: String? = null,
+    clickText: String? = null,
+    expectText: String? = null,
   ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
@@ -502,6 +526,18 @@ class ScreenshotTest {
     // frame instead.
     composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
+
+    if (clickText != null) {
+      // The tap lands synchronously but the recomposition that reveals the panel needs a frame,
+      // and the clock is frozen for the capture — so that frame is advanced explicitly.
+      composeRule.onNodeWithText(clickText).performClick()
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.waitForIdle()
+    }
+
+    expectText?.let { text ->
+      composeRule.onNodeWithText(text).assertIsDisplayed()
+    }
 
     if (scrollToText != null) {
       // A lazy list applies its scroll on a frame boundary and the clock is frozen for the
