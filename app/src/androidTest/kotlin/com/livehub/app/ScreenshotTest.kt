@@ -3,8 +3,11 @@ package com.livehub.app
 import android.os.Environment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -26,6 +29,7 @@ import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.BiliLoginUi
 import com.livehub.app.ui.screens.PlayerContent
+import com.livehub.app.ui.screens.PlayerSettings
 import com.livehub.core.model.Category
 import com.livehub.core.model.DanmakuMessage
 import com.livehub.core.model.Platform
@@ -192,6 +196,106 @@ class ScreenshotTest {
       DanmakuMessage("douyu:1", "观众D", "刚来，错过了什么"),
       DanmakuMessage("douyu:1", "观众E", "主播能开个麦吗"),
     ),
+  )
+
+  /**
+   * A 虎牙 room as `HuyaApi.playback` now returns it: one quality, three CDN lines.
+   *
+   * The page publishes six `gameStreamInfoList` entries for three hosts, and every entry
+   * used to become a variant labelled 原画 — six chips, five of them indistinguishable from
+   * another and two thirds pointing at a CDN another chip already offered. The line labels
+   * are the page's own `sCdnType` values, which is also what the Douyu selector shows.
+   */
+  private fun huyaPlayerState(): UiState = baseState().copy(
+    screen = Screen.Player,
+    platform = Platform.HUYA,
+    categories = huyaCategories,
+    selectedCategory = huyaCategories.first(),
+    room = huyaRooms[0],
+    variants = listOf(
+      StreamVariant(
+        "原画",
+        "http://al-game.flv.huya.com/src/660000.flv?wsSecret=x",
+        "AL",
+        qualityRank = 0,
+        qualityCode = 0,
+      ),
+    ),
+    selectedVariant = StreamVariant(
+      "原画",
+      "http://al-game.flv.huya.com/src/660000.flv?wsSecret=x",
+      "AL",
+      qualityRank = 0,
+      qualityCode = 0,
+    ),
+    lines = listOf("AL", "HS", "TX"),
+    selectedLine = "AL",
+  )
+
+  /**
+   * A 哔哩哔哩 room, whose two axes are quality (qn) and CDN host.
+   *
+   * No render ever showed a B站 playback page: the only player screenshots used a Douyu
+   * room, so the platform whose `variants` carry a host name as their line label had no
+   * visual coverage at all.
+   */
+  private fun bilibiliPlayerState(): UiState = baseState().copy(
+    screen = Screen.Player,
+    platform = Platform.BILIBILI,
+    categories = bilibiliCategories,
+    selectedCategory = bilibiliCategories.first(),
+    room = streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
+    variants = listOf(
+      StreamVariant("原画", "https://d1--cn-gotcha.bilivideo.com/live/1.m3u8", "d1--cn-gotcha.bilivideo.com", isHls = true, qualityRank = 0, qualityCode = 10_000),
+      StreamVariant("蓝光", "https://d1--cn-gotcha.bilivideo.com/live/2.m3u8", "d1--cn-gotcha.bilivideo.com", isHls = true, qualityRank = 2, qualityCode = 4_000),
+      StreamVariant("高清", "https://d1--cn-gotcha.bilivideo.com/live/3.m3u8", "d1--cn-gotcha.bilivideo.com", isHls = true, qualityRank = 3, qualityCode = 250),
+    ),
+    selectedVariant = StreamVariant(
+      "原画",
+      "https://d1--cn-gotcha.bilivideo.com/live/1.m3u8",
+      "d1--cn-gotcha.bilivideo.com",
+      isHls = true,
+      qualityRank = 0,
+      qualityCode = 10_000,
+    ),
+    lines = listOf("d1--cn-gotcha.bilivideo.com", "cn-hb-bj.bilivideo.com"),
+    selectedLine = "d1--cn-gotcha.bilivideo.com",
+    danmaku = listOf(
+      DanmakuMessage("bilibili:20", "观众A", "前排围观"),
+      DanmakuMessage("bilibili:20", "观众B", "这个直播间氛围真好"),
+    ),
+  )
+
+  /** Search results for 虎牙, which no render had ever produced. */
+  private fun huyaSearchState(): UiState = baseState().copy(
+    screen = Screen.Search,
+    platform = Platform.HUYA,
+    categories = huyaCategories,
+    selectedCategory = huyaCategories.first(),
+    searchQuery = "英雄联盟",
+    searchResults = listOf(
+      streamer(Platform.HUYA, "660000", "Uzi", "复出首播，感谢大家支持", 17_863_363),
+      streamer(Platform.HUYA, "660001", "骚男", "快乐游戏，快乐生活", 88_000),
+      streamer(Platform.HUYA, "660002", "虎牙赛事", "TES vs iG 夏季赛", 1_204_517),
+      streamer(Platform.HUYA, "660003", "青蛙", "深夜上分，不鸽", 12_300, live = false),
+    ),
+    searchHistory = listOf("英雄联盟"),
+  )
+
+  /** Search results for 哔哩哔哩, likewise never rendered. */
+  private fun bilibiliSearchState(): UiState = baseState().copy(
+    screen = Screen.Search,
+    platform = Platform.BILIBILI,
+    categories = bilibiliCategories,
+    selectedCategory = bilibiliCategories.first(),
+    searchQuery = "英雄联盟",
+    searchResults = listOf(
+      streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
+      streamer(Platform.BILIBILI, "21", "老番茄", "新视频首发", 88_000),
+      streamer(Platform.BILIBILI, "22", "嘉然今天吃什么", "看比赛，顺便聊聊天", 320_000),
+      streamer(Platform.BILIBILI, "23", "小约翰可汗", "硬核历史，随便聊聊", 6_700, live = false),
+    ),
+    searchHistory = listOf("英雄联盟", "户外"),
   )
 
   /** The sync page as a paired device sees it, with three entries in the exchange log. */
@@ -460,6 +564,63 @@ class ScreenshotTest {
     ),
   )
 
+  /**
+   * Search results for 虎牙 and 哔哩哔哩.
+   *
+   * Every search screenshot up to round 27 used 斗鱼 fixtures, so the two platforms whose
+   * search plumbing was rewritten (Huya's popularity field, Bilibili's result bucket) had no
+   * visual coverage: the cards were proven only by JVM tests.
+   */
+  @Test
+  fun searchHuya() = capture("11b-search-huya", huyaSearchState())
+
+  @Test
+  fun searchBilibili() = capture("11c-search-bilibili", bilibiliSearchState())
+
+  /** A 哔哩哔哩 playback page, which no render had produced either. */
+  @Test
+  fun playerBilibili() = capture("17d-player-bilibili", bilibiliPlayerState())
+
+  /**
+   * The settings panel of a 虎牙 room: one quality chip, three line chips.
+   *
+   * This is the render that would have caught the defect of round 27: the panel used to list
+   * six variants labelled 原画, and nothing in a text assertion could tell them apart. It is
+   * composed directly because the sheet only opens on a tap and the screenshot has to freeze
+   * the clock, but it is the same composable `PlayerScreen` opens.
+   */
+  @Test
+  fun playerSettingsHuya() {
+    val state = huyaPlayerState()
+    capture(
+      "22-player-settings-huya",
+      state,
+      content = {
+        MaterialTheme {
+          Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+          ) {
+            PlayerSettings(state = state, variant = state.selectedVariant, onAction = {})
+          }
+        }
+      },
+    )
+  }
+
+  /**
+   * The decoder-failure state, which had no render at all.
+   *
+   * `19-player-error` shows a *resolve* failure (`state.error`); this one is the player
+   * reporting that the URL it was given cannot be decoded (`state.playerError`). The two are
+   * deliberately separate states because only the second one means the URL itself is dead.
+   */
+  @Test
+  fun playerDecoderError() = capture(
+    "19c-player-decoder-error",
+    playerState().copy(playerError = "无法解码该流（H.265-in-FLV）"),
+  )
+
   // -------------------------------------------------------------------- helpers ---
 
   /**
@@ -485,6 +646,9 @@ class ScreenshotTest {
    *   after the tap is the whole thing.
    * @param expectText text the render must show *after* the tap. Without it a tap that did
    *   nothing would still produce a plausible-looking screenshot of the screen underneath.
+   * @param content replaces the screen the state would otherwise pick. Used for panels that a
+   *   state cannot express — the player settings sheet is switched on by a tap, and it is
+   *   exactly where the quality and line chips live.
    */
   private fun capture(
     name: String,
@@ -495,10 +659,13 @@ class ScreenshotTest {
     scrollToText: String? = null,
     clickText: String? = null,
     expectText: String? = null,
+    content: (@Composable () -> Unit)? = null,
   ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
-      if (state.screen == Screen.Player) {
+      if (content != null) {
+        content()
+      } else if (state.screen == Screen.Player) {
         // Rendered through PlayerContent so the screenshot does not depend on the sheet
         // state, and so a fullscreen render is reachable without a real gesture.
         //
@@ -646,7 +813,7 @@ class ScreenshotTest {
  * Draws a gradient plus a label so the capture has real content where the picture would
  * be; a real `PlayerView` is a `SurfaceView` and always captures as solid black.
  */
-@androidx.compose.runtime.Composable
+@Composable
 private fun VideoSurfaceStub(modifier: Modifier = Modifier) {
   Box(
     modifier = modifier.background(
