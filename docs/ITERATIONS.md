@@ -1076,3 +1076,122 @@ LaunchedEffect(display.size) {
 
 - **全屏横向弹幕的观感**：`DanmakuOverlay` 的飞行速度固定 8 秒，长弹幕会显得偏慢。
 - **"够得着"断言**：设置页、同步页日志等长列表，用 `performScrollTo` 覆盖。
+
+---
+
+## 第十七轮迭代：三级分类的翻页和刷新悄悄退回了二级分类
+
+### 缺陷是什么
+
+斗鱼是唯一有三级分类的平台（`cate2` 下面还有一层 `cate3`）。选中三级分类之后：
+
+- **往下滚动加载更多**，追加进来的是整个二级分类的房间——顶部还写着"峡谷之巅"，
+  下面却混进了英雄联盟其它子分类的直播间；
+- **下拉刷新**更彻底，直接把三级分类丢掉，列表变回二级。
+
+两个操作都不报错，列表也"有内容"，所以空态截图发现不了，`hasVisibleContent` 那种
+"是不是纯色"的断言同样发现不了。
+
+### 为什么会这样
+
+`selectSubCategory` 是故意**不**替换 `selectedCategory` 的——父级 chip 要保持高亮，
+否则用户在两级选择器里就找不到自己在哪（`MainViewModel.kt` 那句注释
+"keeping the parent selected"）。于是三级分类选中后，`selectedCategory` 仍然是父级。
+
+`loadMore()` 和 `refresh()` 却都直接读了 `selectedCategory`：
+
+```kotlin
+private fun loadMore() {
+  val category = current.selectedCategory ?: return   // ← 永远是父级
+  ...
+}
+```
+
+第一页是对的，因为 `selectSubCategory` 走的是 `loadRooms(platform, category)`，传进去的是
+三级分类本身；只有**第二页起**和**刷新**会退回。
+
+参考项目 `dtv_mobile` 的
+`shared/src/commonMain/kotlin/dtv/mobile/ui/screens/douyu/DouyuHomeScreen.kt` 里 `loadPage`
+每次都重新解析最深的选中项：
+
+```kotlin
+val result: PagedResult<Streamer> = if (selectedCate3 != null) {
+  appState.repo.fetchDouyuLiveListByCate3(cate3Id = selectedCate3!!.id, page = (page + 1).coerceAtLeast(1), limit = PAGE_SIZE)
+} else {
+  appState.repo.fetchDouyuLiveListByCate2(cate2Id = cate2.id, offset = page * PAGE_SIZE, limit = PAGE_SIZE)
+}
+```
+
+它的刷新（`PullToRefreshBox` 的 `onRefresh`）调的也是 `loadPage(reset = true)`，走同一条分支。
+差别就在这里：参考项目**每页都判断一次**，我们只在进入分类时判断了一次。
+
+### 怎么修的
+
+抽出 `activeCategory(state) = state.selectedSubCategory ?: state.selectedCategory`，
+`loadMore()` 与 `refresh()` 都改走它。生产代码只动了这两处加一个私有函数。
+
+### 测试为什么断言 URL 而不是 state
+
+两种情况下 `UiState` 长得一模一样：`selectedCategory` 都是父级、`selectedSubCategory`
+都是三级分类。错的只是**发出去的那个请求**，所以 `CategoryPaginationTest` 断言真实 URL。
+
+为此给 `AppContainer` 加了 `adaptersOverride` 构造参数——这个类的注释本来就写着
+"Swapping an implementation in a test is a constructor call"，只是之前没留这个口子。
+测试里装的是**真实的 `DouyuAdapter`** 配一个记录 URL 的假 `HttpClient`，因此断言顺带覆盖了
+`c3:` 前缀 → `mixListV1/3_<id>` 这层映射：
+
+| 测试 | 断言 |
+| --- | --- |
+| 第一页就用三级分类 | `mixListV1/3_3683/1` |
+| 翻页仍在三级分类内 | `mixListV1/3_3683/2`（旧代码是 `2_1/2`） |
+| 刷新仍在三级分类内 | `mixListV1/3_3683/1`（旧代码是 `2_1/1`） |
+
+三条在旧代码上都会红。假响应必须返回满 `PAGE_SIZE` 条房间，否则
+`DouyuApi.rooms` 判定"没有下一页"，`LoadMore` 根本不会发请求，测试会假绿。
+
+### 顺带纠正一件之前记错的事
+
+`ci.py shots` 会把**字节数相同**的两张图标成 `<-- identical to ...`。本轮
+`03-home-pinned.png` 与 `01-home.png` 都是 80037 字节，看起来正好像"状态根本没渲染"。
+把 23 张图逐个算 SHA256 之后：**23 个哈希两两不同，没有任何两张真的一样**。
+`ci.py` 比的是 `os.path.getsize`，不是内容：
+
+```python
+size = os.path.getsize(os.path.join(root, name))
+dup = seen.get(size)
+```
+
+`01` 和 `03` 只是"选中的 chip 从英雄联盟换成了绝地求生"，图案结构一样，压缩后字节数
+恰好相等。所以"字节数相同 = 真缺陷"这条经验在本轮不成立，得自己再核一遍哈希。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（含 `CategoryPaginationTest` 3 条） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+CI run 41559431300 三个 job 全绿（commit `ea3d062`）。
+
+截图：23 张与上一轮**逐字节相同**。这一轮改的是滚动时才发出的请求，界面本来就不该变，
+这个"没变"本身就是证据——没有顺手把首页改坏。逐张看过
+01/02/03/04/05/06/09/10/12/20/21。
+
+### 下一轮
+
+- **截图里渲染了三个不可能出现的状态**（本轮看截图时发现，都还没修）：
+  - `03-home-pinned` 名字里的"置顶"根本不存在——`HomeScreen.kt` 的注释写着
+    "Nothing here is pinnable"，那张图证明的只是"换了一个 chip 选中"；
+  - `20-huya-home` 和 `21-bilibili-home` 都只换了 `platform` 与 `categories`，没换
+    `selectedCategory`，于是渲染出"平台是虎牙、选中的却是一个斗鱼分区"的状态：
+    20 里那个"网游"chip 因此没有任何选中，21 里则是组选中了、分类一个都没选中。
+    真机上不可能出现。
+- **首次进入没有三级分类行**：`loadCategories` 只设 `selectedCategory` 和房间，不拉
+  `subCategories`（只有 `selectCategory` 会拉），所以启动或切平台后要等用户点一下分类
+  chip，第三行才出现。
+- **全屏横向弹幕速度固定**（runbook 待办第 2 条）：`DanmakuOverlay` 飞行时长写死 8 秒。
+  注意参考项目的 `ScrollingDanmakuItem` 同样写死 9000ms，所以这条不能拿"参考项目这么做"
+  当依据，得自己判断要不要按字数换算。
+- **"够得着"断言**：设置页、同步页日志等长列表仍缺 `performScrollTo` 覆盖。
