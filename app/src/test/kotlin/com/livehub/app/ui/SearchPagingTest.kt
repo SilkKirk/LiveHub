@@ -201,9 +201,12 @@ class SearchPagingTest {
     /**
      * Makes the next search answer with an HTML notice instead of JSON.
      *
-     * `DouyuResponseRules` reads that as a taken-down room and raises
-     * `PlatformOfflineException`, which is deliberately not retried — so a failing request here
-     * fails once and immediately, unlike an HTTP error.
+     * `DouyuResponseRules` raises `PlatformOfflineException` for an HTML body, and that is
+     * deliberately not retried — so a failing request here fails once and immediately, unlike an
+     * HTTP error, which would be retried three times with backoff. The body deliberately does
+     * *not* carry one of the rule's "room is closed" markers: this is the generic
+     * "斗鱼返回了网页而不是数据" path, which is what a search would hit when the endpoint is
+     * degraded.
      */
     var failSearch = false
 
@@ -230,9 +233,9 @@ class SearchPagingTest {
     }
 
     private companion object {
-      /** The taken-down notice Douyu serves instead of JSON; see `DouyuResponseRules`. */
+      /** An HTML page where JSON was expected; see `DouyuResponseRules`. */
       const val HTML_NOTICE =
-        "<html><body><h1>您观看的房间已被关闭</h1></body></html>"
+        "<html><body><h1>服务暂时不可用，请稍后再试</h1></body></html>"
     }
   }
 }

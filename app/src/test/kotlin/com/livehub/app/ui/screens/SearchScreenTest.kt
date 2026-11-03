@@ -66,9 +66,20 @@ class SearchScreenTest {
     composeRule.waitForIdle()
   }
 
-  /** The node's box in the composed window, in dp. */
+  /**
+   * The node's box in the composed window, in dp.
+   *
+   * `useUnmergedTree` is what makes this measure the text rather than the card: a result row is
+   * clickable, and a clickable container merges its children's semantics into itself, so the
+   * merged node answers to every text it contains. Matching the merged node made the title and
+   * the viewer count resolve to the same box — 92dp tall, the whole card — and the position
+   * assertions then compared a node with itself.
+   */
   private fun bounds(text: String): NodeBox = with(composeRule.density) {
-    val rect = composeRule.onNodeWithText(text).fetchSemanticsNode().boundsInRoot
+    val rect = composeRule
+      .onNodeWithText(text, useUnmergedTree = true)
+      .fetchSemanticsNode()
+      .boundsInRoot
     NodeBox(
       left = rect.left.toDp().value,
       top = rect.top.toDp().value,
