@@ -1373,3 +1373,168 @@ CI run **41562103607**，commit `7586cd3`，三个 job 一次通过。
 - **首页 chip 密度**：见上一节。若要动，先想清楚平台切换器放哪儿。
 - 审计项 4-10（斗鱼/虎牙/抖音/B站 的协议细节、搜索页密度、直播页横竖屏与手势、
   跨设备同步的配对与增量传输）仍全部未做。
+
+## 第十九轮迭代：弹幕按速度飞，不按秒数飞
+
+### 缺陷是什么
+
+全屏（横屏、或竖屏全出血）弹幕层里，**每一条弹幕都在屏幕上待同样的 8 秒**，不管它有多长。
+因为行程是"屏宽 + 自身宽度"，时长却固定，速度就成了字数的函数：
+
+| 弹幕 | 宽度 | 旧速度 | 每秒经过固定点的字数 | 旧时长 | 新时长 |
+| --- | --- | --- | --- | --- | --- |
+| 3 字 | 0.14 屏宽 | 0.142 px/ms | 3.1 | 8 s | 6.3 s |
+| 10 字 | 0.45 屏宽 | 0.182 px/ms | 4.0 | 8 s | 8.0 s |
+| 30 字 | 1.36 屏宽 | 0.296 px/ms | 6.5 | 8 s | 13.0 s |
+
+（基准：一屏放得下 22 个汉字、16sp）
+
+短弹幕慢吞吞地爬，长弹幕被拖着飞，两者差一倍多。用户看到的不是"弹幕快慢一致"，
+而是"越长的弹幕越赶"。
+
+### 为什么会这样
+
+`DanmakuOverlay.kt` 里 `FLIGHT_MILLIS = 8_000` 同时喂给了两处：`DanmakuLine` 的 `tween`
+时长，和 `laneFreeAfterMs` 的轨道交接。但每条弹幕的行程是 `屏宽 + 自身宽度`，不是常数。
+行程变、时长不变 ⇒ 速度变。
+
+**顺带纠正 runbook 里的诊断**：待办第 2 条写的是"长弹幕在屏幕上显得很慢"。按上面的算术
+其实是**反的**——固定时长下行程越长速度越高，所以长弹幕更快、短弹幕更慢。这条我在
+这里改成算得出来的说法，因为迭代记录不该复述一个和代码对不上的诊断。要修的东西
+（写死的 8 秒）是同一个。
+
+### 参考项目怎么做的，以及为什么不能直接抄
+
+`_ref/dtv_mobile/shared/src/commonMain/kotlin/dtv/mobile/ui/screens/PlayerScreen.kt`：
+
+```kotlin
+// ScrollingDanmakuItem, 1399-1404 行
+animationSpec = tween(durationMillis = 9000, easing = LinearEasing)
+```
+
+确实也写死了 9000ms。但它的调用点 `ScrollingDanmakuOverlay`（1366-1381 行）传的是
+`startX = widthPx, endX = -widthPx`——**行程恒为 2×屏宽**，与文字宽度无关。所以参考项目
+**是等速的**，只是把等速写成了"等距离 + 等时长"。它不能当作"等时长"的依据。
+
+（参考项目这样写还有个副作用：比屏还宽的弹幕在动画结束时尾巴还没走完，会突然消失。
+我们没有走这条路，因为我们的行程本来就按真实字宽算。）
+
+我们的行程随字宽变，所以时长必须推导出来。
+
+### 怎么修的
+
+新增纯函数：
+
+```kotlin
+internal fun flightDurationMs(textWidthPx: Float, screenWidthPx: Float): Long {
+  val screen = screenWidthPx.coerceAtLeast(1f)
+  val travel = screen + textWidthPx.coerceAtLeast(1f)
+  return ((travel / screen) * MILLIS_PER_SCREEN_WIDTH).toLong().coerceAtMost(MAX_FLIGHT_MILLIS)
+}
+```
+
+- `MILLIS_PER_SCREEN_WIDTH = 5_500f`：速度用"走完一个屏宽要多久"表达，手机和平板手感一致，
+  不随像素密度漂移。
+- 校准：十字弹幕约 0.45 屏宽 ⇒ 1.45 × 5500 = 7975ms，**和旧行为基本一致**。也就是说
+  这次改动不会让"典型弹幕"突然变快或变慢，只把两头拉开——这是刻意的，改速度感知最怕
+  整体平移。
+- `MAX_FLIGHT_MILLIS = 15_000`：不设上限的话，一条 100 字的长文会占住一条轨道半分钟，
+  高峰期轨道被占满就只能丢弹幕，整个弹幕层会被一条广告饿死。超过约 40 字的弹幕会碰到
+  这个上限，比基准稍快，但不会被截断。
+- `laneFreeAfterMs` 改用**这一条自己的时长**。轨道在它尾巴让开入口的那一刻就能复用，
+  那是它自己飞行时间的一个比例。原来用同一个 8 秒算，长弹幕的轨道会提前约 1.6 秒放行，
+  后一条直接叠上去。
+- `FlyingDanmaku` 增加 `flightMillis` 字段，`DanmakuLine` 用它而不是全局常量。
+
+### 踩到的坑
+
+**一、JVM 上根本量不出字宽。** 本来想写"两条不同长度的弹幕，一条先消失"的 Robolectric
+测试。去读 Robolectric 源码才发现：legacy 图形模式下 `ShadowPaint.measureText` 返回的是
+字符数，而 Compose 走的是 `nGetRunAdvance`，在非 `REALISTIC` 模式下**返回 0**
+（`nGetFontMetricsInt` 同样返回 0）。也就是说 JVM 测试里每条弹幕都量成 0、被兜底成 1px，
+长短完全分不出来——这种测试写出来是自欺欺人。所以拆成三层：
+
+- JVM 纯函数测试：给定宽度，算得对不对。
+- JVM Compose 测试：直接驱动 `DanmakuLine`，宽度由测试自己给（不依赖测量），验证它用的是
+  条目自带的时长。为此把 `FlyingDanmaku` 和 `DanmakuLine` 从 private 提成 internal。
+- 仪器测试：真机字体，跑完整链路。
+
+**二、仪器测试的方法名不能带空格。** 第一版用了反引号名
+`` `a long danmaku outlives the old fixed eight seconds` ``，CI 直接红在
+`:app:dexBuilderDebugAndroidTest`：
+
+```
+D8: Space characters in SimpleName '...' are not allowed prior to DEX version 040
+```
+
+`minSdk = 26`，androidTest 一律按低于 040 的 DEX 版本 dex，含空格的方法名根本打不进包。
+JVM 单元测试不 dex，所以只有 androidTest 这个源集必须写 camelCase——现有的
+`ScreenshotTest` 一直是这么写的，只是没人写下来过。这是本轮唯一一次 CI 红，红得很有价值。
+
+**三、等速和上限天然矛盾。** 严格等速意味着无限时长；设了上限，超长弹幕就比基准快。
+选了上限，因为"一条长文占死轨道"是更糟的失败模式，并把这条取舍写进注释而不是藏着。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（447 条，0 失败，0 跳过） | ✅ |
+| 仪器测试（32 条，0 失败，含新增计时测试） | ✅ |
+| Release assembly（R8） | ✅ |
+
+CI run **41566147166**，commit `67a99fb`，三个 job 全绿。
+
+第一次推的 `a3b613e` 是红的，只有 `Instrumented tests` 红，原因就是上面第二条（D8 空格）。
+**同一次 run 里 `Build & test` 和 `Release assembly` 都是绿的**，所以 JVM 侧的 447 条测试、
+lint、R8 在 `a3b613e` 上就已经通过了，红的只有 androidTest 的打包那一步。
+
+新增/改动的测试（从 CI 的 `test-reports` / `instrumented-reports` 产物里逐条核对过）：
+
+| 测试类 | 条数 | 断言什么 |
+| --- | --- | --- |
+| `DanmakuFlightSpeedTest`（新，JVM） | 9 | 三种字宽等速；短弹幕比旧的 8 秒快；长弹幕比旧的 8 秒慢；十字弹幕仍约 8 秒（校准）；跨屏宽时长一致；超长弹幕被 15 秒截住；零宽度不崩；轨道交接按自身宽度；交接不能用共享时长 |
+| `DanmakuOverlayTest`（+1，JVM/Robolectric） | 4 | `DanmakuLine` 用的是条目自带的时长：3 秒的飞行到 2 秒还在、4.5 秒结束 |
+| `DanmakuFlightTimingTest`（新，仪器） | 1 | 真机测量下，6.5 秒时一字弹幕已消失、55 字弹幕还在；再推到 9 秒（超过旧的 8 秒）长弹幕仍在 |
+
+关于"这些测试在旧代码上会不会红"，要说准确：
+
+- `DanmakuFlightSpeedTest` 的九条**在旧代码上编译不过**：`flightDurationMs` 那时不存在
+  （旧的是常量）。所以它们不是对未改代码的回归测试，是跟着 API 一起长出来的能力测试。
+  但其中三条（短弹幕 < 8 秒、长弹幕 > 8 秒、等速）在语义上就是旧行为的三条反例。
+- `DanmakuOverlayTest` 新增那条在旧代码上也**编译不过**（`FlyingDanmaku` 没有
+  `flightMillis` 字段）。如果只把结构补上、时长仍传常量 8000，它在 4.5 秒时
+  `finished` 还是 0，断言会失败。
+- `DanmakuFlightTimingTest` 是**唯一一条能真正复现用户看到的现象**的测试，而且它在旧代码上
+  必然红：旧代码 6.5 秒时一字弹幕还在（`assertCountEquals(0)` 失败），9 秒时 55 字弹幕
+  已经没了（`assertExists` 失败）。这条本机跑不了 Gradle，我没有看着它红——但它在新代码上
+  跑绿了（2.304 秒），这是 CI 产物里查到的，不是推断。
+
+### 截图里看到了什么
+
+24 张，与上一轮（`r18`）**逐字节相同**，SHA256 两两比对过。这不是"没检查"，
+而是这一轮最值得记的发现：
+
+- `17b-player-fullscreen` 里**一条弹幕都没有**。画面是视频占位、返回键、收藏星、
+  右侧三个圆形按钮（设置/刷新/全屏）。也就是说截图测试跑的是默认 `autoAdvance = true`，
+  `waitForIdle` 会把动画一路跑完，弹幕气泡全被 `onFinished` 移除了才截的图。
+- `17-player`（竖屏）里能看到弹幕，但那是**竖屏弹幕列表**（观众A: 这波操作太秀了、
+  观众B: 666666…），不是全屏层，本轮没碰。
+
+结论：**这 24 张截图对全屏弹幕层是零覆盖**，而缺陷恰好在那一层——它能活十八轮，
+正是因为唯一的视觉防线看不见它。这也解释了为什么"截图没变化"在这里是正确结果而不是
+漏检：一个只改动画时长的改动，本来就不该动任何静态布局，24 张全等恰好证明没有连带改动。
+真正的证据是仪器测试那条。
+
+### 下一轮
+
+- **给弹幕层补一张截图**（本轮新发现，已记进 runbook）：在 `ScreenshotTest` 里加一个
+  `mainClock.autoAdvance = false` + `advanceTimeBy(~1200ms)` 的变体，让气泡停在中途再截。
+  本轮没做是因为 `captureToImage` 在冻结时钟下是否稳定没有把握，而这一轮已经没有
+  再跑一轮红绿的时间预算；不想在收尾时赌仪器测试 job（60 分钟超时）。
+- **"够得着"断言**（runbook 待办第 3 条）：设置页、同步页日志仍缺 `performScrollTo`。
+- **首页 chip 密度**（runbook 待办第 4 条）：斗鱼三级分类时四行 chip 占掉约 1/3 屏高。
+- 审计项 5-12（四家平台的协议细节、搜索页密度、直播页横竖屏与手势、跨设备同步）仍未做。
+- 小事：CI 日志里有 `createComposeRule` 被标记 deprecated（建议迁到
+  `androidx.compose.ui.test.junit4.v2.createComposeRule`）。不影响构建，只是提示，
+  现有所有 Robolectric/仪器测试都用旧的那个，要迁就一起迁。
