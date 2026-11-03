@@ -1878,7 +1878,7 @@ the six digit field is reachable in the landscape dialog — java.lang.OutOfMemo
 | JVM 单元测试 | ✅ 457 条（上轮 451，+6），0 失败 0 跳过，53 个 XML |
 | 仪器测试 | ✅ 36 条（上轮 35，+1），0 失败 0 跳过 |
 | Release assembly（R8） | ✅ |
-| CI 三 job | ✅ run 41575851002（commit 07c0f4b）全绿 |
+| CI 三 job | ✅ run 41575851002（commit 07c0f4b，代码）与 run 41577685807（commit 4d0e3d1，本文档）全绿 |
 
 `HomeCategoryDensityTest` 的 `tests="6" failures="0" errors="0" skipped="0"`，六条耗时
 0.313 / 0.111 / 0.313 / 0.101 / 0.108 / 0.088 秒。仪器测试的 `TEST-test(AVD) - 14.xml`
