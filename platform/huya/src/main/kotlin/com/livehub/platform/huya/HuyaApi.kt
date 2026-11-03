@@ -56,6 +56,17 @@ data class HuyaRoomInfo(
   )
 }
 
+/**
+ * A resolved room: the page that was parsed and the variants built from it.
+ *
+ * The page is returned rather than thrown away because the caller needs the room metadata
+ * as well, and a room page costs a full HTML download. See [HuyaApi.playback].
+ */
+data class HuyaPlayback(
+  val room: HuyaRoomInfo,
+  val variants: List<StreamVariant>,
+)
+
 /** HTTP + parsing layer for Huya. */
 class HuyaApi(private val http: HttpClient) {
 
@@ -254,13 +265,21 @@ class HuyaApi(private val http: HttpClient) {
     }
   }
 
-  /** Resolves the playable variants for a room, ordered by CDN preference. */
-  suspend fun playback(roomId: String): List<StreamVariant> {
+  /**
+   * Resolves the playable variants for a room, ordered by CDN preference.
+   *
+   * Returns the parsed page next to the variants. The previous shape returned only the
+   * variants, so `HuyaAdapter.playback` downloaded the very same page a second time just
+   * to rebuild the `Streamer` — doubling the wait before the first frame, and worse, that
+   * second download was unguarded: any transient failure there threw and took down a
+   * playback whose stream URLs had already been resolved successfully.
+   */
+  suspend fun playback(roomId: String): HuyaPlayback {
     val info = roomInfo(roomId)
     if (info.streams.isEmpty()) {
       throw PlatformOfflineException("主播未开播", Platform.HUYA)
     }
-    return info.streams
+    val variants = info.streams
       .sortedBy { HuyaSigner.cdnRank(it.cdnType) }
       .map { stream ->
         val url = HuyaSigner.buildStreamUrl(
@@ -279,6 +298,7 @@ class HuyaApi(private val http: HttpClient) {
         )
       }
       .distinctBy { it.url }
+    return HuyaPlayback(room = info, variants = variants)
   }
 
   // -------------------------------------------------------------------- helpers

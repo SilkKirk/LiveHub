@@ -81,17 +81,28 @@ class HuyaAdapter(
     )
   }
 
+  /**
+   * Resolves a room for playback from **one** page load.
+   *
+   * `api.playback` hands back the page it parsed, so the `Streamer` is rebuilt from the
+   * same response that produced the URLs. Re-fetching it (as this used to) doubled the
+   * wait before the first frame and made a working stream fail whenever the redundant
+   * second request did.
+   */
   override suspend fun playback(
     roomId: String,
     preferredQuality: Int?,
     preferredLine: String?,
   ): PlaybackSource {
-    val variants = api.playback(roomId)
+    val resolved = api.playback(roomId)
     val ordered = preferredQuality
-      ?.let { wanted -> variants.sortedBy { if (it.qualityCode == wanted) 0 else 1 } }
-      ?: variants
-    val room = api.roomInfo(roomId).toStreamer()
-    return PlaybackSource(room = room, variants = ordered, defaultVariant = ordered.firstOrNull())
+      ?.let { wanted -> resolved.variants.sortedBy { if (it.qualityCode == wanted) 0 else 1 } }
+      ?: resolved.variants
+    return PlaybackSource(
+      room = resolved.room.toStreamer(),
+      variants = ordered,
+      defaultVariant = ordered.firstOrNull(),
+    )
   }
 
   override fun danmaku(roomId: String): Flow<DanmakuEvent> = callbackFlow {
