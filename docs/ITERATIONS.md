@@ -2348,3 +2348,194 @@ README 的"抖音已知限制"写着 `/partition/detail/room` 对匿名客户端
 - `DanmakuMessage.userLevel/fansClubLevel` 的待决：参考项目解而不渲染，我们连解都没有；
   需要一次明确的取舍，而不是继续挂着。
 - `关联设备` 弹层的截断疑点仍在，要动先量到。
+
+## 第二十六轮迭代：B站审计——播放页的主播名一直是空的，三个列表的翻页判据也都不对
+
+> 本轮工作提交在 `8e909e0`，CI 在该提交上三个 job 全绿（第一次推送即绿）。
+
+### 缺陷一：B站播放页的主播名、头像永远是空的，观众数恒为 0
+
+`BilibiliApi.roomInfo` 读的是 `room/v1/Room/get_info`，字段链是
+`data.uname` → `data.anchor_info.base_info.uname`，观众数是 `data.watched_show.num`。
+本轮把该接口抓下来（房间 6963590）：
+
+```
+keys = ['area_name','live_status','online','room_id','short_id','title','uid','user_cover']
+```
+
+**没有 `uname`，没有 `anchor_info`，也没有 `watched_show`。** 于是 `streamerName` 走完两级
+兜底得到空串、`avatarUrl` 为 null、`viewerCount` 恒为 0——播放页头部的主播名与头像区域是空的，
+观众数写 0，而这个房间当时有 6 万多人在看。
+
+正确来源是 `xlive/web-room/v1/index/getH5InfoByRoom`：它的 `data.room_info` 带
+`title`/`online`/`live_status`/`keyframe`，`data.anchor_info.base_info` 带 `uname`/`face`。
+**参考项目正是这么取的**——`AndroidDtvRepository.kt:341` 的 `fetchBilibiliFollowInfo`
+就是 `getH5InfoByRoom` + `room_info` + `anchor_info.base_info`，观众数取 `room_info.online`。
+
+修法：`roomInfo` 改走 `getH5InfoByRoom`（`room_info` 里取一切，`anchor_info.base_info` 取主播），
+`viewerCount` 取 `room_info.online`，`watched_show.num` 只当兜底。
+
+**同一份数据里 `online` 与 `watched_show.num` 不是一回事**：抓包里 `online = 65296`、
+`watched_show.num = 20908`（后者是累计"看过"）。测试同时断言这两个值，就是为了钉住
+"取的是当前在线而不是累计"。
+
+`liveStatus` **没有**跟着改：关注列表按房间逐个轮询（`MainViewModel.refreshFollowStatus`），
+用 `getH5InfoByRoom` 这种带 banner/pendants 的大包体去刷列表是浪费，而它需要的
+`live_status`/`title`/`online`/`user_cover` 在 `Room/get_info` 里都有。参考项目同样只在
+`fetchBilibiliLiveStatus` 里用 `Room/get_info`。这是一处刻意的双端点分工，测试钉住了
+"roomInfo 打 getH5InfoByRoom、liveStatus 打 Room/get_info"。
+
+### 缺陷二：搜索读错了结果桶，只出 6 张卡且其中 5 张没开播
+
+`search/type` 的 `data.result` 下有**两个**桶，我们（和参考项目）都只读 `live_user`。
+抓包（关键字"英雄联盟"，2026-11-03）显示：
+
+| 桶 | 每页条数 | 第 1、2 页是否相同 | 有 title | 有 online | live_status==1 |
+| --- | --- | --- | --- | --- | --- |
+| `live_user` | **6** | **相同（6 个 id 全一样）** | 0/6 | 0/6 | 1/6 |
+| `live_room` | **40** | 不同 | 40/40 | 40/40 | 40/40 |
+
+也就是说 `live_user` 根本不是分页结果，而是一块固定的"相关主播"推荐位；照它渲染，B站搜索
+页永远只有 6 张卡、标题全是"暂无标题"、观众数是 0、5 张还挂着未开播。改读 `live_room`
+后每页 40 条，字段与 `parseSearchRoom` 读的完全对得上。
+
+这是**有意偏离参考项目的第二处**（第一处是第二十三轮斗鱼三级分类的 `id`/`name`）：
+依据是抓到的真实响应，而不是参考实现。
+
+### 缺陷三：分区翻页用房间数猜"这页满了没有"
+
+旧规则 `rooms.size >= 20`。两个前提都不成立：
+
+1. **页大小是服务端定的，而且不固定**——实测同一时刻 `1:145` 每页 20 条、`2:249` 27 条、
+   `2:86` 40 条，请求里根本没有 `page_size` 参数。
+2. **安静分区会给一条房间并同时说"还有"**。抽样 90 个分区（每 5 个取 1）后逐页翻：
+
+```
+rooms=  1 has_more=1 2:1048
+rooms=  1 has_more=1 2:1096
+rooms=  3 has_more=1 2:575
+rooms= 20 has_more=1 2:551
+rooms= 27 has_more=1 2:249
+rooms= 40 has_more=1 2:86
+```
+
+1 条、3 条都低于任何阈值，旧规则在 `2:1048`/`2:1096`/`2:575` 上直接判"到底了"，
+用户在那个分区只看到 1 张（或 3 张）卡片，后面的房间再也翻不出来。
+
+改成读响应自带的 `data.has_more`（1/0；空页整个字段都不出现，那也是到底）。
+
+### 缺陷四：热门页永远"还有下一页"
+
+旧规则 `rooms.size >= pageSize`（20）。但 `index/getList` **同时无视 `page` 和 `page_size`**：
+
+```
+page=1 page_size=5    -> 11 个模块，110 个房间
+page=1 page_size=20   -> 110
+page=1 page_size=200  -> 110
+page=5 page_size=20   -> 110
+page=1 vs page=2      -> 都是 110，但只有 97 个相同（13 个换了）
+```
+
+110 >= 20 恒成立，于是热门分区每滑到底就再请求一次，把 110 张卡追加到网格尾部，其中 97 张
+是刚看过的。改成单页（`hasMore = false`）：这个接口没有"下一页"，只有一块会轮换的推荐位。
+
+### 缺陷五（顺带）：搜索翻页的页码上限取错了字段
+
+`data.numPages` 是**所有桶里的最大值**（25），而房间在第 22 页就结束了
+（`pageinfo.live_room.numPages = 22`；实测第 22 页 37 条、第 23 页 0 条）。按 25 翻会多出
+3 张空页。改用 `pageinfo.live_room.numPages`，缺失时才退回 `data.numPages`，再缺失才用
+"本页非空即还有下一页"。
+
+### 本轮逐项审计的其余结论（有依据，无改动）
+
+- **分类 `w_rid` 签名**：`BilibiliSigner.signListQuery` 的固定顺序
+  （`area_id, page, parent_area_id, platform, sort_type, vajra_business_key, w_webid,
+  web_location` 再拼 `wts`）+ 公开盐 `ea1db124af3c7062474693fa704f4ff8`，与参考项目
+  `BilibiliLiveListApiAndroid.fetchSecondList` 逐字符一致。按同一顺序在 Python 里重算签名
+  打真实接口，`code = 0`、`msg = OK`、40 个房间——签名是对的。
+- **分类表**：我们打包 12 组 / 456 个分区，参考项目那份是 13 组 / 386 个（更旧）。两份的
+  字段形状一致（`title`/`id`/`subcategories[].title|id|parent_id`），`BilibiliCategories.parse`
+  的取法与参考实现 `fetchBilibiliCategories` 等价（都兼容 `id` 是字符串或数字）。不动。
+- **直播源**：`getRoomPlayInfo` 的 `protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web`
+  与参考项目相同。匿名 `qn=10000` 实测只给 `current_qn=250`（6 个候选：flv/ts/fmp4 × avc/hevc，
+  全部 250），与代码注释里的实测表一致。每清晰度只留一个候选是第十九轮就写明的决定，不动。
+- **弹幕**：WBI 的参数排序、`wbiEncode` 字母表（`!'()*` 丢弃、其余 `%XX` 大写）、mixinKey
+  置换表、`protover=1` 避开 zlib/brotli，全部与参考项目一致。按同一算法在 Python 里重算，
+  `getDanmuInfo` 回 `code = 0`（token 252 字节、6 个 host、`wss_port = 2245`）——顺带确认
+  我们"非 443 端口拼 `wss://host:port/sub`"是对的。`nav` 匿名时 `code = -101` 但仍下发
+  `wbi_img`，且正好是我们写死的那对兜底 key（`7cd08494…` / `4932caff…`），兜底链有效。
+- **扫码登录**：`qrcode/generate` + `qrcode/poll`、86101/86090/86038/0 四个状态码、Set-Cookie
+  折叠进 `BilibiliCookieStore`，与参考项目 `BilibiliAuthApiAndroid` 一致。不动。
+
+### 本轮验证
+
+新增 `BilibiliPaginationTest` **7 条**（提交信息里写成 8 条，是笔误，以 CI 报告为准）：
+
+- `a category page with a single room still offers the next page`
+- `a category page the server says is the last one ends the list`
+- `an empty category page without has_more ends the list`
+- `the hot tab never reports a second page`
+- `a search page maps the live_room bucket and continues while pages remain`
+- `the last search page ends the list even though data_numPages is larger`
+- `a search response without page counts falls back to the room list`
+
+新增 `BilibiliRoomDetailTest` **4 条**：
+
+- `room detail maps the anchor title avatar and live state`
+- `the viewer count is the live online figure not the cumulative watched figure`
+- `room detail comes from getH5InfoByRoom and the follow list from get_info`
+- `the captured get_info payload really has no anchor name`（字段哪天回来了，这条会红）
+
+新增两份真实抓包 fixture：`fixtures/bilibili-h5-info.json`（`getH5InfoByRoom`，房间 6963590，
+抓时在播，`online = 65296`）与 `fixtures/bilibili-room-get-info.json`（同房间的
+`Room/get_info`）。断言里的期望值直接从 fixture 里再解析一遍，避免把中文标题抄错。
+
+**旧规则确实会红**（本轮 CI 第一次推送就绿，所以没有"CI 抓出缺陷"这一幕，改用手算对拍）：
+把新旧两套规则在同一批真实抓包上跑一遍（`tmp_r26_rules.py`）：
+
+| 场景 | 旧判据 | 新判据 |
+| --- | --- | --- |
+| `2:1048`（1 条，`has_more=1`） | 到底 ❌ | 还有 ✅ |
+| `2:1096`（1 条，`has_more=1`） | 到底 ❌ | 还有 ✅ |
+| `2:575`（3 条，`has_more=1`） | 到底 ❌ | 还有 ✅ |
+| `2:86 p10`（0 条，`has_more=0`） | 到底 ✅ | 到底 ✅ |
+| 热门 110 条 | 还有 ❌ | 到底 ✅ |
+| 搜索（真实第 1 页） | 6 条、`hasMore=false` ❌ | 40 条、`hasMore=true` ✅ |
+| 房间详情 | name=None、avatar=None、viewers=None ❌ | name/face/online=65296 ✅ |
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（489 条，本轮新增 11 条；B站模块 44 → 55 条） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+B站模块用例分布（`test-reports` 里逐个数出来的）：`BilibiliDanmakuProtocolTest` 14、
+`BilibiliSignerTest` 11、`BilibiliCategoriesTest` 9、`BilibiliPaginationTest` 7、
+`BilibiliFixtureTest` 6、`BilibiliCookieStoreTest` 4、`BilibiliRoomDetailTest` 4。
+
+### 截图
+
+`python ci.py shots --out E:\app\dist-shots\r26` 下载 28 张，无哈希重复。**28 张与第二十五轮
+逐字节相同**（用 SHA256 对比 `dist-shots\r25` 全部一致）——本轮只改数据层，没有动任何 UI
+代码，所以这是"零视觉回归"的正面证据，而不是截图没更新。
+
+- `01-home`：斗鱼九宫格 6 张卡、LIVE 角标、观众数（12.9 万 / 9.6 万 / 7.4 万 / 21 万…）、
+  平台行与分区行各一行，与第二十二轮压缩后的布局一致；
+- `21-bilibili-home`：两张 B站卡（4.5 万 / 8.8 万在看）+ 底部"已经到底了 · 哔哩哔哩当前只提供
+  这些直播"——与本轮"分区到底读 `has_more`"一致（截图是 2 条 fixture，本来就没有下一页）；
+- `11-search-results`：四张结果卡带 LIVE 角标、观众数与"斗鱼"chip，底部导航五格齐全。
+
+**截图覆盖的缺口（本轮新记）**：`11-search-results` 与 `17-player` 用的都是斗鱼的 fixture
+（`ScreenshotTest.kt:318` / `:176`），**没有一张 B站搜索结果或 B站播放页**。所以本轮修的
+"主播名/头像/观众数"和"搜索结果桶"在截图上完全看不出来，证据只有 JVM 测试。补一张
+B站播放页与一张含 B站卡片的搜索结果，属于待办第 9/12 条。
+
+### 下一轮
+
+- 待办第 6 条虎牙审计的其余部分：分类、翻页、Tars 弹幕（第二十四轮只做了 playback 与观众数）。
+- `BilibiliApi.playback` 的 `preferredLine` 收了没用（详见 runbook 第 8 条的"留待下轮"）：
+  要么在同清晰度的候选里按它挑主机，要么承认 B站没有独立线路轴并把 `lines` 置空。
+- 截图补 B站播放页与含 B站卡片的搜索结果（`17d-player-bilibili`、`11b-search-bilibili`）。
+- `DanmakuMessage.userLevel/fansClubLevel` 的待决（第二十五轮记）：仍无人写无人读。
+- `关联设备` 弹层的截断疑点仍在，要动先量到。
