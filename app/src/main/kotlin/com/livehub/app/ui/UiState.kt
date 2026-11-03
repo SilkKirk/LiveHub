@@ -79,6 +79,17 @@ data class UiState(
   /** Set by the ViewModel from the platform cursor; drives infinite scroll. */
   val hasNextPage: Boolean = false,
   val error: String? = null,
+  /**
+   * A playback failure reported by the decoder itself, as opposed to [error].
+   *
+   * Kept apart from [error] because the two have different lifetimes: a resolve failure is
+   * replaced by the next resolve, while this one invalidates the URL the player already
+   * holds and only goes away when the stream is resolved again — which is exactly what the
+   * 重试 button asks for. It used to be a `remember` inside the player composable, so the
+   * retry cleared nothing: reopening the same room kept the remembered banner, and the
+   * button looked dead over a stream that had just been re-resolved successfully.
+   */
+  val playerError: String? = null,
   val message: String? = null,
   val darkTheme: Boolean = false,
   /**
@@ -126,6 +137,14 @@ sealed interface UiAction {
 
   /** Picks a CDN/line identifier and re-resolves the stream. */
   data class SelectLine(val line: String) : UiAction
+
+  /**
+   * The player could not decode the URL it was given.
+   *
+   * Reported by the player rather than kept as local UI state so that the retry path (which
+   * the ViewModel owns) can actually clear it; see [UiState.playerError].
+   */
+  data class PlayerFailed(val message: String) : UiAction
 
   data class ToggleFollow(val streamer: Streamer) : UiAction
 

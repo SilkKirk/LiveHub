@@ -204,8 +204,6 @@ internal fun PlayerContent(
   var videoAspect by remember(state.room?.key) { mutableStateOf<Float?>(null) }
   // Set when a CDN hostname cannot pass TLS; the same URL is retried over http.
   var httpFallbackUrl by remember(state.room?.key) { mutableStateOf<String?>(null) }
-  // Set when Media3 gives up after its one automatic retry.
-  var playerError by remember(state.room?.key) { mutableStateOf<String?>(null) }
 
   val isPlaying = variant != null && !state.loading
   LaunchedEffect(controlsVisible, variant?.url, isPlaying, fullscreen) {
@@ -246,7 +244,7 @@ internal fun PlayerContent(
       }
 
       Box(modifier = videoModifier.background(Color.Black)) {
-        if (videoSurface != null && isPlaying && playerError == null && effectiveVariant != null) {
+        if (videoSurface != null && isPlaying && state.playerError == null && effectiveVariant != null) {
           videoSurface(Modifier.fillMaxSize())
         } else {
           VideoSurface(
@@ -256,14 +254,9 @@ internal fun PlayerContent(
             onVideoAspectRatioChanged = { aspect -> videoAspect = aspect.takeIf { it > 0f } },
             zoomToFill = verticalFullBleed,
             paused = paused,
-            playerError = playerError,
+            playerError = state.playerError,
             onHttpFallback = { httpUrl -> httpFallbackUrl = httpUrl },
-            onFatalError = { message ->
-              // The ViewModel owns the retry path; re-opening the room is what the user's
-              // "重试" button does, so a fatal player error just clears the variant and lets
-              // the error state take over.
-              playerError = message
-            },
+            onFatalError = { message -> onAction(UiAction.PlayerFailed(message)) },
             modifier = Modifier.fillMaxSize(),
           )
         }
@@ -274,19 +267,22 @@ internal fun PlayerContent(
         // drawn on top and receives pointer events first, so declaring it last made it swallow
         // every tap meant for the gear, reload and fullscreen buttons — they looked live but
         // did nothing. Declared here, it sits under them and only sees taps that miss a
-        // control. Portrait only: full screen keeps the picture clean and relies on the bar.
-        if (!fullscreen) {
-          Box(
-            modifier = Modifier
-              .fillMaxSize()
-              .pointerInput(Unit) {
-                detectTapGestures(
-                  onTap = { controlsVisible = !controlsVisible },
-                  onDoubleTap = { paused = !paused },
-                )
-              },
-          )
-        }
+        // control.
+        //
+        // Full screen needs it just as much as portrait does: its bar hides itself after
+        // [FULLSCREEN_HIDE_DELAY_MILLIS] and nothing else brought it back, so 设置, 重载 and
+        // 退出全屏 stayed unreachable for the rest of the session. The picture still starts
+        // clean — the chrome is visible on entry and only comes back when tapped.
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+              detectTapGestures(
+                onTap = { controlsVisible = !controlsVisible },
+                onDoubleTap = { paused = !paused },
+              )
+            },
+        )
 
         if (verticalFullBleed) {
           // A vertical stream fills the screen, so there is no list underneath and the

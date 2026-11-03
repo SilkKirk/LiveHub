@@ -90,6 +90,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SelectVariant -> selectVariant(action.variant)
       is UiAction.SelectQuality -> selectQuality(action.quality, line = null)
       is UiAction.SelectLine -> selectQuality(quality = null, line = action.line)
+      is UiAction.PlayerFailed -> _state.update { it.copy(playerError = action.message) }
       is UiAction.ToggleFollow -> toggleFollow(action.streamer)
       is UiAction.UpdateQuery -> _state.update { it.copy(searchQuery = action.query) }
       UiAction.SubmitSearch -> submitSearch()
@@ -526,6 +527,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         lines = emptyList(),
         selectedLine = null,
         loading = true,
+        // A retry must not start under the previous attempt's error: the screen renders the
+        // error banner before it looks at `loading`, so a stale message would hide the fact
+        // that a fresh resolve is already in flight. The same goes for a decoder failure,
+        // which is only valid for the URL it was raised against.
+        error = null,
+        playerError = null,
       )
     }
     playbackJob = viewModelScope.launch {
@@ -577,6 +584,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     if (quality == null && line == null) return
 
+    // Re-picking what is already playing changes nothing, and on a platform with a single
+    // quality (Huya) that chip is the only one there is: without this, every tap on it would
+    // re-download the room page just to resolve the URL the player already holds. A decoder
+    // failure is the exception — the URL is dead, so the tap has to resolve a fresh one.
+    if (line == null && quality == current.selectedVariant?.qualityCode && current.playerError == null) {
+      return
+    }
+
     // Remember the choice per platform, so the next room opens at the quality the user
     // picked instead of resetting to 原画 every time. The preference map existed with a
     // setter but nothing ever wrote or read it.
@@ -589,7 +604,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     if (line == null && nextQuality != null) {
       current.variants.firstOrNull { it.qualityCode == nextQuality }?.let { resolved ->
         if (current.lines.isEmpty()) {
-          _state.update { it.copy(selectedVariant = resolved) }
+          _state.update { it.copy(selectedVariant = resolved, playerError = null) }
           return
         }
       }
@@ -612,6 +627,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             lines = source.lines,
             selectedLine = source.selectedLine,
             switchingQuality = false,
+            // The new URL replaces the one the decoder rejected.
+            playerError = null,
           )
         }
       } catch (error: Exception) {
@@ -635,6 +652,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         lines = emptyList(),
         selectedLine = null,
         danmaku = emptyList(),
+        playerError = null,
       )
     }
   }
@@ -685,8 +703,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   /**
    * Applies an already-resolved variant.
    *
-   * Used when the UI hands over a concrete [StreamVariant] (the variant list is a flat
-   * list of resolved URLs for platforms that publish them, e.g. Bilibili and Huya).
+   * Used when the UI hands over a concrete [StreamVariant] on a platform whose variant list is
+   * a flat list of resolved URLs (Bilibili resolves one URL per quality), so no network round
+   * trip is needed to switch.
    */
   private fun selectVariant(variant: StreamVariant) {
     // Remember it for the next room on the same platform, matching what selectQuality does
@@ -696,7 +715,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     if (platform != null && code != null) {
       container.preferences.setPreferredQuality(platform, code)
     }
-    _state.update { it.copy(selectedVariant = variant) }
+    _state.update { it.copy(selectedVariant = variant, playerError = null) }
   }
 
   // ---------------------------------------------------------------- preferences

@@ -116,6 +116,43 @@ class MainViewModelTest {
     assertEquals(Screen.Home, state.screen)
   }
 
+  /**
+   * A decoder failure must not outlive the retry that answers it.
+   *
+   * The error lived in a `remember(state.room?.key)` inside the player composable, so the
+   * 重试 button — which reopens the same room — kept the remembered banner on screen over a
+   * stream that had just been resolved successfully: the button looked dead. It is
+   * ViewModel state now, and reopening the room is what clears it.
+   */
+  @Test
+  fun `retrying a room clears the decoder failure`() {
+    val room = streamer("1", "主播")
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+    viewModel.onAction(UiAction.PlayerFailed("无法解码该流"))
+    idle()
+    assertEquals("无法解码该流", state.playerError)
+
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+
+    assertNull("a retry has to start from a clean slate", state.playerError)
+  }
+
+  @Test
+  fun `closing the player clears the decoder failure`() {
+    viewModel.onAction(UiAction.OpenRoom(streamer("2", "主播")))
+    idle()
+    viewModel.onAction(UiAction.PlayerFailed("无法解码该流"))
+    idle()
+    assertNotNull(state.playerError)
+
+    viewModel.onAction(UiAction.ClosePlayer)
+    idle()
+
+    assertNull("the failure belongs to the closed room", state.playerError)
+  }
+
   @Test
   fun `opening a room switches to the player and closing returns home`() {
     val room = streamer("1", "主播")
