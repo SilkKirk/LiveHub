@@ -11,9 +11,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.livehub.app.ui.LiveHubRoot
@@ -189,6 +193,27 @@ class ScreenshotTest {
     ),
   )
 
+  /** The sync page as a paired device sees it, with three entries in the exchange log. */
+  private fun syncState(): UiState = baseState().copy(
+    screen = Screen.Sync,
+    pairingCode = "482913",
+    pairingCodeSecondsLeft = 268,
+    peers = listOf(
+      TrustedPeer(2, "小米平板 6", "secret", 1_700_000_000_000, lastSeenAt = 1_700_000_100_000),
+    ),
+    syncLog = listOf(
+      SyncLogEntry(1_700_000_100_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 3, true, "更新 3 条"),
+      SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "分区订阅", 2, true, null),
+      SyncLogEntry(1_700_000_080_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "播放设置", 0, false, "对方拒绝连接"),
+    ),
+  )
+
+  private fun settingsState(): UiState = baseState().copy(
+    screen = Screen.Settings,
+    blockedKeywords = listOf("广告", "刷屏", "666"),
+    bilibiliLogin = BiliLoginUi(loggedIn = false),
+  )
+
   // ------------------------------------------------------------------- renders ---
 
   @Test
@@ -286,35 +311,34 @@ class ScreenshotTest {
   )
 
   @Test
-  fun syncPaired() = capture(
-    "13-sync",
-    baseState().copy(
-      screen = Screen.Sync,
-      pairingCode = "482913",
-      pairingCodeSecondsLeft = 268,
-      peers = listOf(
-        TrustedPeer(2, "小米平板 6", "secret", 1_700_000_000_000, lastSeenAt = 1_700_000_100_000),
-      ),
-      syncLog = listOf(
-        SyncLogEntry(1_700_000_100_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 3, true, "更新 3 条"),
-        SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "分区订阅", 2, true, null),
-        SyncLogEntry(1_700_000_080_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "播放设置", 0, false, "对方拒绝连接"),
-      ),
-    ),
-  )
+  fun syncPaired() = capture("13-sync", syncState())
+
+  /**
+   * The exchange log, which no render had ever reached.
+   *
+   * `13-sync` is taken at the top of the list, where the log is entirely below the fold — the
+   * only trace of it was the 我的设备 heading cut in half by the bottom bar, and a reviewer
+   * could not tell the page had a log at all. Scrolling to the last row is also what makes
+   * the render prove the section is reachable rather than merely present.
+   */
+  @Test
+  fun syncLog() = capture("13b-sync-log", syncState(), scrollToText = LAST_SYNC_LOG_ROW)
 
   @Test
   fun syncEmpty() = capture("14-sync-empty", baseState().copy(screen = Screen.Sync))
 
   @Test
-  fun settings() = capture(
-    "15-settings",
-    baseState().copy(
-      screen = Screen.Settings,
-      blockedKeywords = listOf("广告", "刷屏", "666"),
-      bilibiliLogin = BiliLoginUi(loggedIn = false),
-    ),
-  )
+  fun settings() = capture("15-settings", settingsState())
+
+  /**
+   * The bottom of the settings page: the account card and the about card.
+   *
+   * Both sit below the fold at 320x640 and had never been rendered. `15-settings` stops in
+   * the middle of the blocked-keyword card, so 哔哩哔哩账号 and 关于 — the only place the app
+   * names itself — had no visual coverage.
+   */
+  @Test
+  fun settingsAbout() = capture("15b-settings-about", settingsState(), scrollToText = "LiveHub")
 
   @Test
   fun settingsLoggedIn() = capture(
@@ -436,6 +460,10 @@ class ScreenshotTest {
    * @param onScreenText a danmaku label the render must show *inside* the frame. A bubble
    *   parked at its start position is a node the semantics tree still contains, so existence
    *   alone proves nothing; this checks the position as well.
+   * @param scrollToText text to scroll into view first, for content that starts below the
+   *   fold. Reaching it is part of what the render asserts: the scroll fails outright when the
+   *   list cannot scroll, so a page that merely *contains* a section cannot pass as one that
+   *   can show it.
    */
   private fun capture(
     name: String,
@@ -443,6 +471,7 @@ class ScreenshotTest {
     fullscreen: Boolean = false,
     advanceMillis: Long = 0L,
     onScreenText: String? = null,
+    scrollToText: String? = null,
   ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
@@ -474,6 +503,16 @@ class ScreenshotTest {
     // frame instead.
     composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
+
+    if (scrollToText != null) {
+      // A lazy list applies its scroll on a frame boundary and the clock is frozen for the
+      // capture, so the scroll runs with the clock free and is frozen again afterwards. The
+      // frozen frames that follow are what make the scrolled position part of the PNG.
+      composeRule.mainClock.autoAdvance = true
+      composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(scrollToText))
+      composeRule.mainClock.autoAdvance = false
+      composeRule.waitForIdle()
+    }
 
     if (advanceMillis > 0L) {
       // `waitForIdle` on a frozen clock does not move time forward — it only settles the
@@ -554,6 +593,15 @@ class ScreenshotTest {
      * bar is far below any real screen and still catches an empty one.
      */
     const val MIN_DISTINCT_COLORS = 12
+
+    /**
+     * The deepest row of [syncState]'s exchange log, in the form `SyncLogRow` renders it.
+     *
+     * Scrolling to the last entry rather than to the 同步记录 heading is what leaves the whole
+     * section in frame: the scroll stops as soon as the target is visible, so aiming at the
+     * heading would park it at the bottom edge with every row still below it.
+     */
+    const val LAST_SYNC_LOG_ROW = "播放设置 · 小米平板 6"
   }
 }
 

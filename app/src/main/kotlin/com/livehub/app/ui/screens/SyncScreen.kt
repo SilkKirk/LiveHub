@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -250,7 +252,16 @@ private fun MatchingCodeDialog(
     onDismissRequest = onDismiss,
     title = { Text("关联设备") },
     text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      // Scrollable, because an `AlertDialog`'s text slot is capped at the height the window
+      // leaves after the title and the buttons, and it does not scroll on its own: anything
+      // past that cap is measured, clipped and then unreachable. The rows below are tall
+      // enough to hit it in landscape (360dp minus the dialog margins) and at a large system
+      // font scale in portrait — and the last of them is 重新生成本机匹配码, the only way to
+      // get a fresh code when the shown one has expired.
+      Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
         Text(
           text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
           style = MaterialTheme.typography.bodySmall,
