@@ -2183,3 +2183,157 @@ Regex(""""(?:activityCount|totalCount)"\s*:\s*"?(\d+)"?""")
 - 抖音是同类缺陷（第二次请求没有 `runCatching`），按本轮方法处理。
 - 待办第 6 条虎牙审计的其余部分：分类、翻页、Tars 弹幕。
 - `关联设备` 弹层的截断疑点仍在，要动先量到。
+
+## 第二十五轮迭代：抖音审计——两次 enter、三种编码、一个把 feed 房间判成未开播的判定
+
+> 本轮工作提交在 `ad02ddb` 与 `0e72233`，CI 在 `0e72233` 上三个 job 全绿。
+
+### 缺陷一：打开抖音直播间，`enter` 抓两遍（第二十四轮虎牙的同款）
+
+`DouyinAdapter.playback` 先 `api.playback(roomId)`（内部走 `webcast/room/web/enter`），
+紧接着 `roomDetail(roomId)` —— 又一次 `api.roomInfo`，同一个 HTTP 请求。第二次还是这条
+路径上**唯一没有 `runCatching` 保护**的调用：`roomDetail` 把所有异常包成
+`抖音房间信息获取失败`，于是第一次已经拿到清晰度列表的房间直接播不了。
+
+修法与虎牙一致：`DouyinApi.playback` 返回 `DouyinPlayback(info, variants)`，适配器用同一份
+响应重建 `Streamer`。这样"再抓一次"在类型上就不可能写回来。
+
+### 缺陷二：页面解析的两条正则各认一种编码形态
+
+`extractUserUniqueId` / `extractRoomId` 各带两条正则：一条认转义 JSON
+（`\"user_unique_id\":\"…\"`）、一条认普通 JSON，且**两端都强制要求引号**。
+
+本轮把 `https://live.douyin.com/164485212` 真抓下来（943,407 字节，2026-11-03）核对，
+页面同时用了三种写法：
+
+| 写法 | 页面里出现 | 旧代码 |
+| --- | --- | --- |
+| 转义 JSON（script 里） | `\"user_unique_id\":\"7703823173536237071\"` ×6 | ✅ 能读 |
+| HTML 实体（播放器配置属性里） | `&quot;user_unique_id&quot;:&quot;…&quot;` ×2 | ❌ 读不到 |
+| 普通 JSON / 裸数字 | 0 次（但合法） | ❌ 读不到 |
+
+改成先把三种引号编码归一化，再用一条两端引号可选的正则。等价于把
+"每想到一种写法就加一条正则"换成"先把写法归一"。实测同一套模式对五种形态全部返回
+`7703823173536237071`。
+
+房间号那条还牵出一个更值得记的结论。真实页面里 `roomInfo` 是：
+
+```
+"roomInfo":{"roomId":"","web_rid":"164485212","anchor":{"id_str":"63734335401",…}
+```
+
+- `roomId` 是**空字符串**（匿名访问一直如此），所以本函数今天恒返回空、走 API 兜底——这与代码注释一致，不是缺陷；
+- 而这个块里唯一的 `id_str` 是**主播的用户 id**；
+- 整页第一个 `id_str` 更离谱：`recommendCategoryData.partition.id_str = "105"`，是**分区号**。
+
+**参考项目的 `extractRoomId` 正是这么写的**（`DouyinDanmakuClientAndroid.kt:345`：先
+`roomInfo.room.id_str`，再兜底任意 `"id_str":"(\d+)"`）。用 Python 把它的两条正则原样
+跑在我们抓的页面上：转义形态返回 `""`（正确但没有收益），把它改写成普通 JSON 形态则返回
+`"105"` —— 一个分区号被当成房间号塞进握手 URL。所以本轮**只读 `roomInfo.roomId`**，
+不复制参考项目那条无锚点兜底，并在测试里钉了两条反例（主播 id、分区 id 都不能被当成房间号）。
+
+### 缺陷三（本轮的测试自己抓出来的）：只认两个 map，feed 房间被判"未开播"
+
+`isRoomOnAir` 只检查 `hls_pull_url_map`、`flv_pull_url` 两个 map 加 `rtmp_pull_url`。
+但匿名 `webcast/feed` 给的清晰度是**扁平的 `hls_pull_url` 字符串** —— 也就是
+`parseVariants` 注释里写明的"feed 唯一能给的清晰度"。结果：feed 来源的房间
+`isLive=false`，`playback` 直接抛 `主播未开播`，而可播的 m3u8 就在同一个对象里。
+
+这不是推演出来的：是 `a room missing from enter falls back to the feed exactly once`
+在 CI 上真的红了（`com.livehub.platform.douyin.PlatformOfflineException: 主播未开播`），
+才顺着栈找上去的。修法是把两种写法都算数（3 个扁平字符串 + 3 个 map）。
+
+### 缺陷四：未映射的 hls 清晰度会排到 flv 之后
+
+`qualityRank` 对未映射的 key 返回 `10 + index`，而 flv 也是 `+10`，于是新出现的 hls key
+可能排在 flv 后面。参考项目 `AndroidDtvRepository.kt:685` 明确写了为什么这件事有害：
+"some Douyin FLV streams may be H.265-in-FLV which Media3/ExoPlayer may not render
+(audio-only on many devices)"。改成落在 `4..9` 并对上限夹住。
+
+**已映射 key 的 rank 一个都没动**：`qualityCode` 会被 `UserPreferences.preferredQuality`
+按平台持久化，改已有值等于让用户存过的清晰度偏好悄悄失效。只有今天不存在的 key 受影响。
+
+### 顺带清掉的死声明
+
+`METHOD_GIFT`、`ACK_INTERVAL_MILLIS`、`FIELD_PAYLOAD_ENCODING`、`URL_PARTITION`
+（非 v2 那条）四个常量全仓库只有定义处命中，文档与测试都没有引用，删掉。
+
+### 本轮逐项审计的其余结论（有依据，无改动）
+
+- **分区**：`app/src/main/assets/categories/douyin_categories.json` 与参考项目
+  `shared/src/androidMain/assets/categories/douyin_categories.json` **逐字节相同**
+  （20427 字节，9 组 / 306 个二级分区）。`DouyinCategoryCatalog.partitionOf` 取 href
+  末两段（`/category/1_1_1_1010032` → `1:1010032`），与参考实现的
+  `id = "douyin:${partitionType}:${partition}"` 取的是同一对数。无需改。
+- **搜索**：**参考项目没有抖音搜索**（grep 全仓库无 `webcast/search`，`DouyinWebApiAndroid`
+  只有分区与 enter 两个接口）。我们的 `search()` 端点因此没有参考依据，但 UI 早已如实
+  说明限制（`SearchScreen.kt:155`"抖音只支持按房间号搜索"）。本轮不动，也不假装验证过。
+- **直播源**：`parseVariants` 读 `hls_pull_url_map` / `flv_pull_url`（与参考
+  `fetchRoomEnter` 完全一致），另支持 `hls_pull_url` 与 `flv_pull_url_map` 两个超集字段。
+  排序规则见缺陷四。
+- **Protobuf 弹幕**：字段号逐条与 `DouyinProtoLite.kt` 对齐（PushFrame 2/6/7/8、
+  Response 1/5/9、Message 1/2、ChatMessage 2/3、User.nickname 3）。参考实现额外解出
+  `payGrade.level`(23/6) 与 `fansClub.data.level`(24/1/2)，但它的播放器**也不渲染**等级
+  —— 与第二十三轮斗鱼 `col` 的结论一致。`DanmakuMessage.userLevel/fansClubLevel`
+  两个字段目前全仓库无人写也无人读，属于同一处待决（要么解+渲染，要么删），本轮不擅自
+  发明 UI，留待需要显示等级时一起处理。
+
+### 本轮验证
+
+新增 `DouyinPlaybackTest` 8 条：
+
+- `opening a room downloads its payload once`
+- `a failing second request cannot break a playback that already resolved`
+- `the room metadata comes from the payload that produced the streams`
+- `hls renditions come before flv ones`
+- `the preferred quality is moved to the front instead of dropped`
+- `an unmapped hls key still sorts ahead of every flv rendition`
+- `a room with no pull url is offline rather than unplayable`
+- `a room missing from enter falls back to the feed exactly once`
+
+`DouyinDanmakuHandshakeTest` 由 14 条增到 16 条（两条旧的形态测试改写成覆盖全形态，另外新增两条反例）：
+
+- `user unique id is read from every encoding the page uses`（5 种形态）
+- `room id is read from the roomInfo block in every encoding`（5 种形态 + 空值）
+- `the anchor id inside roomInfo is not mistaken for the room id`
+- `a partition id on the same page is not mistaken for the room id`
+
+正则改动的依据不是"看起来更宽松"：提交前用 Python 把新旧两套模式在同一批输入上跑过
+（真实页面 + 5 种合成形态），旧模式在实体编码/裸数字/带空格三种形态上全部返回 `None`。
+
+抖音模块 JVM 用例 55 → 65 条（`DouyinProtoTest` 26、`DouyinDanmakuHandshakeTest` 16、
+`DouyinCategoryCatalogTest` 9、`DouyinPlaybackTest` 8、`DouyinCookieNegotiationTest` 6）。
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（478 条，本轮新增 10 条；抖音模块 65 条） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+坏消息也照记：第一次推送（`ad02ddb`）在 CI 上是**红的**，红的正是本轮新增的
+`a room missing from enter falls back to the feed exactly once`；修完 `isRoomOnAir`
+后才转绿（`0e72233`）。这条缺陷是测试抓出来的，不是审计凭读代码猜出来的。
+
+### 截图
+
+`python ci.py shots --out E:\app\dist-shots\r25` 下载 28 张，逐张看过，无一张与另一张
+哈希相同（本轮没有产生"两个状态渲染成一模一样"的新证据）。
+
+- `19b-player-offline`："主播未开播 / 当前直播间没有在直播" + 返回按钮，下方信息卡仍显示
+  主播、12.9 万人在看、斗鱼标签，弹幕区明示"弹幕已关闭"——与本轮改的 `isLive` 判定一致；
+- `17c-player-fullscreen-danmaku`：五条气泡居中入场，昵称/正文/收藏与右侧三个圆形按钮正常；
+- `11-search-results`：四张结果卡带 LIVE 角标、观众数与平台 chip，底部导航五格齐全。
+
+**截图覆盖的缺口（记下来，别当已覆盖）**：只有 `20-huya-home` 与 `21-bilibili-home`，
+**没有抖音首页**——本轮改的 `isLive` 判定恰好影响抖音卡片上的 LIVE 角标。补一张
+`22-douyin-home` 属于待办第 12 条（视觉对照）。
+
+### 下一轮
+
+- 待办第 6 条虎牙审计的其余部分：分类、翻页、Tars 弹幕（第二十四轮只做了 playback 与观众数）。
+- 待办第 8 条 B 站：分类 `w_rid`、搜索、`getRoomPlayInfo`、弹幕、扫码登录。
+- 截图补一张抖音首页（`22-douyin-home`），才能验证本轮 `isLive` 改动的卡片侧效果。
+- `DanmakuMessage.userLevel/fansClubLevel` 的待决：参考项目解而不渲染，我们连解都没有；
+  需要一次明确的取舍，而不是继续挂着。
+- `关联设备` 弹层的截断疑点仍在，要动先量到。
