@@ -2686,7 +2686,174 @@ expected: <60> but was: <40>
   `qualityLabel = "原画"`；`PlayerScreen.kt:770` 的「清晰度」行直接遍历 `state.variants`，
   于是出现 6 个一样的 chip，点哪个都不知道区别。参考项目把"线路"叫 CDN、根本没有清晰度
   轴，所以要动得先决定：是把 chip 标成线路名，还是把线路并到「线路」那一行。
-- 待办第 9 条：搜索页四平台的信息密度与空态（含补/`11b-search-huya` 截图）。
+- 待办第 9 条：搜索页四平台的信息密度与空态。
 - `BilibiliApi.playback` 的 `preferredLine` 仍未使用（第二十六轮留待）。
 - `DanmakuMessage.userLevel/fansClubLevel` 仍无人写无人读。
 - `关联设备` 弹层的截断疑点仍在。
+
+---
+
+## 第二十八轮迭代：直播页——六个同名 chip、唤不回来的全屏控制栏、点不动的「重试」
+
+本轮做待办第 10 条（直播页：横竖屏、全屏手势、清晰度/线路切换、错误重试），并按交接要求
+先修第二十七轮记下的虎牙清晰度缺陷，同时补上反复被点出的截图缺口。最后落成**四个真缺陷**，
+其中三个是这轮新发现的，一个比记录的更严重。
+
+### 缺陷是什么
+
+1. **虎牙「清晰度」行渲染六个同名「原画」chip**（第二十七轮记录的那条，本轮确认并修）：
+   真实房间页 `gameStreamInfoList` 给 6 个 CDN 条目、只有 3 个不同主机，而
+   `HuyaApi.playback` 给**每个条目**都生成一个 `StreamVariant`、标签一律「原画」。
+   `PlayerScreen` 的清晰度行直接 `forEach state.variants`，于是 6 个 chip 长得一模一样；
+   其中 4 个还指向另外两个 chip 已经覆盖的同一台机器。用户点哪个都不知道会换到哪儿。
+2. **全屏控制栏 3 秒后自动隐藏，然后再也叫不回来**：唯一的手势层被 `if (!fullscreen)`
+   排除，`controlsVisible` 在全屏下没有任何路径能被重新置 true。`3 秒` 之后「播放设置」
+   「刷新」「退出全屏」全部够不着，只剩系统返回手势能离开全屏。这是"能渲染但不可用"。
+3. **错误态/离线态的「重试」「返回」被手势层吞掉**（**本轮 CI 打出来的**，比记录更严重）：
+   手势层声明在 `VideoSurface` 之后，而 `Box` 里后声明的孩子先拿指针事件，于是盖在整块
+   画面上——错误态的「重试」按下只是切换了一下控制栏。竖屏离线态的「返回」同理。
+   功能上等于"直播页出问题后没法在页内恢复"。
+4. **解了错的「重试」清不掉解码失败**：`playerError` 是 `remember(state.room?.key)` 的
+   局部状态，而「重试」做的是 `OpenRoom(同一个 room)`——key 不变，remember 不重算，所以
+   横幅一直挂着。重新解析成功也看不到画面，按钮看着是死的。
+   顺带 `openRoom` 不清 `state.error`：重试已经开始（`loading=true`），旧错误还盖在上面。
+
+### 为什么都这样
+
+前三条是同一个模式：**可见性靠"声明顺序 + 尺寸"决定，而代码里没有把这条约束写下来**。
+`Box` 的绘制/命中顺序是"后声明在上"，这项目在两处踩了它：先是手势层声明在控制按钮之后
+（第十三轮修过），再是这次手势层声明在错误态按钮之上、以及全屏干脆没有手势层。
+第三条尤其阴——它只在"播放失败"这条路径上出现，而失败态从来没有被点击验证过，只有截图。
+
+第四条是状态归属问题：`PlayerContent` 的注释一直写着"The ViewModel owns the retry path"，
+但错误本身留在 composable 里，重试路径当然清不掉它。
+
+### 怎么修的 / 踩了什么坑
+
+**虎牙（依据参考项目 + 录到的页面形状）**
+
+参考项目 `_ref/dtv_mobile/.../huya/HuyaStreamUrlResolverAndroid.kt` 的 `resolve()`：把
+`gameStreamInfoList` 全部条目按 `sCdnType` 排序（`al` < `hs` < `tx` < 其它），**取第一个**
+就结束——它根本没有清晰度轴，也没有线路选择器。所以"合并成一条 variant"没有丢掉参考项目
+提供的任何选择；真正可以给用户的是那 3 台主机，而这正是「线路」行这个已有轴的语义
+（斗鱼就是这么做的：`variants` 一条、`lines = probe.cdns`、`selectedLine` 标注选中）。
+
+改动（`HuyaApi` / `HuyaAdapter`）：
+
+- `playback(roomId, preferredLine)`：按 **`sFlvUrl` 的主机**去重（不是按 `sCdnType`，
+  别名才共享主机），排序后每个主机保留排名最靠前的那个别名；
+- `variants` = 唯一一条「原画」，`lines` = 各主机的 `sCdnType`，`selectedLine` = 实际取流那条；
+- `preferredLine` 真正参与选择（之前 `HuyaAdapter` 收了完全不用，点线路等于没点），
+  未知线路回退到排名第一而不是抛错（陈旧偏好在分区变动后仍能播）；
+- `qualityCode` 从 `HuyaSigner.cdnRank(cdnType)` 改成常量 `HuyaApi.ORIGINAL_QUALITY`。
+  这一条是顺带修的**真缺陷**：该字段会被 `SelectQuality` 持久化成"该平台偏好清晰度"，
+  把线路排名写进去等于给虎牙记了一个下一间房无法兑现的"清晰度"，而且 1/2 恰好与斗鱼的
+  标清/高清撞号。`HuyaAdapter` 的 `preferredQuality` 于是变成有意不用（虎牙只有一档），
+  注释写明了理由，不是漏写。
+
+**播放页交互**
+
+- 手势层不再分横竖屏（`if (!fullscreen)` 去掉），全屏下点一下就能把控制栏叫回来，
+  双击暂停在两个方向都能用；
+- 但**只在该有画面时存在**：`effectiveVariant != null && state.playerError == null`。
+  这样错误/离线/加载态里自己的按钮不会被盖住（缺陷 3），代价是那三个状态下点击画面
+  不再切换控制栏——那三个状态本来也没有"画面"可看，控制栏也不需要自动隐藏
+  （自动隐藏的计时器只在 `isPlaying` 时启动）。
+- `playerError` 提升为 `UiState.playerError`，由 `UiAction.PlayerFailed` 写入；
+  `openRoom` / `closePlayer` / 选中变体 / 成功换清晰度都负责清空它。重试于是真的能恢复，
+  而且旋转屏幕不再把错误丢掉后对着一个死 URL 重连。
+- `openRoom` 同时清 `state.error`。
+
+**顺带**：`selectQuality` 增加"重复选同一档清晰度直接返回"的短路。虎牙只有一档，如果不短路，
+点那个唯一的「原画」chip 会为了同一个 URL 重新下载一次房间页。解码失败时这条短路不生效
+（URL 已死，需要重新解析）。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅（仅既有 warning，无新增） |
+| JVM 单元测试 | ✅ 508 条（本轮新增 9 条；虎牙模块 81 → 85） |
+| 仪器测试 | ✅ 41 条 `@Test`（截图 28 → 33 张） |
+| Release assembly（R8） | ✅ |
+
+CI：`python ci.py wait` 第一次**红**，`ci.py why` 抓到三条 `PlayerChromeTest` 断言失败：
+
+```
+the error state retries by reopening the room — expected:<1> but was:<0>
+tapping the picture in full screen brings the hidden chrome back — expected:<1> but was:<0>
+tapping the picture in portrait toggles the chrome — expected:<0> but was:<1>
+```
+
+这三次失败各自都是真信息，不是测试写歪了：
+
+- 第一条暴露的是**产品缺陷 3**（手势层盖住「重试」）。修代码，不是改断言。
+- 第二、三条是**测试自身的错**：`detectTapGestures` 带了 `onDoubleTap`，它会把每一次 tap
+  压到双击超时（约 300ms）之后才回调 `onTap`；测试用的是冻结时钟，那个超时永远不到点，
+  于是点击被静默丢弃。点击后补推进 500ms 虚拟时间即可（仍远小于 3 秒的自动隐藏）。
+
+第二次 push 后三 job 全绿。
+
+用例分布（`TEST-*.xml` 逐个数出，total 508 / failures 0 / errors 0）：
+
+- `HuyaPlaybackTest` **12**（本轮 8 → 12）：六条目三主机塌成一条清晰度三条线路、同主机两个
+  别名只留一行、线路按 CDN 偏好排序且降级 http、`preferredLine` 决定取哪条 URL、未知线路
+  回退、记住的清晰度既不过滤也不重排；
+- `PlayerChromeTest` **3**（新增文件）：全屏点击唤回控制栏、竖屏点击切换控制栏、错误态
+  「重试」发出 `OpenRoom`；
+- `MainViewModelTest` **29**（本轮 27 → 29）：重开同一间房清掉解码失败、关闭播放页清掉解码
+  失败。
+
+**测试条数怎么来的**：`python ci.py shots --name test-reports --out ...` 下载 XML 后按
+`testsuite.tests` 求和（508）。仪器测试的 XML 不在这个产物里，log 接口也只返回尾部一段，
+所以 41 是 androidTest 源码里 `@Test` 方法的实际条数（`AppWiringTest` 4 +
+`DanmakuFlightTimingTest` 1 + `ScreenshotTest` 33 + `SyncOffMainThreadTest` 3），不是估的。
+
+### 截图
+
+`python ci.py shots --out E:\app\dist-shots\r28` 下载 **33 张，无哈希重复**。
+与第二十七轮逐张比对：**28 张逐字节相同**，新增 5 张——本轮没有改动任何既有渲染。
+
+- `22-player-settings-huya`（新增，本轮缺陷 1 的证据）：清晰度行**只有一个**「原画」且
+  是选中态，线路行是 `AL / HS / TX` 且 `AL` 选中。修复前的同一处会是六个一模一样的
+  「原画」，而且线路行根本不会出现（`lines` 为空）。
+- `11b-search-huya`（新增）：虎牙搜索结果四张卡，人气角标 1786.3万 / 8.8万 / 120.5万，
+  一张未开播卡带 1.2万；平台角标「虎牙」。这是第二十七轮"搜索人气恒为 0"修复的第一张
+  可视化证据——那张轮次的记录里明确写了当时零覆盖。
+- `11c-search-bilibili`（新增）：B 站搜索结果，四张卡带「哔哩哔哩」角标与人气
+  （4.5万 / 8.8万 / 32万 / 6700）。
+- `17d-player-bilibili`（新增）：B 站播放页——主播名、4.5万人在看、标题、平台标签、
+  关注按钮、弹幕面板全部就位。
+- `19c-player-decoder-error`（新增）：`state.playerError` 的渲染，「无法解码该流
+  （H.265-in-FLV）」+「重试」「返回」。这张图同时是缺陷 3 的对照：修复前那两个按钮被
+  手势层盖着，点了没反应。
+- 已核未变：`17-player` / `17b-player-fullscreen` / `17c-player-fullscreen-danmaku` 与
+  上一轮逐字节相同，说明手势层的改动没有改变静态首帧。
+
+### 没做到的 / 留给下一轮
+
+- **横屏设置抽屉只有 Robolectric 高度断言**（第二十一轮的 `PlayerSettingsTest`），本轮没有
+  新增横屏截图：`ScreenshotTest` 的 33 张全是 320×640 竖屏，横屏抽屉的视觉仍然没有覆盖。
+  要么给 `ScreenshotTest` 加一个 `@Config(qualifiers="land")` 的变体类，要么明确接受它只有
+  Robolectric 断言——下一轮做决定。
+- **线路切换只在数据层被证实**：`HuyaPlaybackTest` 钉住了 `preferredLine` → URL，
+  `MainViewModel.selectQuality` 的重解析路径仍没有端到端测试（`MainViewModelTest` 用的是
+  真实 `AppContainer`，没有可注入的假平台）。点线路这条链路目前靠"数据层测试 + 代码审读"。
+- **`BilibiliApi.playback` 的 `preferredLine` 仍未使用**（第二十六轮留待），B 站线路点了
+  还是会回到排序第一的主机。本轮没动它：它的语义是"同一清晰度的多个 CDN"，与虎牙这次
+  "一台主机一条线路"不同，需要单独决定。
+- **抖音的清晰度行有两个同名「原画」**（本轮核对 `DouyinPlaybackTest` 时发现：
+  `hls FULL_HD1` 与 `flv FULL_HD1` 都叫「原画」，一个 HLS 一个 FLV）。和虎牙那条是同一类
+  用户可见问题，但修法不同（要么按容器补标签，要么只留 HLS），留待下一轮。
+- 待办第 9 条（搜索页信息密度与空态）只补了截图，**没有改布局**。
+- `关联设备` 弹层截断疑点仍在。
+
+### 下一轮
+
+- 抖音两个同名「原画」chip：按容器区分标签还是只留 HLS，二选一并写依据（牵涉
+  `parseVariants` 的 rank 与 `isHls`）。
+- 待办第 9 条：四平台搜索页的信息密度与空态（`11` / `11b` / `11c` / `12` 四张图对照参考）。
+- 横屏设置抽屉的截图覆盖（决定加 `land` 变体类还是接受 Robolectric 断言）。
+- `BilibiliApi.playback` 的 `preferredLine`：按同清晰度候选选主机，或承认 B 站没有独立
+  线路轴并把 `lines` 置空。
+
