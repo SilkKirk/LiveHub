@@ -104,37 +104,92 @@ class DouyinDanmakuHandshakeTest {
     assertEquals(DouyinDanmakuHandshake.WS_BASES.size, DouyinDanmakuHandshake.WS_BASES.distinct().size)
   }
 
+  /**
+   * Every encoding the room page uses has to yield the same visitor id.
+   *
+   * All five spellings below coexist on `https://live.douyin.com/164485212` (fetched
+   * 2026-11-03): the escaped JSON in the server-rendered scripts, the `&quot;`-encoded blob
+   * in the player config attribute, plain JSON, and the numeric value a JSON encoder is free
+   * to emit. The previous implementation matched only the first and third — its patterns
+   * demanded a literal `\"` or a literal `"` and always a closing quote — so an id that moved
+   * to another spelling silently degraded to a random visitor id, and the socket was
+   * handshaken with an id the server had never issued.
+   */
   @Test
-  fun `user unique id is read from escaped and plain json`() {
-    assertEquals(
-      "7456123456789012345",
-      DouyinDanmakuHandshake.extractUserUniqueId("""{"x":\"user_unique_id\":\"7456123456789012345\"}"""),
+  fun `user unique id is read from every encoding the page uses`() {
+    val id = "7703823173536237071"
+    val shapes = listOf(
+      "escaped json in a script" to """{"s":"\"user_unique_id\":\"$id\""}""",
+      "escaped json with a space" to """{"s":"\"user_unique_id\": \"$id\""}""",
+      "entity encoded in an attribute" to """<div data-x="&quot;user_unique_id&quot;:&quot;$id&quot;">""",
+      "plain json" to """{"user_unique_id":"$id"}""",
+      "unquoted number" to """{"user_unique_id":$id}""",
     )
-    assertEquals(
-      "7456123456789012345",
-      DouyinDanmakuHandshake.extractUserUniqueId("""{"user_unique_id": "7456123456789012345"}"""),
-    )
+    shapes.forEach { (label, html) ->
+      assertEquals(id, DouyinDanmakuHandshake.extractUserUniqueId(html), label)
+    }
     assertEquals("", DouyinDanmakuHandshake.extractUserUniqueId("<html></html>"))
   }
 
   /**
-   * The page's own `roomInfo.roomId`, when it carries one.
+   * The page's own `roomInfo.roomId`, in whichever encoding it arrives.
    *
    * Verified against the live page: it currently sends `\"roomId\":\"\"` for every room
    * (checked on four web_rids, including two on air), so this branch does not fire in
    * practice and the API fallback in `DouyinAdapter.resolveInit` is what actually supplies
    * the numeric id. The pattern is kept because the field is the right one and Douyin has
-   * populated it before; the test pins the shape rather than claiming it is reachable.
+   * populated it before; the test pins the shapes rather than claiming they are reachable.
    */
   @Test
-  fun `room id is read from the roomInfo block when populated`() {
-    val escaped = """{"s":"\"roomInfo\":{\"roomId\":\"7380123456789012345\",\"web_rid\":\"164485212\"}"}"""
-    assertEquals("7380123456789012345", DouyinDanmakuHandshake.extractRoomId(escaped))
+  fun `room id is read from the roomInfo block in every encoding`() {
+    val id = "7380123456789012345"
+    val shapes = listOf(
+      "escaped json" to """{"s":"\"roomInfo\":{\"roomId\":\"$id\",\"web_rid\":\"164485212\"}"}""",
+      "entity encoded" to """<div data-x="&quot;roomInfo&quot;:{&quot;roomId&quot;:&quot;$id&quot;}">""",
+      "plain json" to """{"roomInfo":{"roomId":"$id"}}""",
+      "unquoted number" to """{"roomInfo":{"roomId":$id}}""",
+      // The anchor's id sits between the key and the value in the real payload.
+      "anchor present" to """{"s":"\"roomInfo\":{\"anchor\":{\"id_str\":\"63734335401\"},\"roomId\":\"$id\"}"}""",
+    )
+    shapes.forEach { (label, html) ->
+      assertEquals(id, DouyinDanmakuHandshake.extractRoomId(html), label)
+    }
 
     // The shape the live page actually sends: an empty roomId, which must not be returned.
     val empty = """{"s":"\"roomInfo\":{\"roomId\":\"\",\"web_rid\":\"164485212\"}"}"""
     assertEquals("", DouyinDanmakuHandshake.extractRoomId(empty))
     assertEquals("", DouyinDanmakuHandshake.extractRoomId(""))
+  }
+
+  /**
+   * The `id_str` inside `roomInfo` is the **anchor's user id**, not the room id.
+   *
+   * Verbatim from `https://live.douyin.com/164485212` (2026-11-03):
+   * `\"roomInfo\":{\"roomId\":\"\",\"web_rid\":\"164485212\",\"anchor\":{\"id_str\":\"63734335401\"…`.
+   * A pattern that grabs the nearest `id_str` — the reference client's
+   * `"id_str"\s*:\s*"(\d+)"` — would hand the danmaku socket an anchor's user id, which is
+   * exactly why this implementation reads `roomInfo.roomId` only.
+   */
+  @Test
+  fun `the anchor id inside roomInfo is not mistaken for the room id`() {
+    val page = """\"roomStore\":{\"roomInfo\":{\"roomId\":\"\",\"web_rid\":\"164485212",""" +
+      """\"anchor\":{\"id_str\":\"63734335401\",\"nickname\":\"苏倩茹\"}}}"""
+    assertEquals("", DouyinDanmakuHandshake.extractRoomId(page))
+  }
+
+  /**
+   * A partition id on the same page is not a room id either.
+   *
+   * Verbatim from the live page's `homeStore.recommendCategoryData`:
+   * `\"partition\":{\"id_str\":\"105\",\"type\":4,\"title\":\"舞蹈\"}`. It is the first
+   * `id_str` on the page, so an unanchored pattern reads a 3-digit partition where a
+   * 19-digit room belongs.
+   */
+  @Test
+  fun `a partition id on the same page is not mistaken for the room id`() {
+    val page = """\"recommendCategoryData\":[{\"partition\":{\"id_str\":\"105\",""" +
+      """\"type\":4,\"title\":\"舞蹈\"}}],\"roomInfo\":{\"roomId\":\"\"}"""
+    assertEquals("", DouyinDanmakuHandshake.extractRoomId(page))
   }
 
   @Test

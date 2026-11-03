@@ -51,6 +51,18 @@ data class DouyinRoomInfo(
   )
 }
 
+/**
+ * Everything opening a room needs, parsed from **one** `room/web/enter` response.
+ *
+ * The adapter used to call `playback` for the URLs and then `roomDetail` for the `Streamer`,
+ * which fetched this payload twice. Returning the parse result alongside the renditions
+ * makes that second fetch impossible to reintroduce by accident.
+ */
+data class DouyinPlayback(
+  val info: DouyinRoomInfo,
+  val variants: List<StreamVariant>,
+)
+
 /** HTTP + parsing for Douyin live. */
 class DouyinApi(
   private val http: HttpClient,
@@ -441,13 +453,21 @@ class DouyinApi(
     return hasUrl(hls) || hasUrl(flv) || !rtmp.isNullOrBlank()
   }
 
-  suspend fun playback(roomId: String): List<StreamVariant> {
+  /**
+   * Resolves a room for playback from a single `enter` call.
+   *
+   * The streamer metadata and the pull URLs come from the same response: the caller needs
+   * both, and asking for the payload twice (as the adapter used to) doubled the wait before
+   * the first frame, while a failure on the redundant second call turned a room whose URLs
+   * had already resolved into 抖音房间信息获取失败.
+   */
+  suspend fun playback(roomId: String): DouyinPlayback {
     val info = roomInfo(roomId)
     if (!info.isLive) throw PlatformOfflineException("主播未开播", Platform.DOUYIN)
     if (info.variants.isEmpty()) {
       throw PlatformProtocolException("抖音未解析到播放地址", Platform.DOUYIN)
     }
-    return info.variants.map { variant ->
+    val variants = info.variants.map { variant ->
       StreamVariant(
         qualityLabel = variant.name,
         url = variant.url,
@@ -457,6 +477,7 @@ class DouyinApi(
         qualityCode = variant.rank,
       )
     }
+    return DouyinPlayback(info = info, variants = variants)
   }
 
   private fun parseVariants(streamUrl: JsonObject?): List<DouyinVariant> {
@@ -488,7 +509,7 @@ class DouyinApi(
         builder += DouyinVariant(
           name = qualityName(entry.key),
           url = url,
-          rank = qualityRank(entry.key, index) + 10,
+          rank = qualityRank(entry.key, index) + FLV_OFFSET,
         )
       }
     }
@@ -500,7 +521,7 @@ class DouyinApi(
       builder += DouyinVariant(
         name = qualityName(entry.key),
         url = url,
-        rank = qualityRank(entry.key, index) + 10,
+        rank = qualityRank(entry.key, index) + FLV_OFFSET,
       )
     }
     return builder.sortedBy { it.rank }
@@ -514,12 +535,22 @@ class DouyinApi(
     else -> key
   }
 
+  /**
+   * Orders renditions best-first, with **every** hls rendition ahead of every flv one.
+   *
+   * The hls/flv split is load-bearing, not cosmetic: the reference resolver prefers hls for
+   * the same reason ("some Douyin FLV streams may be H.265-in-FLV which Media3/ExoPlayer may
+   * not render — audio-only on many devices"). Known keys keep the ranks they have always
+   * had, because `qualityCode` is persisted as the user's preferred quality; a key nobody has
+   * mapped yet lands in the 4..[FLV_OFFSET]-1 gap and is clamped there, so it can never sort
+   * after the flv renditions and hand the player the format that may not render.
+   */
   private fun qualityRank(key: String, index: Int): Int = when {
     key.contains("origin", ignoreCase = true) || key == "FULL_HD1" -> 0
     key == "HD1" -> 1
     key == "SD1" -> 2
     key == "SD2" -> 3
-    else -> 10 + index
+    else -> (4 + index).coerceAtMost(FLV_OFFSET - 1)
   }
 
   /**
@@ -622,6 +653,14 @@ class DouyinApi(
   }
 
   companion object {
+    /**
+     * Rank shift applied to every flv rendition.
+     *
+     * The values below it (0..3 for the known keys, 4..9 for hls keys not mapped yet) are
+     * reserved for hls, so "hls sorts first" holds for renditions nobody has seen before.
+     */
+    private const val FLV_OFFSET = 10
+
     const val URL_FEED = "https://live.douyin.com/webcast/feed/"
     /** Partition-scoped list; requires an `a_bogus` signature. */
     const val URL_PARTITION_V2 =

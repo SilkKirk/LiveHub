@@ -125,22 +125,31 @@ class DouyinAdapter(
     )
   }
 
+  /**
+   * Resolves a room for playback from **one** `enter` call.
+   *
+   * `api.playback` hands back the payload it parsed, so the `Streamer` is rebuilt from the
+   * same response that produced the URLs. Re-fetching it (as this used to, through
+   * `roomDetail`) doubled the wait before the first frame — the `enter` payload is the whole
+   * room object — and made a stream that had already resolved fail whenever the redundant
+   * second request did. Douyu resolves a `PlaybackSource` in one call and Bilibili wraps its
+   * extra `roomDetail` in `runCatching`; Douyin was the last adapter with a bare second
+   * fetch on the playback path.
+   */
   override suspend fun playback(
     roomId: String,
     preferredQuality: Int?,
     preferredLine: String?,
   ): PlaybackSource {
-    val variants = api.playback(roomId)
+    val resolved = api.playback(roomId)
     val ordered = preferredQuality
-      ?.let { wanted -> variants.sortedBy { if (it.qualityCode == wanted) 0 else 1 } }
-      ?: variants
-    val room = roomDetail(roomId) ?: Streamer(
-      platform = platform,
-      roomId = roomId,
-      streamerName = "",
-      isLive = true,
+      ?.let { wanted -> resolved.variants.sortedBy { if (it.qualityCode == wanted) 0 else 1 } }
+      ?: resolved.variants
+    return PlaybackSource(
+      room = resolved.info.toStreamer(),
+      variants = ordered,
+      defaultVariant = ordered.firstOrNull(),
     )
-    return PlaybackSource(room = room, variants = ordered, defaultVariant = ordered.firstOrNull())
   }
 
   /**

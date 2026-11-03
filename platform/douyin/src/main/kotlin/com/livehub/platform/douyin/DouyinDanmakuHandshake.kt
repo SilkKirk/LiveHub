@@ -93,39 +93,58 @@ object DouyinDanmakuHandshake {
   /**
    * Extracts `user_unique_id` from the room page HTML.
    *
-   * The id appears escaped (`\"user_unique_id\":\"123\"`) in the embedded JSON and
-   * occasionally unescaped, so both shapes are tried.
+   * The page ships the same payload in several encodings at once: escaped inside a script
+   * string (`\"user_unique_id\":\"…\"`), HTML-entity encoded inside a data attribute
+   * (`&quot;user_unique_id&quot;:&quot;…&quot;`) and occasionally as plain JSON. Carrying
+   * one pattern per spelling — the previous approach — reads only the spellings somebody
+   * thought of, so the page is normalised once ([plainJson]) and matched tolerantly.
+   *
+   * The value is matched with the quotes optional because nothing pins the encoding: a bare
+   * number is legal JSON, and the previous patterns demanded a closing quote, which no valid
+   * JSON number has.
    */
-  fun extractUserUniqueId(html: String): String {
-    val patterns = listOf(
-      Regex("""\\"user_unique_id\\":\\"(\d+)\\""""),
-      Regex(""""user_unique_id"\s*:\s*"(\d+)""""),
-    )
-    patterns.forEach { pattern ->
-      pattern.find(html)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return it }
-    }
-    return ""
-  }
+  fun extractUserUniqueId(html: String): String =
+    USER_UNIQUE_ID.find(plainJson(html))?.groupValues?.getOrNull(1).orEmpty()
 
   /**
-   * Extracts the numeric room id from the room page HTML.
+   * Extracts the numeric room id from the page's `roomInfo` block.
    *
-   * The page embeds `\"roomInfo\":{\"roomId\":\"…\",\"web_rid\":\"…\"}`. Verified against the
-   * live page on four web_rids: `roomId` is currently an **empty string** every time, so in
-   * practice the caller has to fall back to the API. The pattern is kept because the field is
-   * the correct one and has carried a value before; an empty result simply means "not in the
-   * HTML", which the caller already handles.
+   * Read from `roomInfo.roomId` — and deliberately **not** from the `id_str` next to it. On
+   * the live page (`https://live.douyin.com/164485212`, fetched 2026-11-03) that block reads
+   * `{"roomId":"","web_rid":"164485212","anchor":{"id_str":"63734335401",…}`, i.e. the only
+   * `id_str` there is the anchor's *user* id. The reference client's unanchored
+   * `"id_str"\s*:\s*"(\d+)"` would therefore hand the socket a user id, and on the same page
+   * the first `id_str` of all belongs to a partition (`\"id_str\":\"105\"` under
+   * `recommendCategoryData`). Only `roomInfo.roomId` is the room, so that is the only field
+   * read here.
+   *
+   * An empty result is the normal case today (the field is sent empty for anonymous
+   * visitors); the caller then asks `enter` for the id instead. The pattern is kept because
+   * the field is the correct one and has carried a value before.
    */
-  fun extractRoomId(html: String): String {
-    val patterns = listOf(
-      Regex("""\\"roomInfo\\":\{\\"roomId\\":\\"(\d+)\\""""),
-      Regex(""""roomInfo"\s*:\s*\{\s*"roomId"\s*:\s*"(\d+)""""),
-    )
-    patterns.forEach { pattern ->
-      pattern.find(html)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return it }
-    }
-    return ""
-  }
+  fun extractRoomId(html: String): String =
+    ROOM_ID.find(plainJson(html))?.groupValues?.getOrNull(1).orEmpty()
+
+  /**
+   * Collapses the page's quote encodings onto plain JSON quotes.
+   *
+   * A page carrying a room title with an escaped quote inside a JSON string would be
+   * rewritten too, but the two keys matched below cannot plausibly appear in a title.
+   */
+  private fun plainJson(html: String): String =
+    html.replace("&quot;", "\"").replace("\\\"", "\"")
+
+  /** A visitor id is 19 digits in practice; the floor keeps a stray `0` out. */
+  private val USER_UNIQUE_ID = Regex(""""user_unique_id"\s*:\s*"?(\d{6,})"?""")
+
+  /**
+   * `roomInfo.roomId`, within a bounded window so a missing field cannot pick up an
+   * unrelated `roomId` from the rest of the payload.
+   */
+  private val ROOM_ID = Regex(
+    """"roomInfo"\s*:\s*\{.{0,300}?"roomId"\s*:\s*"?(\d{6,})"?""",
+    RegexOption.DOT_MATCHES_ALL,
+  )
 
   /** Twelve random digits, the fallback when the page carries no `user_unique_id`. */
   fun randomUserUniqueId(): String {
