@@ -40,10 +40,8 @@ import java.util.zip.Inflater
 object DouyinDanmakuProtocol {
   const val METHOD_CHAT = "WebcastChatMessage"
   const val METHOD_MEMBER = "WebcastMemberMessage"
-  const val METHOD_GIFT = "WebcastGiftMessage"
 
   const val HEARTBEAT_INTERVAL_MILLIS = 10_000L
-  const val ACK_INTERVAL_MILLIS = 5_000L
 
   /** `PushFrame.payload`: gzip-compressed `Response`. */
   const val FIELD_PUSH_PAYLOAD = 8
@@ -53,9 +51,6 @@ object DouyinDanmakuProtocol {
 
   /** `PushFrame.payloadType`. */
   const val FIELD_PAYLOAD_TYPE = 7
-
-  /** `PushFrame.payloadEncoding`. */
-  const val FIELD_PAYLOAD_ENCODING = 6
 
   /** `ChatMessage.content`. */
   const val FIELD_CHAT_CONTENT = 3

@@ -12,6 +12,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -439,18 +440,27 @@ class DouyinApi(
    * cards shown as 直播中, and live partition rooms hidden.
    *
    * The pull URLs are the honest signal: Douyin only fills them for a room it is actually
-   * streaming, and they are exactly what the player needs. A signature parameter is gone with
-   * this change; the caller no longer passes `status`.
+   * streaming, and they are exactly what the player needs. Both spellings count, because the
+   * payload has two: `hls_pull_url_map`/`flv_pull_url` maps from `enter`, and the **flat**
+   * `hls_pull_url` string the anonymous feed carries. Reading only the maps made every
+   * feed-sourced room look offline — `playback` then threw 主播未开播 for a room whose hls URL
+   * was right there in the same object, which is the one rendition [parseVariants] documents
+   * as the feed's only one.
    */
   private fun isRoomOnAir(streamUrl: JsonObject?): Boolean {
     if (streamUrl == null) return false
-    val hls = streamUrl["hls_pull_url_map"] as? JsonObject
-    val flv = streamUrl["flv_pull_url"] as? JsonObject
-    val rtmp = streamUrl["rtmp_pull_url"]?.jsonPrimitive?.contentOrNull
     fun hasUrl(map: JsonObject?): Boolean = map?.values?.any { element ->
       element.jsonPrimitive.contentOrNull?.isNotBlank() == true
     } == true
-    return hasUrl(hls) || hasUrl(flv) || !rtmp.isNullOrBlank()
+    fun flatUrl(key: String): Boolean =
+      (streamUrl[key] as? JsonPrimitive)?.contentOrNull?.isNotBlank() == true
+
+    return hasUrl(streamUrl["hls_pull_url_map"] as? JsonObject) ||
+      hasUrl(streamUrl["flv_pull_url"] as? JsonObject) ||
+      hasUrl(streamUrl["flv_pull_url_map"] as? JsonObject) ||
+      flatUrl("hls_pull_url") ||
+      flatUrl("flv_pull_url") ||
+      flatUrl("rtmp_pull_url")
   }
 
   /**
@@ -662,10 +672,14 @@ class DouyinApi(
     private const val FLV_OFFSET = 10
 
     const val URL_FEED = "https://live.douyin.com/webcast/feed/"
-    /** Partition-scoped list; requires an `a_bogus` signature. */
+    /**
+     * Partition-scoped list; requires an `a_bogus` signature.
+     *
+     * The unscoped `/partition/detail/room/` variant answers HTTP 444 for every request, so
+     * there is no second URL to fall back to.
+     */
     const val URL_PARTITION_V2 =
       "https://live.douyin.com/webcast/web/partition/detail/room/v2/"
-    const val URL_PARTITION = "https://live.douyin.com/webcast/web/partition/detail/room/"
     const val URL_SEARCH = "https://live.douyin.com/webcast/search/partition/room/"
     const val URL_ENTER = "https://live.douyin.com/webcast/room/web/enter/"
     const val PAGE_SIZE = 20

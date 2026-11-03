@@ -229,6 +229,12 @@ class DouyinPlaybackTest {
    *
    * The fallback is inside `roomInfo`, so the old double fetch paid it twice: two `enter`
    * calls plus two 50-item feed downloads before the first frame.
+   *
+   * This test is also what caught the second defect of the round: the feed item below carries
+   * its only rendition as the **flat** `hls_pull_url` string (the shape `parseVariants`
+   * documents as the feed's one and only), and `isRoomOnAir` used to look at the two maps and
+   * `rtmp_pull_url` only — so the room was judged offline and `playback` threw 主播未开播 while
+   * a playable hls URL sat in the same object.
    */
   @Test
   fun `a room missing from enter falls back to the feed exactly once`() = runBlocking {
@@ -248,6 +254,7 @@ class DouyinPlaybackTest {
     assertTrue(http.urls[1].contains("/webcast/feed/"), http.urls[1])
     assertEquals("推荐主播", source.room.streamerName)
     assertEquals("7380123456789012345", source.room.roomId)
+    assertTrue(source.room.isLive, "a flat hls_pull_url is a pull url")
     assertFalse(source.variants.isEmpty(), "the feed rendition must reach the player")
   }
 }
