@@ -1791,3 +1791,129 @@ the six digit field is reachable in the landscape dialog — java.lang.OutOfMemo
 - `关联设备` 弹层的截断疑点（见上），要先能量到再改。
 - 小事：`createComposeRule` 的 deprecated 提示仍在，要迁到
   `androidx.compose.ui.test.junit4.v2.createComposeRule` 就所有 Robolectric/仪器测试一起迁。
+
+## 第二十二轮迭代：首页的 chip 从四行压到一行
+
+### 缺陷是什么
+
+320dp 宽的屏、斗鱼三级分类时，首页网格上方的 chip 从 y=8 一直铺到 y=268，**占掉 640dp 屏高的
+41%**，卡片只剩不到两排（`r21/03b-home-subcategory.png` 可以逐像素量出来）：
+
+| 行 | 旧 y 范围 | 高度 |
+| --- | --- | --- |
+| 平台 chip 第一行（斗鱼/虎牙/抖音） | 14–50 | 36 |
+| 平台 chip 第二行（哔哩哔哩，**孤零零一个**） | 72–110 | 38 |
+| 分组行（网游/手游/娱乐） | 124–160 | 36 |
+| 分类行（英雄联盟/绝地求生/DNF） | 172–210 | 38 |
+| 三级行（全部/峡谷之巅/云顶之弈/排位） | 222–260 | 38 |
+
+两件事叠加：平台行是 `FlowRow`，四个 `FilterChip` 的标签加内边距约需 296dp，而 320dp 屏在刷新
+按钮旁只剩 256dp，所以哔哩哔哩**永远**折到第二行；分组行与分类行又是各自独立的两行。
+
+### 为什么会这样
+
+`PlatformBar` 用 `FlowRow` + `FilterChip` 换行来"让每个平台都能完整显示"（代码注释原话），
+代价是固定多出一行 38dp 的空旷区域。`CategoryRow` 则是"每一级一行"的直译：分组一行、分类一行、
+三级一行。三行各自都合理，叠在一起就成了 112dp 的固定开销。
+
+### 依据：参考项目怎么做的
+
+- `_ref/dtv_mobile/shared/src/commonMain/kotlin/dtv/mobile/ui/screens/douyu/DouyuHomeScreen.kt`：
+  网格上方只有**一行** chip（`LazyRow` 的 `categories`），分类树的主体收在 `ModalBottomSheet`
+  的「选择分类」里（`showCate2Sheet`，标题就是"选择分类"，里面是 `TextButton` 列表）；三级分类
+  用 `Cate3Chips` **保持内联**。
+- `_ref/dtv_mobile/screenshots/douyu.jpeg`：平台在**底部导航**（首页/斗鱼/虎牙/抖音/B站），
+  顶栏是"斗鱼 + 搜索框"，下面紧跟一行 chip（英雄联盟/主机游戏/DNF手游），然后是网格。
+- `_ref/dtv_mobile/shared/src/commonMain/kotlin/dtv/mobile/ui/components/CategoryPill.kt`：
+  它的 chip 内边距是 18dp×10dp，**比我们的 FilterChip 还大**。所以参考项目更紧凑靠的是
+  **行数更少**，不是 chip 更小——这一点决定了本轮不动 chip 尺寸，只减行数。
+
+### 怎么修的
+
+1. **平台切换器改成一行文字标签**（`PlatformTabs`/`PlatformTab`）。同样四个标签约 232dp，
+   一行放得下；选中态是主色 + 加粗 + 固定宽度下划线（固定宽度是因为"随标签变宽的选中底色"
+   会让相邻标签在选中切换时左右跳动）。平台是顶层目的地而不是过滤器，标签页正是它的形状。
+2. **分组行与分类行合成一行**：行首一个 `AssistChip` 显示当前分组（网游 ▾），点开
+   `CategoryPicker`；后面 `LazyRow` 只列当前分组的分类。多分组平台才有这个 chip——
+   单分组平台本来就全部内联，再给一个选择器等于同一件事做两遍（有测试钉住这一点）。
+3. **`CategoryPicker` 画在 activity 窗口里，不用 `ModalBottomSheet`**。两个理由：截图靠
+   `onRoot()` 抓 activity 窗口，弹窗窗口抓不到，而截图是这个页面唯一的视觉证据；面板没有
+   动画，冻结时钟下推进一帧就是全开状态，不会截到滑动中途。面板内切换分组是**浏览**动作
+   （只换下面的列表），选中分类才发 `SelectCategory` 并关闭面板。
+4. **三级分类行保持内联**，与参考项目的 `Cate3Chips` 一致：它是选中分类**内部**的过滤，
+   不是它的兄弟。`全部` 仍打头。
+
+`BackHandler` 在面板打开时接管返回键，否则返回会直接退出 app——`LiveHubRoot` 只对非首页
+目的地声明返回。
+
+### 测试：用位置断言，不用存在断言
+
+新增 `app/src/test/.../ui/screens/HomeCategoryDensityTest.kt`（Robolectric，
+`@Config(qualifiers = "w320dp-h640dp")`，内容套 `Box(size(320.dp, 640.dp))`，与
+`LongListReachabilityTest` 同一套做法），六条：
+
+| 测试 | 断言的东西 | 旧布局 |
+| --- | --- | --- |
+| `the four platform tabs stay on one line` | 虎牙与哔哩哔哩的 `boundsInRoot.top` 相等 | 差 58dp，红 |
+| `the group and its categories share one row` | 网游 与 英雄联盟 的 top 相等 | 差 48dp，红 |
+| `the deepest chip row starts in the top fifth of the screen` | 三级行的 `全部` 在 640dp 屏的 130dp 以内 | 222dp，红 |
+| `the third level stays inline under the category row` | 峡谷之巅 已显示且低于 英雄联盟 | 绿（回归保护） |
+| `the picker still reaches a category from another group` | 点 网游 → 面板出现 → 点 手游 → 点 王者荣耀 → 只发一次 `SelectCategory` 且面板关闭 | 旧代码没有面板，红 |
+| `a single-group platform shows no picker chip` | 单分组时全部内联、且没有 网游 这个 chip | 绿（新行为） |
+
+这些节点在旧布局里**全都存在**，所以 `assertExists` 一条都抓不住——必须量位置。断言写成
+"两行同基线"和"三级行在前 130dp"，而不是"高度等于某个具体值"：前者表达的是设计意图，
+后者会被字体度量或 chip 内边距的细微变化打翻。130dp 这个阈值两侧都留了很大余量
+（新布局约 96dp，旧布局 222dp）。
+
+截图侧给 `capture()` 加了 `clickText`（截图前先点某个文本）与 `expectText`（点完之后必须
+出现某个文本）。`expectText` 是必要的：只有 `clickText` 的话，一次没生效的点击会产出一张
+"看起来很正常"的首页截图，而截图本身不会报错。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ 457 条（上轮 451，+6），0 失败 0 跳过，53 个 XML |
+| 仪器测试 | ✅ 36 条（上轮 35，+1），0 失败 0 跳过 |
+| Release assembly（R8） | ✅ |
+| CI 三 job | ✅ run 41575851002（commit 07c0f4b）全绿 |
+
+`HomeCategoryDensityTest` 的 `tests="6" failures="0" errors="0" skipped="0"`，六条耗时
+0.313 / 0.111 / 0.313 / 0.101 / 0.108 / 0.088 秒。仪器测试的 `TEST-test(AVD) - 14.xml`
+头部 `tests="36" failures="0" errors="0" skipped="0"`，新增的 `homeCategoryPicker` 0.972 秒。
+
+### 截图里看到了什么
+
+28 张（上一轮 27 张），逐张 `read_image`，并与 `r21` 做 SHA256 两两比对：
+
+| 结果 | 张数 | 说明 |
+| --- | --- | --- |
+| 与 r21 逐字节相同 | 18 | 关注、搜索、同步、设置、播放器全系未受影响 |
+| 变化 | 9 | 首页家族的九张：01、02、03、03b、04、05、06、20、21 |
+| 新增 | 1 | `01b-home-category-picker.png`（49161 字节） |
+
+变化的 9 张全部是首页及其变体，与"只改了首页的 chrome"一致；其余 18 张逐字节相同，
+说明这一轮没有碰到别的界面。
+
+- `01-home`：平台标签一行（斗鱼为主色 + 下划线，虎牙/抖音/哔哩哔哩并列），
+  **哔哩哔哩那个孤零零的第二行没有了**；下面一行 `[网游 ▾] 英雄联盟 绝地求生 …`；
+  网格从 y≈105 开始，**三排卡片（6 张）全部可见**，而上一轮只有两排。
+- `03b-home-subcategory`：三级时是两行 chip（分类行 + 三级行），网格从 y≈155 开始，
+  两排卡片加"已经到底了"提示都在框内；上一轮网格从 y=270 开始。
+- `01b-home-category-picker`：首次看见「选择分类」面板——标题、分组 chip
+  （网游选中 / 手游 / 娱乐）、下面的分类列表（英雄联盟为主色 + ✓，绝地求生、DNF），
+  上半屏被半透明遮罩压暗，底栏仍然可辨。这是本轮新增 UI 的唯一视觉证据。
+- `20-huya-home` / `21-bilibili-home`：平台标签正确高亮（虎牙、哔哩哔哩），分组 chip 显示
+  网游，分类只有该分组的两个（英雄联盟/王者荣耀、英雄联盟/DOTA2）；旧版这里多一行分组 chip。
+- `04-home-loading`：骨架屏从两排变三排，是被释放出来的竖向空间的直接结果。
+- `05-home-empty`：空态在剩下的区域里居中，chrome 只有一行标签 + 一行 chip。
+
+### 下一轮
+
+- 待办 5-12 的审计仍未做（斗鱼三级分类/翻页/清晰度/弹幕协议、虎牙 Tars、抖音 Protobuf、
+  B 站 `w_rid` 与 `getRoomPlayInfo`、搜索页密度、直播页横竖屏与手势、跨设备同步、视觉对照）。
+- `关联设备` 弹层的截断疑点（第二十一轮记）仍在，要动先量到。
+- 小事：`createComposeRule` 的 deprecated 提示仍在，要迁到
+  `androidx.compose.ui.test.junit4.v2.createComposeRule` 就所有 Robolectric/仪器测试一起迁。
