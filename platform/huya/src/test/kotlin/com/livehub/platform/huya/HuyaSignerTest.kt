@@ -136,4 +136,34 @@ class HuyaSignerTest {
     assertTrue(rewritten.startsWith("http://"))
     assertTrue(rewritten.contains("ctype=tars_mp"))
   }
+
+  /**
+   * The rewrite has to work on the URL [signQuery] actually produces.
+   *
+   * The two tests above hand-write `?ctype=…` as the first parameter, which is not the
+   * shape that reaches `postProcess`: `signQuery` emits `wsSecret`, `wsTime`, `seqid`,
+   * `ctype`, … so `ctype` sits fourth. A pattern anchored on `&ctype=` would still match
+   * today, but only by accident of that ordering — this test drives the real builder so a
+   * future reorder cannot quietly disable the tx rewrite.
+   */
+  @Test
+  fun `postProcess rewrites tx on a url built by the signer`() {
+    val url = HuyaSigner.buildStreamUrl(
+      flvUrl = "https://tx.flv.huya.com/src",
+      streamName = "660000-abc",
+      suffix = "flv",
+      antiCode = HuyaSigner.parseAntiCode(antiCode(ctype = "tars_mp", fs = "bhct"))!!,
+      nowMillis = 1_700_000_000_000,
+    )
+
+    // Precondition: the signer really does place ctype after other parameters.
+    assertTrue(url.indexOf("ctype=") > url.indexOf("&"), "ctype must not be the first parameter")
+
+    val rewritten = HuyaSigner.postProcess(url, "tx")
+
+    assertTrue(rewritten.startsWith("http://"))
+    assertTrue(rewritten.contains("ctype=huya_webh5"), "got $rewritten")
+    assertTrue(rewritten.contains("fs=bgct"), "got $rewritten")
+    assertTrue(!rewritten.contains("tars_mp"), "the old ctype must be gone, got $rewritten")
+  }
 }

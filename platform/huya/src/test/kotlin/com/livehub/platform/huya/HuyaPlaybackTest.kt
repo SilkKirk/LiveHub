@@ -91,12 +91,16 @@ class HuyaPlaybackTest {
     title: String = "测试直播间 - 虎牙直播",
     nick: String = "主播甲",
     activity: Long = 12_345,
+    quotedActivity: Boolean = false,
   ): String {
     val streamList = streams.joinToString(",")
+    // Huya has not been captured for this field, so both JSON encodings are exercised: the
+    // regex used to demand a closing quote and therefore only ever saw the string form.
+    val activityJson = if (quotedActivity) "\"$activity\"" else "$activity"
     return """
       <html><head><title>$title</title></head><body>
       <script>
-      var hyPlayerConfig = {stream: {"data":[{"gameStreamInfoList":[$streamList]}],"iWebDefaultBitRate":4000}, "nick":"$nick", "avatar180":"https://a.msstatic.com/avatar.jpg", "screenshot":"https://a.msstatic.com/cover.jpg", "activityCount":$activity, "gameFullName":"英雄联盟"};
+      var hyPlayerConfig = {stream: {"data":[{"gameStreamInfoList":[$streamList]}],"iWebDefaultBitRate":4000}, "nick":"$nick", "avatar180":"https://a.msstatic.com/avatar.jpg", "screenshot":"https://a.msstatic.com/cover.jpg", "activityCount":$activityJson, "gameFullName":"英雄联盟"};
       </script></body></html>
     """.trimIndent()
   }
@@ -178,6 +182,28 @@ class HuyaPlaybackTest {
 
     assertEquals(3, source.variants.size, "a preference reorders, it does not filter")
     assertEquals("tx", source.defaultVariant?.lineName)
+  }
+
+  /**
+   * The viewer count has to survive either JSON encoding.
+   *
+   * `ACTIVITY_REGEX` used to be `"?(\d+)"` — optional opening quote, mandatory closing one.
+   * That matches no valid JSON number (`12345"` is not a value), so a numeric
+   * `"activityCount":12345` produced `0L` and the room showed zero viewers. Both spellings
+   * are pinned here because the room page has never been captured, so there is no evidence
+   * for dropping either.
+   */
+  @Test
+  fun `the viewer count is read whether it is a number or a string`() = runBlocking {
+    val numeric = FakeHuyaHttp { _, _ ->
+      HttpResponse(200, page(listOf(stream("al")), activity = 8_888), emptyMap(), "")
+    }
+    val quoted = FakeHuyaHttp { _, _ ->
+      HttpResponse(200, page(listOf(stream("al")), activity = 8_888, quotedActivity = true), emptyMap(), "")
+    }
+
+    assertEquals(8_888L, adapter(numeric).playback("660000", null, null).room.viewerCount)
+    assertEquals(8_888L, adapter(quoted).playback("660000", null, null).room.viewerCount)
   }
 
   @Test

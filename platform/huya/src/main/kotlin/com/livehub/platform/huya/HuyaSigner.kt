@@ -121,9 +121,11 @@ object HuyaSigner {
    * Rewrites the `tx` CDN parameters that are incompatible with the H5 player, then
    * downgrades the scheme.
    *
-   * The replacements must not assume a leading `&`: `ctype` is the *first* query
-   * parameter in the URL produced by [signQuery], so a bare `&ctype=` match would
-   * silently do nothing.
+   * The patterns are deliberately **not** anchored on a leading `&`. `signQuery` emits
+   * `wsSecret`, `wsTime`, `seqid`, `ctype`, … so `ctype` is the fourth parameter and an
+   * `&ctype=` pattern would match today; the unanchored form is used so the rewrite cannot
+   * silently stop working if that order ever changes. Nothing else in the query string ends
+   * in `ctype`, so the shorter pattern has no false positives to collide with.
    */
   fun postProcess(url: String, cdnType: String): String {
     val rewritten = if (cdnType.equals("tx", ignoreCase = true)) {

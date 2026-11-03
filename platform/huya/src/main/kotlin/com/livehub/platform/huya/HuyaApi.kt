@@ -376,7 +376,17 @@ class HuyaApi(private val http: HttpClient) {
     private val AVATAR_NAME_REGEX = Regex(""""avatarName"\s*:\s*"([^"]*)"""")
     private val AVATAR_REGEX = Regex(""""avatar180"\s*:\s*"([^"]*)"""")
     private val SCREENSHOT_REGEX = Regex(""""screenshot"\s*:\s*"([^"]*)"""")
-    private val ACTIVITY_REGEX = Regex(""""(?:activityCount|totalCount)"\s*:\s*"?(\d+)"""")
+    /**
+     * Matches the viewer count whether the page encodes it as a number or as a string.
+     *
+     * The pattern used to be `"?(\d+)"` — the opening quote optional but the closing quote
+     * mandatory. No JSON encodes a number that way (`12345"` is not a value), so in practice
+     * it only ever matched the string form and a numeric `"activityCount":12345` silently
+     * fell through to `0L`, i.e. every room reported zero viewers. Making both quotes
+     * optional accepts either encoding; the room page has not been captured, so which one
+     * Huya actually emits is not asserted here.
+     */
+    private val ACTIVITY_REGEX = Regex(""""(?:activityCount|totalCount)"\s*:\s*"?(\d+)"?""")
     private val CATEGORY_REGEX = Regex(""""gameFullName"\s*:\s*"([^"]*)"""")
 
     fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
