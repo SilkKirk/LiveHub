@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -324,8 +325,36 @@ class ScreenshotTest {
   @Test
   fun player() = capture("17-player", playerState())
 
+  /**
+   * The full-screen layout on its first frame.
+   *
+   * No danmaku here: a bubble enters from beyond the right edge, so at frame one every one of
+   * them is outside the clipped overlay. [playerFullscreenDanmaku] is the render that shows
+   * the layer; this one shows the chrome around an empty picture.
+   */
   @Test
   fun playerFullScreen() = capture("17b-player-fullscreen", playerState(), fullscreen = true)
+
+  /**
+   * The full-screen danmaku layer, caught mid-flight.
+   *
+   * This layer had no visual coverage at all for eighteen rounds. The only full-screen render
+   * is taken on the first frame, and at that instant the bubbles have not moved yet: they sit
+   * at the frame's right edge, clipped away. The two renders differ in nothing but the clock
+   * advance, which also pins down why the bubbles were missing.
+   *
+   * 2.5 s is chosen against the player's own timings: far enough that every label has
+   * travelled about a third of its way across, still short of the 3 s after which the
+   * full-screen chrome hides itself, so the render keeps the bar and the side buttons too.
+   */
+  @Test
+  fun playerFullscreenDanmaku() = capture(
+    "17c-player-fullscreen-danmaku",
+    playerState(),
+    fullscreen = true,
+    advanceMillis = 2_500L,
+    onScreenText = "这波操作太秀了",
+  )
 
   /**
    * The loading, offline and error renders must differ from the playing one.
@@ -393,7 +422,28 @@ class ScreenshotTest {
 
   // -------------------------------------------------------------------- helpers ---
 
-  private fun capture(name: String, state: UiState, fullscreen: Boolean = false) {
+  /**
+   * Renders [state] and writes it as `<name>.png`.
+   *
+   * The clock is frozen and exactly one frame is rendered, which is what a static screen
+   * needs. Anything driven by an animation is therefore still at its start value — a danmaku
+   * bubble, for instance, enters from beyond the right edge and is clipped away entirely at
+   * frame one. A render that has to show such an element asks for [advanceMillis] instead of
+   * relying on the default.
+   *
+   * @param advanceMillis extra virtual time to run before capturing, for renders that only
+   *   become visible mid-animation.
+   * @param onScreenText a danmaku label the render must show *inside* the frame. A bubble
+   *   parked at its start position is a node the semantics tree still contains, so existence
+   *   alone proves nothing; this checks the position as well.
+   */
+  private fun capture(
+    name: String,
+    state: UiState,
+    fullscreen: Boolean = false,
+    advanceMillis: Long = 0L,
+    onScreenText: String? = null,
+  ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
       if (state.screen == Screen.Player) {
@@ -424,6 +474,31 @@ class ScreenshotTest {
     // frame instead.
     composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
+
+    if (advanceMillis > 0L) {
+      // `waitForIdle` on a frozen clock does not move time forward — it only settles the
+      // composition — so this is the only thing that actually starts an animation.
+      composeRule.mainClock.advanceTimeBy(advanceMillis)
+      composeRule.waitForIdle()
+    }
+
+    onScreenText?.let { text ->
+      val frame = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+      val bounds = composeRule
+        .onNodeWithText(text, useUnmergedTree = true)
+        .fetchSemanticsNode()
+        .boundsInRoot
+      // A bubble that has not started moving sits at x = the frame's right edge, clipped away
+      // — and its semantics node exists either way, so existence proves nothing. The position
+      // is what shows the capture really contains the layer. 10% of the width is far outside
+      // the parked position and far inside what the advance above buys, whatever the label's
+      // measured width turns out to be.
+      val enteredBy = frame.width * 0.1f
+      assertTrue(
+        "\"$text\" has not entered the frame: $bounds within $frame",
+        bounds.left < frame.right - enteredBy && bounds.right > frame.left,
+      )
+    }
 
     val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
     outputDirs.forEach { dir ->
