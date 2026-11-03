@@ -3,8 +3,10 @@ package com.livehub.app.ui.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
@@ -75,17 +77,17 @@ class SearchScreenTest {
    * the viewer count resolve to the same box — 92dp tall, the whole card — and the position
    * assertions then compared a node with itself.
    */
-  private fun bounds(text: String): NodeBox = with(composeRule.density) {
-    val rect = composeRule
-      .onNodeWithText(text, useUnmergedTree = true)
-      .fetchSemanticsNode()
-      .boundsInRoot
+  private fun boxOf(node: SemanticsNodeInteraction): NodeBox = with(composeRule.density) {
+    val rect = node.fetchSemanticsNode().boundsInRoot
     NodeBox(
       left = rect.left.toDp().value,
       top = rect.top.toDp().value,
       height = rect.height.toDp().value,
     )
   }
+
+  private fun bounds(text: String): NodeBox =
+    boxOf(composeRule.onNodeWithText(text, useUnmergedTree = true))
 
   private data class NodeBox(val left: Float, val top: Float, val height: Float)
 
@@ -153,27 +155,31 @@ class SearchScreenTest {
     assertTrue("the viewer count is drawn on the cover: $viewers vs $title", viewers.top > title.top)
   }
 
-  /** A row has room for two lines of title, which is where a long room name earns its space. */
+  /**
+   * The follow action belongs to the row, not to the cover.
+   *
+   * On the grid tile the star is drawn over the thumbnail's top-right corner, i.e. *above* the
+   * title; a row puts it at the trailing edge, level with the text. This is the assertion the
+   * two-line title could not carry: Robolectric measures text at roughly one pixel per
+   * character, so a realistic Chinese title never wraps here and a height comparison proves
+   * nothing either way. The 2-line clamp is visible in `11-search-results.png` instead, which is
+   * captured on a device.
+   */
   @Test
-  fun `a long title gets a second line`() {
+  fun `the follow action sits at the end of the row, level with the text`() {
     render(
       searchState().copy(
         searchQuery = "英雄联盟",
         lastSearchQuery = "英雄联盟",
-        searchResults = listOf(
-          streamer("1", "一条小团团", "今天继续冲分！冲击王者一百星，打到天亮才下播"),
-          streamer("2", "旭旭宝宝", "DNF"),
-        ),
+        searchResults = listOf(streamer("1", "一条小团团", "今天继续冲分！冲击王者一百星", 128_500)),
       ),
     )
 
-    val long = bounds("今天继续冲分！冲击王者一百星，打到天亮才下播")
-    val short = bounds("DNF")
+    val title = bounds("今天继续冲分！冲击王者一百星")
+    val star = boxOf(composeRule.onNodeWithContentDescription("关注", useUnmergedTree = true))
 
-    assertTrue(
-      "the long title is still clamped to one line: ${short.height} vs ${long.height}",
-      long.height > short.height * 1.5f,
-    )
+    assertTrue("the follow star is still drawn on the cover: $star vs $title", star.top > title.top)
+    assertTrue("the follow star is not at the trailing edge: $star vs $title", star.left > title.left)
   }
 
   /**
