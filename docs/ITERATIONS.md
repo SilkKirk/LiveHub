@@ -2539,3 +2539,154 @@ B站播放页与一张含 B站卡片的搜索结果，属于待办第 9/12 条�
 - 截图补 B站播放页与含 B站卡片的搜索结果（`17d-player-bilibili`、`11b-search-bilibili`）。
 - `DanmakuMessage.userLevel/fansClubLevel` 的待决（第二十五轮记）：仍无人写无人读。
 - `关联设备` 弹层的截断疑点仍在，要动先量到。
+
+## 第二十七轮迭代：虎牙审计（搜索人气、搜索翻页、直播源与 Tars 弹幕复核）
+
+本轮做 runbook 待办第 6 条剩下的部分：**虎牙的分类、翻页、直播源、Tars 弹幕**。
+上一轮（第二十六轮）交接时记的是"第二十四轮只做了 playback 与观众数"，所以这里把余下
+四项逐条对着参考项目 `_ref/dtv_mobile/shared/src/androidMain/kotlin/dtv/mobile/platform/huya/`
+读完，并且**全部先用真实抓包核对**再判断对错。
+
+### 缺陷是什么
+
+两处真缺陷，都在 `HuyaApi.search`（搜索结果页）：
+
+1. **搜索结果的人气永远是 0。** `parseSearchRoom` 里写死 `viewerCount = 0`，而搜索文档
+   其实带 `game_activityCount`——和 `getLiveList` 的 `lUserCount` 是同一个"人气"值。
+   `StreamerCard` 只在 `viewerCount > 0` 时画人气角标（`StreamerCard.kt:97`），所以虎牙
+   搜索结果卡片**从来没有人气**，而同一张卡片在分区列表（`20-huya-home` 截图上 32万 / 8.8万）
+   和关注列表里都有。用户看到的就是"别的平台搜索结果有人气，虎牙没有"。
+2. **搜索翻页在猜页大小。** `rooms.size >= SEARCH_PAGE_SIZE(20)` 判"这页满了"，等于假设
+   每页固定 20 条。实测这个假设不成立（见下），而且它数的是**映射后的房间**——被
+   `parseSearchRoom` 丢掉的无 `room_id` 文档会让页变短，可能在还有结果时提前结束。
+
+### 为什么会这样
+
+翻页那条和第二十三轮斗鱼 `rooms.size >= limit`、第二十六轮 B站 `rooms.size >= 20`
+是**同一类错误**：用行数猜服务端的分页，而不读响应自带的元数据。虎牙的搜索响应其实
+同时给了 `numFound`（结果总数）和 `start`（本次窗口起点），判据本来就现成。
+
+人气那条属于"字段读一半"：`lUserCount` 在列表接口里读了，搜索接口换了字段名
+（`game_activityCount`）就漏了，而且漏的方式最坏——不是空列表，是静默的 0，没人会报错。
+
+### 怎么修的 / 踩了什么坑
+
+**实测证据**（`search.cdn.huya.com/?m=Search&do=getSearchContent`，关键词"英雄联盟"）：
+
+| 请求 | 返回文档数 | numFound | 回显 start |
+| --- | --- | --- | --- |
+| `rows=20 start=0` | 20 | 1590 | 0 |
+| `rows=20 start=20` | **40** | 1590 | 20 |
+| `rows=20 start=40` | **40** | 1590 | 40 |
+| `rows=10 start=10` | **40** | 1590 | 10 |
+| `rows=30 start=0` | 30 | 1590 | 0 |
+| `rows=50 start=0` | 50 | 1590 | 0 |
+| `start=1540` | 0 | **0** | — |
+
+三条结论：(a) `rows` 只在 `start=0` 时被尊重，`start>0` 一律给 40 条，所以"页大小"不存在；
+(b) 深翻到 `start≈1520` 之后服务端直接给 0 条并把 `numFound` 归零，所以只信总数会一直要
+空页；(c) `numFound` + 回显 `start` 足以精确判断还有没有下一页。
+
+改动：
+
+- `HuyaApi.search(keyword, start)` 返回新的 `HuyaSearchPage(rooms, nextStart)`；
+- 判据抽成 `nextSearchStart(bucket, requestedStart, docCount)`：`null` 表示到底，否则
+  返回 `回显 start + 原始文档数`；空页一律到底，缺 `numFound` 也到底；
+- **推进量用原始文档数而不是映射后的条数**，否则被丢掉的文档会被反复请求；
+- `HuyaAdapter.search` 的 cursor 从"页码"改成"下一段的 start"（不存在可以相乘的页大小）；
+- `parseSearchRoom` 读 `game_activityCount`，并从 `private` 改成 `internal` 以便直接对着
+  抓包断言。
+
+**踩的坑（真实发生）**：第一次推送 CI 就红了，红在 `Build & test`：
+
+```
+HuyaSearchTest.the next start advances by the documents the server returned()
+expected: <60> but was: <40>
+```
+
+是**测试自己的错，不是代码的错**：那条断言拿抓包 fixture 当"第二页"用，可 fixture 是
+首页、回显的 `start` 是 0，而规则写的就是"回显值优先"，于是 0 + 40 = 40。规则行为正确，
+是测试喂错了输入。改成用一份回显 `start: 20` 的 bucket 断言 60，并在注释里写明为什么
+不能拿首页 fixture 验证第二条。第二次推送三个 job 全绿。
+
+**另外记一笔**：上一个提交的信息里我写"虎牙模块 43 → 54 条"，那是提交前没核对数出来的
+估计值，**是错的**。真实数字是虎牙 **71 → 81**、全仓库 **489 → 499**（从 `test-reports`
+产物的 `TEST-*.xml` 里逐个数出来的）。
+
+### 四项审计的结论（含"无需改"的依据）
+
+- **分类**：`app/src/main/assets/categories/huya_categories.json` 与参考项目
+  `shared/src/androidMain/assets/categories/huya_categories.json` **逐字节相同**
+  （SHA256 `92375F59…C5E7F0`，68710 字节，4 组 / 424 个分区）。参考项目那份 `HuyaCate2`
+  的字段叫 `gid`，但 JSON 里的键是 `id`，我们读 `id` 与真实数据一致。**无需改。**
+- **翻页（分区列表）**：`iPageSize` 被服务端忽略（要 30 给 120），`hasMorePages` 读
+  `iTotal`/`iTotalPage`/`iPageNo`，第二十三轮已修并有 9 条测试。**本轮复核，无需改。**
+- **翻页（搜索）**：见上，**本轮修掉**。
+- **直播源**：把 `HuyaSigner` 的算法（fm 解码 → `wsPrefix` → `md5(seqid|ctype|100)` →
+  `md5(prefix_uid_streamName_hash_wsTime)`，参数顺序 `wsSecret/wsTime/seqid/ctype/ver/fs/
+  uuid/u/t/sv/sdk_sid/codec`）原样移植到 Python，对真实房间页的 `sFlvAntiCode` 重算，
+  签出的地址请求回来是 **HTTP 200 / `video/x-flv` / 首字节 `FLV` / 带 `onMetaData`**。
+  `adjustTxStreamUrl`（`ctype=tars_mp→huya_webh5`、`fs=bhct→bgct`）与 `enforceHttp`
+  也和参考项目一致。**无需改。**
+- **Tars 弹幕**：在真 socket（`wss://cdnws.api.huya.com`，房间 660000 / ayyuid 1346609715）
+  上抓了 **24 帧 pushType=7**。外层 `{0:7, 1:simple-list}`、内层
+  `{0:组, 1:消息类型, 2:body}`，消息类型分布为 1400（聊天）9 帧、6110（进房）5 帧、
+  6213 4 帧、6501 2 帧、6479/6480/6481/7105 各 1 帧。**9 帧 1400 全部解出正确的昵称+正文**
+  （例：`('天天很开心啊','拿到大龙还能输啊')`、`('小虎牙-g7GyJ9YUmt','玩转世界赛！')`），
+  非聊天的类型全部被正确忽略。耗时 60 秒的对照抓包里 pushType=22 信封共 35 条消息，
+  类型是 6111/6892/8006/1000104/1150001 这类活动/统计推送，**1400 一条没有**，
+  所以"只认 pushType 7 + 1400"不会漏聊天。**无需改。**
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（499 条，本轮新增 10 条；虎牙模块 71 → 81 条） | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+
+虎牙模块用例分布（`TEST-*.xml` 逐个数出）：`TarsTest` 18、`HuyaSignerTest` 11、
+`HuyaDanmakuProtocolTest` 11、**`HuyaSearchTest` 10（本轮新增）**、`HuyaPaginationTest` 9、
+`HuyaPlaybackTest` 8、`HuyaCategoriesTest` 7、`HuyaFixtureTest` 7。
+
+新增 `HuyaSearchTest` 10 条：
+
+- `a captured search result keeps the popularity the payload provides`（钉住 17,863,363）
+- `a document without a popularity field reports zero viewers`
+- `the live flag is read as a boolean for every captured document`（抓包里 20 条只有 6 条在播）
+- `the next start advances by the documents the server returned`
+- `the reported start is used when present`
+- `the last page ends when numFound is reached`
+- `an empty page ends even when the total promises more`
+- `a response without numFound ends instead of looping`
+- `documents dropped by the mapper still advance the cursor`
+- `the adapter hands out the next start as the cursor`（走 `HuyaAdapter.search` 全链路）
+
+### 截图
+
+`python ci.py shots --out E:\app\dist-shots\r27` 下载 28 张，无哈希重复。**28 张与第二十六轮
+逐字节相同**（SHA256 全量对比 `dist-shots\r26`，differing = 0）——本轮只改数据层，没动 UI。
+
+- `20-huya-home`：两张虎牙卡（32万 / 8.8万 人气）+「已经到底了」；这张图恰好是本轮对照的
+  证据：**同一个 `StreamerCard`，分区列表有人气**，而搜索路径之前恒为 0；
+- `11-search-results`：四张斗鱼卡，全部带人气角标。
+
+**截图看不出的东西（必须诚实说）**：`11-search-results` 用的是斗鱼 fixture
+（`ScreenshotTest.kt`），**一张虎牙搜索结果截图都没有**，所以本轮修的"搜索人气"与
+"搜索翻页"在截图上完全无法体现，证据只有 JVM 测试 + 上面的真实抓包。补一张含虎牙卡片的
+搜索结果截图属于待办第 9 条。
+
+### 下一轮
+
+- 待办第 10 条：**虎牙「清晰度」菜单会渲染六个同名的"原画" chip**（本轮审计发现，
+  未修）。依据：真实房间页 `gameStreamInfoList` 给 6 个 CDN 条目但只有 3 个不同主机
+  （AL/AL13 → `al-game.flv.huya.com`，TX/TX15 → `tx.flv.huya.com`，
+  HS/HS24 → `hs-game.flv.huya.com`），而 `HuyaApi.playback` 给每个条目都打
+  `qualityLabel = "原画"`；`PlayerScreen.kt:770` 的「清晰度」行直接遍历 `state.variants`，
+  于是出现 6 个一样的 chip，点哪个都不知道区别。参考项目把"线路"叫 CDN、根本没有清晰度
+  轴，所以要动得先决定：是把 chip 标成线路名，还是把线路并到「线路」那一行。
+- 待办第 9 条：搜索页四平台的信息密度与空态（含补/`11b-search-huya` 截图）。
+- `BilibiliApi.playback` 的 `preferredLine` 仍未使用（第二十六轮留待）。
+- `DanmakuMessage.userLevel/fansClubLevel` 仍无人写无人读。
+- `关联设备` 弹层的截断疑点仍在。
