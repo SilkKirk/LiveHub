@@ -60,8 +60,6 @@ class DouyuScriptSigningTest {
   @Test
   fun `Rhino runs the real script and yields the parameters getH5Play expects`() {
     val signed = signWithEngine(roomId = "226037", did = DID, ts = TS)
-    // Reported in the failure message so a shape change is obvious from CI alone.
-    println("signed=$signed")
 
     val params = signed.split('&').associate { part ->
       val index = part.indexOf('=')
