@@ -172,12 +172,40 @@ class BilibiliApi(
     return response.requireSuccess().let { parseObject(it.body, "second/getList") }
   }
 
+  /**
+   * One page of a category, plus whether the response itself says there is more.
+   *
+   * The cursor used to be `rooms.size >= 20`, i.e. "I got back as many rooms as I asked
+   * for". Both halves of that guess are wrong, measured against the live endpoint:
+   *
+   *  * The page size is the **server's** choice and varies per area — `1:145` answered 20
+   *    rooms, `2:249` answered 27 and `2:86` answered 40 — so no single threshold can stand
+   *    in for "this page was full".
+   *  * A quiet area answers a *single room* with `has_more = 1` (`2:1048`, `2:1096`; `2:575`
+   *    answered three). One card is below any threshold, so the category reported itself
+   *    finished after the first page and the rest was unreachable.
+   *
+   * The response carries the answer directly in `data.has_more` (1/0). An empty page omits
+   * the field altogether, which is also the end of the list.
+   */
   private fun parseAreaPage(root: JsonObject): Pair<List<Streamer>, Boolean> {
-    val list = root["data"]?.jsonObject?.get("list")?.jsonArray ?: JsonArray(emptyList())
+    val data = root["data"] as? JsonObject
+    val list = data?.get("list")?.jsonArray ?: JsonArray(emptyList())
     val rooms = list.mapNotNull { parseRoom(it) }
-    return rooms to (rooms.size >= DEFAULT_PAGE_SIZE)
+    val flag = data?.get("has_more")?.jsonPrimitive?.intOrNull
+    val hasMore = if (flag != null) flag == 1 else list.isNotEmpty()
+    return rooms to hasMore
   }
 
+  /**
+   * The hot tab, which is a single page.
+   *
+   * `page` and `page_size` are both ignored: `page_size=5`, `=20` and `=200` all answer the
+   * same 110 rooms in 11 modules, and page 2 answers 110 rooms of which **97 are the ones
+   * page 1 already returned** (page 5 does the same). Reporting "more" from the room count —
+   * what this used to do — therefore kept the grid appending a rotating copy of itself with
+   * no end, and every card the reader had already seen came back with it.
+   */
   private suspend fun hotRooms(page: Int, pageSize: Int): Pair<List<Streamer>, Boolean> {
     val url = "$URL_INDEX_LIST?platform=web&parent_area_id=0&area_id=0&page=$page&page_size=$pageSize"
     val response = http.get(
@@ -194,7 +222,7 @@ class BilibiliApi(
       val list = (module as? JsonObject)?.get("list")?.jsonArray ?: JsonArray(emptyList())
       list.mapNotNull { parseRoom(it) }
     }
-    return rooms to (rooms.size >= pageSize)
+    return rooms to false
   }
 
   // --------------------------------------------------------------------- search
@@ -207,6 +235,15 @@ class BilibiliApi(
    * Search is the one place where an error message is less useful than an empty list: the
    * reference client behaves the same way, and a transient failure would otherwise replace
    * the result grid with a retry button the user did not ask for.
+   *
+   * The rooms live in **`result.live_room`**, not `result.live_user`. The reference client
+   * reads `live_user`, and so did this method, but a captured response shows why that is the
+   * wrong bucket: `live_user` answers **6 users per page regardless of the page number** (page
+   * 1 and page 2 carried the same six ids) and those users come without a room title or a
+   * viewer count — most were not even live. `live_room` answers **40 rooms per page** with
+   * `title`, `uname`, `cover`, `uface`, `online` and `live_status`, i.e. exactly the fields
+   * [parseSearchRoom] reads. Searching Bilibili therefore showed six stale cards and no way
+   * to see the other 800-odd results.
    */
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
     val trimmed = keyword.trim()
@@ -229,15 +266,89 @@ class BilibiliApi(
       ?: return emptyList<Streamer>() to false
     val code = root["code"]?.jsonPrimitive?.intOrNull ?: -1
     if (code != 0) return emptyList<Streamer>() to false
-    val users = root["data"]?.jsonObject?.get("result")?.jsonObject?.get("live_user")?.jsonArray
+    val data = root["data"] as? JsonObject
+    val users = (data?.get("result") as? JsonObject)?.get("live_room")?.jsonArray
       ?: JsonArray(emptyList())
     val rooms = users.mapNotNull { parseSearchRoom(it) }
-    return rooms to (rooms.size >= DEFAULT_PAGE_SIZE)
+    return rooms to hasMoreSearchPage(data, page, rooms)
+  }
+
+  /**
+   * Whether another search page exists.
+   *
+   * Counting the rooms on the page cannot answer this: the page size is 40 and the last page
+   * is short, so "as many as I expected" is not a signal. The response says it outright —
+   * `pageinfo.live_room.numPages` is the room bucket's own page count (22 for a query whose
+   * rooms ended on page 22) while `data.numPages` is the largest across all buckets (25 for
+   * the same query) and would page through three empty pages. Measured on page 22 (37 rooms)
+   * and page 23 (0 rooms).
+   */
+  private fun hasMoreSearchPage(
+    data: JsonObject?,
+    page: Int,
+    rooms: List<Streamer>,
+  ): Boolean {
+    val totalPages = (data?.get("pageinfo") as? JsonObject)
+      ?.get("live_room")?.jsonObject?.get("numPages")?.jsonPrimitive?.intOrNull
+      ?: data?.get("numPages")?.jsonPrimitive?.intOrNull
+    return if (totalPages != null) page < totalPages else rooms.isNotEmpty()
   }
 
   // --------------------------------------------------------------------- detail
 
+  /**
+   * Everything the player header shows, from `getH5InfoByRoom`.
+   *
+   * This used to read `room/v1/Room/get_info`, which no longer carries the fields the
+   * header needs: the live response has `title`, `live_status`, `online` and `user_cover`
+   * but **no `uname`, no `anchor_info` and no `watched_show`** at all. Every branch that
+   * looked for a name therefore fell through, so a Bilibili room opened with an empty
+   * streamer name, an empty avatar and a viewer count of 0.
+   *
+   * `getH5InfoByRoom` is what the web room page itself calls, and the shape the reference
+   * client maps in `fetchBilibiliFollowInfo`: the anchor sits in `anchor_info.base_info`
+   * and the numbers in `room_info`. `room_info.online` is the count next to the live
+   * badge; `watched_show.num` is the cumulative "看过" figure and only a fallback.
+   */
   suspend fun roomInfo(roomId: String): BilibiliRoomInfo {
+    val url = "$URL_ROOM_DETAIL?room_id=$roomId"
+    val response = http.get(
+      url,
+      headers = mapOf(
+        "User-Agent" to HttpClients.UA_SIMPLE,
+        "Referer" to "https://live.bilibili.com/",
+      ),
+    )
+    val root = response.requireSuccess().let { parseObject(it.body, "getH5InfoByRoom") }
+    ensureSuccess(root, "B站房间信息获取失败")
+    val data = root["data"]?.jsonObject
+      ?: throw PlatformProtocolException("B站房间数据为空", Platform.BILIBILI)
+    val room = data["room_info"] as? JsonObject ?: data
+    val anchor = (data["anchor_info"] as? JsonObject)?.get("base_info") as? JsonObject
+    val watched = data["watched_show"]?.jsonObject?.get("num")
+      ?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+    return BilibiliRoomInfo(
+      roomId = roomId,
+      title = room.str("title").orEmpty(),
+      streamerName = anchor?.str("uname")?.takeIf { it.isNotBlank() }
+        ?: room.str("uname").orEmpty(),
+      coverUrl = (room.str("keyframe") ?: room.str("cover") ?: room.str("user_cover"))
+        ?.let(Texts::normalizeUrl),
+      avatarUrl = anchor?.str("face")?.let(Texts::normalizeUrl),
+      viewerCount = room["online"]?.jsonPrimitive?.longOrNull ?: watched ?: 0,
+      isLive = (room["live_status"]?.jsonPrimitive?.intOrNull ?: 0) == 1,
+    )
+  }
+
+  /**
+   * Liveness of one room, for refreshing the follow list.
+   *
+   * That list refreshes every followed room, so it stays on the cheap `Room/get_info`
+   * endpoint — the same one the reference client polls for the same reason. It has no
+   * anchor name, which is fine: the follow entry already carries the name the user
+   * followed. The full payload is [roomInfo]'s job.
+   */
+  suspend fun liveStatus(roomId: String): BilibiliLiveStatus {
     val url = "$URL_ROOM_INFO?room_id=$roomId"
     val response = http.get(
       url,
@@ -246,20 +357,15 @@ class BilibiliApi(
         "Referer" to "https://live.bilibili.com/",
       ),
     )
-    val root = response.requireSuccess().let { parseObject(it.body, "roomInfo") }
-    ensureSuccess(root, "B站房间信息获取失败")
-    val data = root["data"]?.jsonObject ?: throw PlatformProtocolException("B站房间数据为空", Platform.BILIBILI)
-    return BilibiliRoomInfo(
-      roomId = roomId,
-      title = data.str("title").orEmpty(),
-      streamerName = data.str("uname") ?: data["anchor_info"]?.jsonObject?.get("base_info")
-        ?.jsonObject?.str("uname").orEmpty(),
-      coverUrl = data.str("user_cover")?.let(Texts::normalizeUrl),
-      avatarUrl = data["anchor_info"]?.jsonObject?.get("base_info")?.jsonObject
-        ?.str("face")?.let(Texts::normalizeUrl),
-      viewerCount = data["watched_show"]?.jsonObject?.get("num")
-        ?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0,
+    val root = response.requireSuccess().let { parseObject(it.body, "Room/get_info") }
+    ensureSuccess(root, "B站房间状态获取失败")
+    val data = root["data"]?.jsonObject
+      ?: throw PlatformProtocolException("B站房间数据为空", Platform.BILIBILI)
+    return BilibiliLiveStatus(
       isLive = (data["live_status"]?.jsonPrimitive?.intOrNull ?: 0) == 1,
+      title = data.str("title")?.takeIf { it.isNotBlank() },
+      coverUrl = data.str("user_cover")?.let(Texts::normalizeUrl),
+      viewerCount = data["online"]?.jsonPrimitive?.longOrNull ?: 0,
     )
   }
 
@@ -624,13 +730,15 @@ class BilibiliApi(
     const val URL_AREA_LIST = "https://api.live.bilibili.com/room/v1/Area/getList?show_pinyin=1"
     const val URL_SEARCH = "https://api.bilibili.com/x/web-interface/search/type"
     const val URL_ROOM_INFO = "https://api.live.bilibili.com/room/v1/Room/get_info"
+
+    /** The room payload the player header needs; `Room/get_info` no longer has the anchor. */
+    const val URL_ROOM_DETAIL = "https://api.live.bilibili.com/xlive/web-room/v1/index/getH5InfoByRoom"
     const val URL_PLAY_INFO = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo"
     const val URL_DANMU_INFO = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
     const val URL_NAV = "https://api.bilibili.com/x/web-interface/nav"
     const val URL_FINGER_SPI = "https://api.bilibili.com/x/frontend/finger/spi"
 
     const val DEFAULT_QN = 10000
-    const val DEFAULT_PAGE_SIZE = 20
     const val NAV_TTL_MILLIS = 6L * 60 * 60 * 1000
     const val ACCESS_ID_TTL_MILLIS = 30L * 60 * 1000
 
@@ -692,7 +800,7 @@ class BilibiliApi(
   }
 }
 
-/** Room details resolved from `room/v1/Room/get_info`. */
+/** Room details resolved from `getH5InfoByRoom`. */
 data class BilibiliRoomInfo(
   val roomId: String,
   val title: String,
@@ -701,4 +809,12 @@ data class BilibiliRoomInfo(
   val avatarUrl: String?,
   val viewerCount: Long,
   val isLive: Boolean,
+)
+
+/** The few fields the follow list needs, from `Room/get_info`. */
+data class BilibiliLiveStatus(
+  val isLive: Boolean,
+  val title: String?,
+  val coverUrl: String?,
+  val viewerCount: Long,
 )

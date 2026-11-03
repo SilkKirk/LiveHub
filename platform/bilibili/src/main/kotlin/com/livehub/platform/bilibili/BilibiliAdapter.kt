@@ -85,7 +85,7 @@ class BilibiliAdapter(
   }
 
   override suspend fun liveStatus(roomId: String): LiveStatus? {
-    val info = api.roomInfo(roomId)
+    val info = api.liveStatus(roomId)
     return LiveStatus(
       platform = platform,
       roomId = roomId,
