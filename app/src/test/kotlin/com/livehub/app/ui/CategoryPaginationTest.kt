@@ -210,14 +210,17 @@ class CategoryPaginationTest {
     }
 
     /**
-     * A full page of rooms.
+     * A deliberately **short** page of rooms.
      *
-     * `DouyuApi.rooms` reports another page only when it parsed as many rooms as it asked
-     * for, so a short page would end the sequence and `LoadMore` would return without ever
-     * making a request.
+     * `DouyuApi.rooms` used to report another page only when it had parsed as many rooms
+     * as it asked for, so this fake had to return exactly `PAGE_SIZE` rows or `LoadMore`
+     * would never fire. That made the test tolerate the bug it was standing next to.
+     * Douyu picks the page size itself (`?limit=20` came back with 40 rooms in the
+     * recorded capture) and only an empty `data.rl` ends a category, so three rooms per
+     * page is a legal answer and the sequence must still continue.
      */
     private fun pageJson(): String {
-      val rooms = (1..DouyuAdapter.PAGE_SIZE).joinToString(",") { index ->
+      val rooms = (1..3).joinToString(",") { index ->
         """{"rid":"r$index","nn":"主播$index","rn":"标题$index","ol":"$index"}"""
       }
       return """{"code":0,"data":{"rl":[$rooms]}}"""

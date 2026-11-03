@@ -3,14 +3,12 @@ package com.livehub.platform.douyu
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
-import com.livehub.core.model.StreamVariant
 import com.livehub.core.network.decodeHtmlEntities
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
@@ -131,34 +129,6 @@ object DouyuParser {
       // mixListV1 only lists rooms that are on air.
       isLive = true,
       updatedAt = System.currentTimeMillis(),
-    )
-  }
-  /** `newRecList` uses an absolute offset cursor and reports a total. */
-  fun recList(root: JsonObject, offset: Int, limit: Int): DouyuRoomPage {
-    val data = root["data"] as? JsonObject
-    val list = (data?.get("list") as? JsonArray) ?: JsonArray(emptyList())
-    val total = data?.get("total")?.jsonPrimitive?.intOrNull ?: -1
-    val rooms = list.mapNotNull { roomFromListElement(it) }
-    val consumed = offset + limit
-    val hasMore = when {
-      rooms.isEmpty() -> false
-      total < 0 -> rooms.size >= limit
-      else -> consumed < total
-    }
-    return DouyuRoomPage(
-      rooms = rooms,
-      nextOffset = if (hasMore) (offset + limit).toString() else null,
-    )
-  }
-
-  /** `mixListV1` is page based and returns no total, so an empty page ends it. */
-  fun mixList(root: JsonObject, page: Int): DouyuRoomPage {
-    val data = root["data"] as? JsonObject
-    val list = (data?.get("rl") as? JsonArray) ?: JsonArray(emptyList())
-    val rooms = list.mapNotNull { roomFromListElement(it) }
-    return DouyuRoomPage(
-      rooms = rooms,
-      nextOffset = if (rooms.isNotEmpty()) (page + 1).toString() else null,
     )
   }
 
@@ -315,25 +285,6 @@ object DouyuParser {
       rtmpLive = rtmpLive,
       cdns = cdns.ifEmpty { listOf(DEFAULT_DOUYU_CDN) },
       rates = rates,
-    )
-  }
-
-  private fun roomFromListElement(element: JsonElement): Streamer? {
-    val obj = element as? JsonObject ?: return null
-    val roomId = obj.string("rid") ?: obj.string("room_id") ?: return null
-    if (roomId.isBlank()) return null
-    return Streamer(
-      platform = Platform.DOUYU,
-      roomId = roomId,
-      streamerName = obj.string("nn") ?: obj.string("nickname").orEmpty(),
-      title = obj.string("rn") ?: obj.string("roomName").orEmpty(),
-      coverUrl = (obj.string("rs16") ?: obj.string("roomSrc"))?.let(::normalizeUrl),
-      avatarUrl = (obj.string("av") ?: obj.string("avatar"))?.let(::normalizeUrl),
-      viewerCount = obj["ol"]?.jsonPrimitive?.longOrNull
-        ?: obj.string("hn")?.toLongOrNull()
-        ?: 0,
-      isLive = true,
-      updatedAt = System.currentTimeMillis(),
     )
   }
 

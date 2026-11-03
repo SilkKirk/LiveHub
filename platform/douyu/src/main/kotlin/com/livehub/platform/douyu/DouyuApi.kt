@@ -3,13 +3,9 @@ package com.livehub.platform.douyu
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.PlaybackSource
-import com.livehub.core.model.RoomPage
-import com.livehub.core.model.StreamVariant
-import com.livehub.core.model.Streamer
 import com.livehub.core.network.HttpClient
 import com.livehub.core.network.HttpClients
 import com.livehub.core.network.HttpResponse
-import com.livehub.core.network.Crypto
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
 import kotlinx.coroutines.Dispatchers
@@ -17,14 +13,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 
 /**
  * Douyu API client: pure request building and response parsing.
@@ -73,7 +67,6 @@ class DouyuApi(
     categoryId: String,
     page: Int,
     limit: Int,
-    slug: String? = null,
     level: Int = 2,
   ): DouyuRoomPage {
     val currentPage = if (page <= 0) 1 else page
@@ -101,8 +94,16 @@ class DouyuApi(
     val list = root["data"]?.jsonObject?.get("rl")?.jsonArray ?: JsonArray(emptyList())
     val rooms = list.mapNotNull { DouyuParser.mixListRoom(it) }
 
-    // `limit` is honoured server side, so a short page means the category is exhausted.
-    val hasMore = rooms.size >= limit
+    // `mixListV1` returns no total and no page count, so an empty `data.rl` is the only
+    // end-of-list signal (`douyu_spec.md` §1.4). Counting parsed rooms against `limit`
+    // — what this used to do — is wrong twice over:
+    //  * the server picks the page size itself and ignores `limit`; the recorded
+    //    `?limit=20` capture in `fixtures/douyu-mixlistv1.json` came back with 40 rooms,
+    //    so comparing against the requested 30 was always comparing unrelated numbers;
+    //  * `rooms` is the *mapped* list, and [DouyuParser.mixListRoom] drops entries with a
+    //    blank or zero `rid`, so one bad row made a full page look short and silently
+    //    ended the list — the grid said "没有更多了" with the rest of the category unread.
+    val hasMore = list.isNotEmpty()
     return DouyuRoomPage(
       rooms = rooms,
       nextOffset = if (hasMore) (currentPage + 1).toString() else null,
@@ -324,9 +325,6 @@ class DouyuApi(
 
   // -------------------------------------------------------------------- helpers
 
-  internal fun JsonObject.intField(name: String): Int? =
-    (this[name] as? JsonElement)?.jsonPrimitive?.intOrNull
-
   /** Delegates to [DouyuResponseRules]; see there for why HTML needs translating. */
   private fun HttpResponse.parseObject(label: String): JsonObject =
     DouyuResponseRules.requireJson(body = body, code = code, label = label)
@@ -341,13 +339,10 @@ class DouyuApi(
     const val SUB_CATEGORY_PREFIX = "c3:"
     const val URL_MIX_LIST = "https://www.douyu.com/gapi/rkc/directory/mixListV1"
     const val URL_THREE_CATE = "https://capi.douyucdn.cn/api/v1/getThreeCate"
-    const val URL_REC_LIST = "https://m.douyu.com/hgapi/live/cate/newRecList"
     const val URL_SEARCH = "https://www.douyu.com/japi/search/api/searchUser"
     const val URL_BETARD = "https://www.douyu.com/betard"
     const val URL_GET_H5_PLAY = "https://www.douyu.com/lapi/live/getH5Play"
 
     fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
-
-    private fun JsonElement?.jsonArraySafe(): JsonArray = (this as? JsonElement)?.jsonArray ?: JsonArray(emptyList())
   }
 }

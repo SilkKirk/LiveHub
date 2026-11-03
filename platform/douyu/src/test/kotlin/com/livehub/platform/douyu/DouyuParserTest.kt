@@ -39,50 +39,6 @@ class DouyuParserTest {
   }
 
   @Test
-  fun `recList maps every field and reports more pages from the total`() {
-    val root = obj(
-      """
-      {"error":0,"data":{"total":100,"list":[
-        {"rid":123,"rn":"标题","nn":"主播","rs16":"https://img/1.jpg","av":"https://img/a.jpg","ol":12345}
-      ]}}
-      """,
-    )
-    val page = DouyuParser.recList(root, offset = 0, limit = 30)
-
-    assertEquals(1, page.rooms.size)
-    val room = page.rooms.first()
-    assertEquals("123", room.roomId)
-    assertEquals("标题", room.title)
-    assertEquals("主播", room.streamerName)
-    assertEquals(12345L, room.viewerCount)
-    assertTrue(room.isLive)
-    assertEquals("30", page.nextOffset)
-  }
-
-  @Test
-  fun `recList stops when the total is consumed`() {
-    val root = obj("""{"data":{"total":30,"list":[{"rid":1,"rn":"t","nn":"n"}]}}""")
-    val page = DouyuParser.recList(root, offset = 0, limit = 30)
-    assertNull(page.nextOffset)
-  }
-
-  @Test
-  fun `recList ends when an empty page arrives`() {
-    val page = DouyuParser.recList(obj("""{"data":{"total":500,"list":[]}}"""), 0, 30)
-    assertTrue(page.rooms.isEmpty())
-    assertNull(page.nextOffset)
-  }
-
-  @Test
-  fun `mixList ends on an empty page`() {
-    val page = DouyuParser.mixList(obj("""{"data":{"rl":[]}}"""), page = 3)
-    assertNull(page.nextOffset)
-
-    val next = DouyuParser.mixList(obj("""{"data":{"rl":[{"rid":9,"rn":"t","nn":"n"}]}}"""), page = 3)
-    assertEquals("4", next.nextOffset)
-  }
-
-  @Test
   fun `search drops non anchor results and keeps anchors`() {
     val root = obj(
       """
