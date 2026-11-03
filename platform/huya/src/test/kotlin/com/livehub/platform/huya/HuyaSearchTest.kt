@@ -116,11 +116,18 @@ class HuyaSearchTest {
    * Measured live on one query: `start=0` → 20 documents, `start=20` → 40 documents. A
    * page-number cursor multiplied by 20 would ask for `start=40` after the second page and
    * skip the 20 results the server had already handed over.
+   *
+   * The second case needs a bucket that *echoes* `start: 20`: the rule advances from the
+   * echoed offset, and the captured fixture says 0 because it is a first page.
    */
   @Test
   fun `the next start advances by the documents the server returned`() {
     assertEquals(20, api.nextSearchStart(bucket, requestedStart = 0, docCount = 20))
-    assertEquals(60, api.nextSearchStart(bucket, requestedStart = 20, docCount = 40))
+
+    val second = json.parseToJsonElement(
+      """{"start":20,"numFound":1507}""",
+    ).jsonObject
+    assertEquals(60, api.nextSearchStart(second, requestedStart = 20, docCount = 40))
   }
 
   /** The `start` the server echoes wins over the one that was requested. */
