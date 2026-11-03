@@ -27,14 +27,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** One danmaku currently flying across the screen. */
-private data class FlyingDanmaku(
+/**
+ * One danmaku currently flying across the screen.
+ *
+ * `internal` rather than private so [DanmakuLine] can be driven directly from a test: the JVM
+ * test runner has no font backend, so labels there have no measurable width and an
+ * overlay-level test cannot tell a long message from a short one. Handing the line a
+ * synthetic item with a real width is the only way to pin its timing from a JVM test.
+ */
+internal data class FlyingDanmaku(
   val id: Long,
   val text: String,
   val lane: Int,
   val color: Color,
   /** Measured width of this label, used for both the exit point and lane scheduling. */
   val textWidthPx: Float,
+  /** How long this particular label takes to cross, from [flightDurationMs]. */
+  val flightMillis: Long,
 )
 
 /**
@@ -57,6 +66,42 @@ internal fun chooseLane(laneAvailableAt: LongArray, now: Long): Int? {
     }
   }
   return bestLane.takeIf { bestReadyAt <= now + LANE_TOLERANCE_MILLIS }
+}
+
+/**
+ * How long a label needs to cross the overlay, in milliseconds.
+ *
+ * The overlay scrolls at a constant speed, not for a constant duration. A fixed duration
+ * gives every label the same time on screen no matter how far it has to travel, so the
+ * speed becomes a function of how long the message happens to be. With the old 8 s and a
+ * screen that fits twenty-two CJK characters, a three-character danmaku moved at
+ * 0.14 px/ms and a thirty-character one at 0.30 px/ms — the same word read at half or
+ * double the pace depending on how much company it kept inside the message, and in
+ * characters-per-second past a fixed point, 3.1 against 6.5. Constant px/s is what removes
+ * that spread; it is also what every mainstream client does.
+ *
+ * The reference client arrives at the same place from the other side: `ScrollingDanmakuItem`
+ * hardcodes 9000 ms, but it also travels a fixed distance (`startX = widthPx`,
+ * `endX = -widthPx`), so its speed is constant and only its duration is written down. That
+ * is not support for a fixed *duration* — this overlay's travel is `screen + label`, which
+ * varies, so the duration has to be derived instead of fixed.
+ *
+ * [MILLIS_PER_SCREEN_WIDTH] is calibrated so a typical ten-character danmaku — about 0.45
+ * screen widths at the default text size — keeps the 8 s the old fixed duration gave it.
+ * Shorter labels therefore cross faster than before and longer ones slower, which is the
+ * whole point of the change.
+ *
+ * The result is clamped to [MAX_FLIGHT_MILLIS]: a label that would need half a minute would
+ * hold its lane that long, and under a burst the overlay would starve instead of dropping
+ * danmaku. Only messages past roughly forty characters are affected, and they scroll a
+ * little faster than the baseline rather than being cut off.
+ */
+internal fun flightDurationMs(textWidthPx: Float, screenWidthPx: Float): Long {
+  // Coerced rather than guarded: the caller passes a measured width that can legitimately be
+  // zero on the first frame, and a division by a zero screen would be a crash for no reason.
+  val screen = screenWidthPx.coerceAtLeast(1f)
+  val travel = screen + textWidthPx.coerceAtLeast(1f)
+  return ((travel / screen) * MILLIS_PER_SCREEN_WIDTH).toLong().coerceAtMost(MAX_FLIGHT_MILLIS)
 }
 
 /**
@@ -184,6 +229,7 @@ fun DanmakuOverlay(
             .coerceAtLeast(1f)
 
           val lane = chooseLane(laneAvailableAt, frameTime) ?: return@forEach
+          val flightMillis = flightDurationMs(textWidthPx, screenWidthPx)
 
           flying.add(
             FlyingDanmaku(
@@ -192,10 +238,15 @@ fun DanmakuOverlay(
               lane = lane,
               color = message.color?.let { Color(it) } ?: DEFAULT_COLOR,
               textWidthPx = textWidthPx,
+              flightMillis = flightMillis,
             ),
           )
+          // The hand-off has to use this label's own flight time: the lane is free once the
+          // tail clears the entry point, which is a fraction of how long *this* label is on
+          // screen. Reusing one duration for every message would free a wide label's lane
+          // long before it had actually moved out of the way.
           laneAvailableAt[lane] =
-            frameTime + laneFreeAfterMs(textWidthPx, screenWidthPx, FLIGHT_MILLIS)
+            frameTime + laneFreeAfterMs(textWidthPx, screenWidthPx, flightMillis)
         }
       }
       // Keep the overlay bounded: a busy room can push hundreds of messages a second.
@@ -218,7 +269,7 @@ fun DanmakuOverlay(
 }
 
 @Composable
-private fun DanmakuLine(
+internal fun DanmakuLine(
   item: FlyingDanmaku,
   screenWidthPx: Float,
   laneHeightPx: Float,
@@ -237,7 +288,7 @@ private fun DanmakuLine(
     offsetX.snapTo(startX)
     offsetX.animateTo(
       targetValue = endX,
-      animationSpec = tween(durationMillis = FLIGHT_MILLIS.toInt(), easing = LinearEasing),
+      animationSpec = tween(durationMillis = item.flightMillis.toInt(), easing = LinearEasing),
     )
     onFinished()
   }
@@ -263,7 +314,17 @@ private fun DanmakuLine(
 
 private const val MAX_LANES = 12
 private const val MAX_VISIBLE = 60
-private const val FLIGHT_MILLIS = 8_000L
+
+/**
+ * Baseline speed as time-per-screen-width: a label that is exactly as wide as the screen
+ * takes this long, and every other label takes proportionally longer. Expressing the speed
+ * relative to the width rather than in pixels is what keeps it feeling the same on a phone
+ * and on a tablet.
+ */
+private const val MILLIS_PER_SCREEN_WIDTH = 5_500f
+
+/** Ceiling on a single flight, so one essay cannot hold a lane long enough to starve the rest. */
+private const val MAX_FLIGHT_MILLIS = 15_000L
 
 /** How late a lane may be and still be used, so a steady stream does not stutter. */
 private const val LANE_TOLERANCE_MILLIS = 120L
