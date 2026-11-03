@@ -1199,3 +1199,177 @@ CI run 41559431300 三个 job 全绿（commit `ea3d062`）。
   注意参考项目的 `ScrollingDanmakuItem` 同样写死 9000ms，所以这条不能拿"参考项目这么做"
   当依据，得自己判断要不要按字数换算。
 - **"够得着"断言**：设置页、同步页日志等长列表仍缺 `performScrollTo` 覆盖。
+
+## 第十八轮迭代：三级分类行首屏就该在，而且要能一键退回上一级
+
+上一轮的"下一轮"列了四件事，其中三件是同一块地方——首页的分区选择器。这一轮把它们
+一起做掉，因为它们其实是同一个问题的三个面：**三级分类这条路径从来没有被完整地设计过**。
+
+### 缺陷是什么
+
+两个，都只在斗鱼出现（四个平台里只有它发布三级分类）。
+
+**一、冷启动没有三级分类行。** 打开 App，斗鱼首页是"网游 / 手游 / 娱乐"一行、
+"英雄联盟 / 绝地求生 / DNF"一行，房间列表也是英雄联盟的，但第三行
+（峡谷之巅、云顶之弈……）根本不存在。想按三级分类筛选，唯一的办法是
+**再点一下已经高亮的"英雄联盟"**——一个看起来完全无效的动作。
+
+**二、进了三级分类就出不来。** 点开峡谷之巅之后，第三行有选中态，但：
+
+- 没有任何"全部"能退回整个英雄联盟；
+- `CategoryRow` 里第二行 chip 的选中条件是
+
+  ```kotlin
+  selected = state.selectedCategory?.key == category.key &&
+    state.selectedSubCategory == null
+  ```
+
+  所以父级 chip **失去高亮**。
+
+用户看到的是：第三行选中了峡谷之巅，第二行一个都没选中。"回到整个英雄联盟"这件事在
+界面上没有任何可见控件——只能靠"猜"到去点那个看起来没选中的父级 chip。
+
+顺带暴露一个内部矛盾：`MainViewModel` 的 `activeCategory` 注释写着
+"the parent chip has to stay selected, otherwise the user loses their place"，
+而 UI 层恰恰把它取消选中了。两处对同一件事的描述相反，说明写其中一处时没看另一处。
+
+### 依据
+
+`E:\app\_ref\dtv_mobile\shared\src\commonMain\kotlin\dtv\mobile\ui\screens\douyu\DouyuHomeScreen.kt`
+
+**一、三级分类跟着二级分类走，初始选中也算。**
+
+```kotlin
+LaunchedEffect(Unit) {
+  ...
+  selectedCate1 = savedCate2?.first ?: data.cate1List.firstOrNull()
+  selectedCate2 = savedCate2?.second ?: selectedCate1?.cate2List?.firstOrNull()
+}
+
+LaunchedEffect(selectedCate2?.id) {
+  val cate2Id = selectedCate2?.id ?: return@LaunchedEffect
+  cate3List = appState.repo.fetchDouyuThreeCate(cate2Id)
+  selectedCate3 = null
+}
+```
+
+第二个 `LaunchedEffect` 的 key 是 `selectedCate2?.id`，而 `selectedCate2` 在
+`LaunchedEffect(Unit)` 里就被赋了初值，所以**初始选中同样会触发拉取**。我们的
+`loadCategories` 自己选了第一个分区却只拉房间，把"选中"和"拉三级分类"拆成了两条路径，
+只有用户点击那条会走后者。
+
+**二、第三行以"全部"开头，选中值可以为 null。**
+
+```kotlin
+@Composable
+private fun Cate3Chips(
+  cate3List: List<DouyuCate3>,
+  selectedId: String?,
+  onSelect: (DouyuCate3?) -> Unit,
+) {
+  LazyRow(...) {
+    item {
+      CategoryPill(label = "全部", selected = selectedId == null, onClick = { onSelect(null) })
+    }
+    items(cate3List, key = { it.id }) { c3 -> ... }
+  }
+}
+```
+
+`selectedId: String?` + `onSelect: (DouyuCate3?) -> Unit`：三级分类的选中值天生可空，
+null 表示"整个二级分类"。我们的 `UiAction.SelectSubCategory` 收的是非空 `Category`，
+从类型上就堵死了这条路。
+
+### 怎么修的
+
+生产代码动了三处：
+
+1. 抽出 `loadSubCategories(platform, category)`，`loadCategories`（首屏与切平台）和
+   `selectCategory`（用户点击）都调它。这样"谁选的分类"不再决定"要不要拉三级"。
+2. `UiAction.SelectSubCategory(category: Category?)` 改成可空，`selectSubCategory` 里
+   null 表示退回父级：`loadRooms(platform, category ?: parent, reset = true)`。
+   已有的 `activeCategory(state) = selectedSubCategory ?: selectedCategory` 天然支持这个语义，
+   不用改。
+3. `HomeScreen` 去掉第二行那个 `&& state.selectedSubCategory == null` 条件，并在第三行
+   前面加一个"全部"chip（`item(key = "sub-all")`）。
+
+### 踩了什么坑
+
+**一、`loadRooms` 会取消自己的父协程。** `loadCategories` 的整个函数体跑在 `roomsJob` 里，
+而 `loadRooms` 第一行就是 `roomsJob?.cancel()`——等于在协程内部取消自己。之前能跑，是因为
+取消之后没有新的挂起点，函数体直接走完。这也正是上一轮把三级分类放进独立
+`subCategoriesJob` 的原因；`loadSubCategories` 用 `viewModelScope.launch`，是
+`viewModelScope` 的子协程而不是当前协程的子协程，所以 `roomsJob` 被取消不会带走它。
+调用顺序仍然是先 `loadSubCategories` 再 `loadRooms`，避免以后有人在这中间加挂起点。
+
+**二、测试要等两个协程，不能只等房间列表。** 三级分类和房间是两条独立的协程，只等
+`!state.loading` 会跟三级分类赛跑，结果取决于哪个请求先回来。所以新增的
+`awaitFirstLoadWithSubCategories` 把三个条件并在一起等，超时消息也能直接看出缺哪个。
+
+**三、`ci.py shots` 的 "identical to" 又骗了一次。** `01-home.png` 与
+`03-home-other-category.png` 都是 80037 字节，被标成 `<-- identical to`。逐个算 SHA256：
+24 张两两不同。上一轮已经把这条写进记录（`ci.py` 比的是 `os.path.getsize`），本轮再次
+复现，说明这不是偶发。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试（437 条，0 失败） | ✅ |
+| 仪器测试（24 张截图） | ✅ |
+| Release assembly（R8） | ✅ |
+
+CI run **41562103607**，commit `7586cd3`，三个 job 一次通过。
+
+新增/改动的测试（从 CI 的 `test-reports` 产物里核对过，确认真的跑了）：
+
+| 测试类 | 条数 | 断言什么 |
+| --- | --- | --- |
+| `SubCategoryFirstLoadTest`（新） | 3 | 首屏就有三级行；拉的是当前选中分区的 `tag_id`；切平台往返后能恢复 |
+| `CategoryPaginationTest` | 4（+1） | 点"全部"之后请求回到父级 `mixListV1/2_1/1` |
+
+关于"这些测试在旧代码上会不会红"，要说准确：
+
+- `SubCategoryFirstLoadTest` 的三条**在旧代码上必定超时失败**——旧代码里
+  `loadCategories` 从不调用 `subCategories()`，`state.subCategories` 永远是空的，
+  `awaitFirstLoadWithSubCategories` 5 秒后断言失败。这是构造上的必然，不是猜测；
+  但本机不能跑 Gradle，我没有真的看着它红。
+- 关于"全部"那条**无法在旧代码上存在**：旧的 `SelectSubCategory` 收非空 `Category`，
+  `SelectSubCategory(null)` 编译不过。所以它是一条跟着 API 一起长出来的能力测试，
+  不是对未改代码的回归测试——这点不该含糊过去。
+
+### 截图里看到了什么
+
+24 张，逐张比对上一轮（`r17` → `r18`）：**只有本轮打算改的 4 张变了，其余 20 张逐字节相同**。
+
+- 新增 `03b-home-subcategory`：第三行终于有画面了——`全部`（未选中）、`峡谷之巅`
+  （选中，浅蓝底）、`云顶之弈`、`排位赛`（右边缘裁切，说明是可横向滚动的 LazyRow）。
+  **并且第二行的"英雄联盟"仍然是高亮态**，这正是第二个缺陷修好之后的正确样子。
+- `03-home-other-category`（原 `03-home-pinned`）：与旧文件 **SHA256 完全相同**，
+  证明这次只是改名，没有顺手改动渲染内容。图上第二行高亮的是"绝地求生"，
+  与"换了一个非默认分区"这个新名字相符。
+- `20-huya-home`：修好了。虎牙 chip 选中，组行"网游 / 娱乐"里网游选中，
+  分类行"英雄联盟"选中、旁边"王者荣耀"，两张卡都带"虎牙"角标。
+  旧版这里**一个 chip 都没选中**。
+- `21-bilibili-home`：修好了。哔哩哔哩 chip 选中，组行"网游 / 手游"里网游选中，
+  分类行"英雄联盟"选中、旁边"DOTA2"。旧版是"组选中了、分类一个都没选中"。
+- 其余 20 张（首页、空态、错误态、搜索、同步、设置、播放器全系）逐字节未变，
+  说明这轮没有碰到别的界面。
+
+顺带记一个**密度问题**，本轮没动：斗鱼首页有三级分类时是四行 chip
+（平台行在 320dp 宽下还会折成两行），占掉约 200/640 的竖向空间，只剩不到两排卡片。
+参考项目 `screenshots/douyu.jpeg` 里平台放在**底部导航**、分类收在"选择分类"弹层里，
+只留一行 chip，所以它更紧凑。我们的底部导航已经给了首页/关注/搜索/同步/设置，
+这个取舍不是一行代码能改的，留作后面的审计项。
+
+### 下一轮
+
+- **全屏横向弹幕速度固定**（runbook 待办第 2 条）：`DanmakuOverlay` 飞行时长写死 8 秒。
+  参考项目 `ScrollingDanmakuItem` 同样写死 9000ms，所以这条**不能**拿"参考项目这么做"
+  当依据，得自己判断"等速"还是"等时长"更合理，并把理由写清楚。
+- **"够得着"断言**（runbook 待办第 3 条）：设置页、同步页日志等长列表仍缺
+  `performScrollTo` 覆盖，横屏或小屏下可能有控件够不着而测试全绿。
+- **首页 chip 密度**：见上一节。若要动，先想清楚平台切换器放哪儿。
+- 审计项 4-10（斗鱼/虎牙/抖音/B站 的协议细节、搜索页密度、直播页横竖屏与手势、
+  跨设备同步的配对与增量传输）仍全部未做。
