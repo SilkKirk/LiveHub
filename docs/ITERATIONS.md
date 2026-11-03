@@ -1753,7 +1753,7 @@ the six digit field is reachable in the landscape dialog — java.lang.OutOfMemo
 | JVM 单元测试 | ✅ 451 条（上轮 447，+4），0 失败 0 跳过 |
 | 仪器测试 | ✅ 35 条（上轮 33，+2），0 失败 0 跳过 |
 | Release assembly（R8） | ✅ |
-| CI 三 job | ✅ run 41573016413（commit 29fa137）全绿 |
+| CI 三 job | ✅ run 41573016413（commit 29fa137，代码）与 run 41573939466（commit 61afd5b，本文档）全绿 |
 
 条数是从 run 的 artifact 里逐条累加的：`test-reports` 52 个 XML 共 451 条；`instrumented-reports`
 的 `TEST-test(AVD) - 14.xml` 头部 `tests="35" failures="0" errors="0" skipped="0"`。两个新截图
