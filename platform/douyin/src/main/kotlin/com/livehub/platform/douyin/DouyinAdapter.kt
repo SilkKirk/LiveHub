@@ -105,7 +105,8 @@ class DouyinAdapter(
   }
 
   override suspend fun roomDetail(roomId: String): Streamer? = try {
-    api.roomInfo(roomId).toStreamer()
+    // The id the caller used, not the payload's internal one: see DouyinRoomInfo.toStreamer.
+    api.roomInfo(roomId).toStreamer(roomId)
   } catch (error: PlatformException) {
     throw error
   } catch (error: Exception) {
@@ -146,7 +147,9 @@ class DouyinAdapter(
       ?.let { wanted -> resolved.variants.sortedBy { if (it.qualityCode == wanted) 0 else 1 } }
       ?: resolved.variants
     return PlaybackSource(
-      room = resolved.info.toStreamer(),
+      // Same rule as roomDetail: the player's follow button writes `room.roomId` into the
+      // follow list, and that id has to be the one `enter` accepts back.
+      room = resolved.info.toStreamer(roomId),
       variants = ordered,
       defaultVariant = ordered.firstOrNull(),
     )

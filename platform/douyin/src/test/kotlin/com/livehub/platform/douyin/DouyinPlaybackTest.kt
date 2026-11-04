@@ -147,7 +147,9 @@ class DouyinPlaybackTest {
 
     val source = adapter(http).playback(roomId = "164485212", preferredQuality = null, preferredLine = null)
 
-    assertEquals("7380123456789012345", source.room.roomId, "the numeric id, not the web_rid")
+    // The id the caller asked with, not the payload's `id_str`. Handing the internal id back
+    // here is what put unfollowable rooms in the follow list: `enter` accepts only the web_rid.
+    assertEquals("164485212", source.room.roomId, "the room must keep the id the caller used")
     assertEquals("KPL赛事", source.room.streamerName)
     assertEquals("KPL 总决赛", source.room.title)
     assertEquals(8_888L, source.room.viewerCount)

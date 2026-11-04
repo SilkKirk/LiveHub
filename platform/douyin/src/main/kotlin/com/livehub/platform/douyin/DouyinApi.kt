@@ -40,7 +40,18 @@ data class DouyinRoomInfo(
   val isLive: Boolean,
   val variants: List<DouyinVariant>,
 ) {
-  fun toStreamer(): Streamer = Streamer(
+  /**
+   * The card for this room.
+   *
+   * [roomId] is the id **the caller used**, not the payload's. `enter` reports Douyin's
+   * internal `id_str` (`7703900142109592362`), while everything outside the player addresses a
+   * room by its `web_rid` (`1002683794`) — the id in the room's URL, in search results, and in
+   * the follow list. Defaulting to the payload id here is how a room followed from the player
+   * ended up stored under its internal id: `enter?web_rid=<id_str>` answers
+   * `status_code 4001038` with no rooms, so that card could never be reopened or refreshed.
+   * The internal id stays on [DouyinRoomInfo.roomId] for the danmaku handshake, which needs it.
+   */
+  fun toStreamer(roomId: String): Streamer = Streamer(
     platform = Platform.DOUYIN,
     roomId = roomId,
     streamerName = streamerName,
@@ -349,9 +360,7 @@ class DouyinApi(
       )
     }
     val info = enterRoom(trimmed) ?: return emptyList<Streamer>() to false
-    // The card has to carry the id the user typed, not the payload's internal `id_str`: every
-    // later call (`roomDetail`, `playback`, the follow list) sends it back as `web_rid`.
-    return listOf(info.copy(roomId = trimmed).toStreamer()) to false
+    return listOf(info.toStreamer(trimmed)) to false
   }
 
   /**
