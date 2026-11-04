@@ -1,6 +1,7 @@
 package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -44,8 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -263,81 +263,86 @@ private fun MatchingCodeDialog(
   var code by remember { mutableStateOf("") }
 
   Dialog(onDismissRequest = onDismiss) {
-    Surface(
-      // `AlertDialog` used to carry this marker; a hand-built dialog has to set it itself or
-      // accessibility services read the content as part of the screen behind it — and the
-      // tests would lose their `isDialog()` handle. The key is `SemanticsPropertyKey<Unit>` in
-      // this Compose version, so it takes `Unit` rather than `true`.
-      modifier = Modifier
-        .fillMaxWidth()
-        .widthIn(max = 420.dp)
-        .semantics { this[SemanticsProperties.IsDialog] = Unit },
-      shape = RoundedCornerShape(28.dp),
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 6.dp,
-    ) {
-      Column(modifier = Modifier.padding(24.dp)) {
-        Text("关联设备", style = MaterialTheme.typography.titleLarge)
-        Spacer(modifier = Modifier.height(12.dp))
+    // The dialog's natural height (measured: 380dp at 320dp wide) is taller than a landscape
+    // phone's window (360dp). A `Dialog` lays its content out with `WRAP_CONTENT` height, so
+    // the window then asks for more room than the display has and the measure/window-resize
+    // cycle never settles — reproduced as `AppNotIdleException` after 60 seconds, which on a
+    // device is a frozen UI. `BoxWithConstraints` reports the window's own bounds, and capping
+    // the surface to it keeps the window inside the display; the body then scrolls, which it
+    // already did.
+    BoxWithConstraints {
+      val maxDialogHeight = maxHeight - 32.dp
+      Surface(
+        modifier = Modifier
+          .widthIn(max = 420.dp)
+          .heightIn(max = maxDialogHeight),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp,
+      ) {
+        Column(modifier = Modifier.padding(24.dp)) {
+          Text("关联设备", style = MaterialTheme.typography.titleLarge)
+          Spacer(modifier = Modifier.height(12.dp))
 
-        // `weight(fill = false)` so the body takes what it needs and gives the rest back to
-        // the window; `verticalScroll` then makes the overflow reachable instead of clipped.
-        Column(
-          modifier = Modifier
-            .weight(1f, fill = false)
-            .verticalScroll(rememberScrollState()),
-          verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          Text(
-            text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          OutlinedTextField(
-            value = code,
-            onValueChange = { code = it.filter(Char::isDigit).take(6) },
-            label = { Text("六位匹配码") },
-            placeholder = { Text("123456") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            modifier = Modifier.fillMaxWidth(),
-          )
-          // This device's own code is shown for comparison, with its remaining life: the
-          // common mistake is to type your own code into your own device, which looks like
-          // nothing happening.
-          Text(
-            text = if (state.pairingCodeSecondsLeft > 0) {
-              "本机匹配码 ${formatCode(state.pairingCode)}（请勿输入本机码）"
-            } else {
-              "本机匹配码已过期"
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          TextButton(onClick = onRefreshCode) { Text("重新生成本机匹配码") }
-          if (state.pairing) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-              Spacer(modifier = Modifier.size(8.dp))
-              Text(
-                text = "正在附近设备中查找…",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+          // `weight(fill = false)` so the body takes what it needs and gives the rest back to
+          // the window; `verticalScroll` then makes the overflow reachable instead of clipped.
+          Column(
+            modifier = Modifier
+              .weight(1f, fill = false)
+              .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Text(
+              text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+              value = code,
+              onValueChange = { code = it.filter(Char::isDigit).take(6) },
+              label = { Text("六位匹配码") },
+              placeholder = { Text("123456") },
+              singleLine = true,
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+              modifier = Modifier.fillMaxWidth(),
+            )
+            // This device's own code is shown for comparison, with its remaining life: the
+            // common mistake is to type your own code into your own device, which looks like
+            // nothing happening.
+            Text(
+              text = if (state.pairingCodeSecondsLeft > 0) {
+                "本机匹配码 ${formatCode(state.pairingCode)}（请勿输入本机码）"
+              } else {
+                "本机匹配码已过期"
+              },
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = onRefreshCode) { Text("重新生成本机匹配码") }
+            if (state.pairing) {
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(
+                  text = "正在附近设备中查找…",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
             }
           }
-        }
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.End,
-        ) {
-          TextButton(onClick = onDismiss) { Text("取消") }
-          Spacer(modifier = Modifier.size(8.dp))
-          TextButton(
-            onClick = { onConfirm(code) },
-            enabled = code.length == 6 && !state.pairing,
-          ) { Text("关联") }
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+          ) {
+            TextButton(onClick = onDismiss) { Text("取消") }
+            Spacer(modifier = Modifier.size(8.dp))
+            TextButton(
+              onClick = { onConfirm(code) },
+              enabled = code.length == 6 && !state.pairing,
+            ) { Text("关联") }
+          }
         }
       }
     }

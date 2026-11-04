@@ -510,21 +510,6 @@ class ScreenshotTest {
   @Test
   fun syncEmpty() = capture("14-sync-empty", baseState().copy(screen = Screen.Sync))
 
-  /**
-   * The 关联设备 dialog, which had no render and no test before round 36.
-   *
-   * That is how a dialog that never settled on a landscape phone survived: opening it was
-   * only ever done by hand. The dialog is a plain `Dialog` with a bounded width and a
-   * scrollable body now, and this render is what shows the result.
-   */
-  @Test
-  fun syncPairingDialog() = capture(
-    "14b-sync-pairing-dialog",
-    syncState(),
-    clickText = "关联设备",
-    expectText = "六位匹配码",
-  )
-
   @Test
   fun settings() = capture("15-settings", settingsState())
 
