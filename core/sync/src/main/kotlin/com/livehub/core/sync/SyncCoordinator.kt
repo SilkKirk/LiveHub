@@ -130,6 +130,9 @@ class SyncCoordinator(
         success = true,
         note = if (pushed == 0) "无需发送" else "发送 $pushed 条",
       )
+      // The exchange completed, so this peer now holds everything this device holds for the
+      // scope. That is what lets old tombstones be dropped without risking a resurrect.
+      engine.confirmPeer(peer, scope)
       outcomes += ScopeOutcome(scope, pulled = pulled, pushed = pushed)
     }
 

@@ -97,6 +97,18 @@ data class TrustedPeer(
   /** Highest [SyncPayload.sequence] successfully applied per scope. */
   val appliedSequences: Map<String, Long> = emptyMap(),
   val lastSeenAt: Long = 0,
+  /**
+   * Highest clock, per scope, that this peer is known to hold.
+   *
+   * Written after an exchange with the peer finished for that scope, where the pull showed what
+   * the peer had and the push delivered the rest: at that moment the peer's copy is at least as
+   * new as everything this device held, up to the highest [Hlc] in the local record set.
+   *
+   * It is the only sound input for dropping tombstones — a tombstone below every peer's
+   * watermark has provably been delivered to all of them, so none of them can resurrect the
+   * record it deletes. See [SyncMerge.prune].
+   */
+  val confirmedHlc: Map<String, String> = emptyMap(),
 ) {
   fun isNewer(scope: String, sequence: Long): Boolean =
     sequence > (appliedSequences[scope] ?: 0L)
@@ -105,6 +117,15 @@ data class TrustedPeer(
     val next = appliedSequences.toMutableMap()
     next[scope] = maxOf(next[scope] ?: 0L, sequence)
     return copy(appliedSequences = next, lastSeenAt = at)
+  }
+
+  /** Highest clock this peer is known to hold for [scope]; [Hlc.ZERO] when never confirmed. */
+  fun confirmed(scope: SyncScope): Hlc = Hlc.decode(confirmedHlc[scope.wireName])
+
+  fun withConfirmed(scope: SyncScope, hlc: Hlc): TrustedPeer {
+    val previous = confirmed(scope)
+    if (hlc <= previous) return this
+    return copy(confirmedHlc = confirmedHlc + (scope.wireName to hlc.encode()))
   }
 }
 

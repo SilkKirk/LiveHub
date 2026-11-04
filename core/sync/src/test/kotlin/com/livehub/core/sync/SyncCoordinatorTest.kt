@@ -393,6 +393,50 @@ class SyncCoordinatorTest {
     assertEquals(1, transport.calls.count { it == "pull:follows" }, "the pull still happens once")
   }
 
+  /**
+   * A finished exchange tells the engine how far the peer has caught up.
+   *
+   * That watermark is the only input the tombstone GC has; without it any rule has to guess, and
+   * guessing by age resurrects deletes on devices that stayed offline longer than the window.
+   */
+  @Test
+  fun `a completed exchange confirms the peer up to the newest local record`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    target.apply(
+      listOf(
+        SyncRecord(key = "douyu:1", value = SyncCodec.stringValue("a"), hlc = Hlc(5, 0), deviceId = 1, updatedAt = 5),
+        SyncRecord(key = "douyu:2", value = SyncCodec.stringValue("b"), hlc = Hlc(9, 3), deviceId = 1, updatedAt = 9),
+      ),
+    )
+
+    SyncCoordinator(engine, FakeTransport()).syncWith(peers.first())
+
+    assertEquals(Hlc(9, 3), peers.first().confirmed(SyncScope.FOLLOWS))
+  }
+
+  /** A failed exchange proves nothing about the peer's copy. */
+  @Test
+  fun `a failed exchange confirms nothing`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    target.apply(
+      listOf(
+        SyncRecord(key = "douyu:1", value = SyncCodec.stringValue("a"), hlc = Hlc(9, 3), deviceId = 1, updatedAt = 9),
+      ),
+    )
+
+    SyncCoordinator(engine, FakeTransport(failOn = setOf(SyncScope.FOLLOWS))).syncWith(peers.first())
+
+    assertEquals(Hlc.ZERO, peers.first().confirmed(SyncScope.FOLLOWS))
+  }
+
   @Test
   fun `the sync log records both directions`() = runTest {
     val target = Target(SyncScope.FOLLOWS)

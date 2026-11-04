@@ -146,6 +146,67 @@ class SyncMergeTest {
     val outcome = SyncMerge.merge(listOf(liveOnReceiver), listOf(deletedOnSender))
     assertTrue(outcome.merged.single().deleted, "the newer tombstone must win")
   }
+
+  // --------------------------------------------------------------------- prune ---
+
+  private fun peer(id: Long, confirmed: Hlc? = null): TrustedPeer {
+    val base = TrustedPeer(deviceId = id, deviceName = "peer$id", sharedSecret = "s", pairedAt = 0)
+    return if (confirmed == null) base else base.withConfirmed(SyncScope.FOLLOWS, confirmed)
+  }
+
+  /** Once every peer holds the delete, the tombstone has done its job. */
+  @Test
+  fun `a tombstone confirmed by every peer is dropped`() {
+    val records = listOf(alive("a", Hlc(10, 0)), tombstone("b", Hlc(20, 0)))
+    val peers = listOf(peer(2, Hlc(20, 0)), peer(3, Hlc(25, 0)))
+
+    val pruned = SyncMerge.prune(records, peers, SyncScope.FOLLOWS)
+
+    assertEquals(listOf("a"), pruned.map { it.key })
+  }
+
+  /**
+   * One peer behind the tombstone is enough to keep it.
+   *
+   * That peer still holds the live record; dropping the tombstone now would let its copy win the
+   * next merge and bring the unfollowed room back.
+   */
+  @Test
+  fun `a tombstone one peer has not confirmed is kept`() {
+    val records = listOf(tombstone("b", Hlc(20, 0)))
+    val peers = listOf(peer(2, Hlc(20, 0)), peer(3, Hlc(19, 0)))
+
+    assertEquals(1, SyncMerge.prune(records, peers, SyncScope.FOLLOWS).size)
+  }
+
+  /** Live records are never pruned, whatever the watermarks say. */
+  @Test
+  fun `live records survive pruning`() {
+    val records = listOf(alive("a", Hlc(5, 0)), alive("b", Hlc(30, 0)))
+
+    assertEquals(2, SyncMerge.prune(records, listOf(peer(2, Hlc(40, 0))), SyncScope.FOLLOWS).size)
+  }
+
+  /**
+   * With no peers nothing can be confirmed, so nothing is dropped.
+   *
+   * A device that pairs later would otherwise resurrect every delete made before the pairing.
+   */
+  @Test
+  fun `nothing is pruned without paired peers`() {
+    val records = listOf(tombstone("b", Hlc(20, 0)))
+
+    assertEquals(1, SyncMerge.prune(records, emptyList(), SyncScope.FOLLOWS).size)
+  }
+
+  /** A watermark for a different scope says nothing about this one. */
+  @Test
+  fun `a watermark only counts for its own scope`() {
+    val records = listOf(tombstone("b", Hlc(20, 0)))
+    val otherScope = peer(2).copy(confirmedHlc = mapOf("preferences" to "999-0"))
+
+    assertEquals(1, SyncMerge.prune(records, listOf(otherScope), SyncScope.FOLLOWS).size)
+  }
 }
 
 class HlcTest {

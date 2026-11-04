@@ -212,7 +212,11 @@ class SyncEngine(
     incoming.forEach { observeRemote(it.hlc) }
 
     val outcome = SyncMerge.merge(local, incoming)
-    val changed = target.apply(outcome.merged)
+    // Tombstones every peer has already confirmed are dropped here, not by a timer: the rule
+    // needs the peer watermarks, and an exchange is the only moment at which they are known to
+    // be current. See [SyncMerge.prune].
+    val merged = SyncMerge.prune(outcome.merged, peersProvider(), scope)
+    val changed = target.apply(merged)
 
     peer?.let { known ->
       val updated = known.withApplied(scope.wireName, payload.sequence, clock())
@@ -237,6 +241,22 @@ class SyncEngine(
       updated = 0,
       skipped = outcome.identical + outcome.localWins,
     )
+  }
+
+  /**
+   * Records that [peer] now holds everything this device knows for [scope].
+   *
+   * Called by the coordinator after a scope's exchange finished without an error: the pull
+   * showed what the peer had, and the push delivered the rest, so from that moment the peer's
+   * copy is at least as new as the highest clock this device holds. [SyncMerge.prune] uses the
+   * value to decide which tombstones are safe to drop.
+   */
+  fun confirmPeer(peer: TrustedPeer, scope: SyncScope) {
+    val target = targets.targetFor(scope) ?: return
+    val highest = target.snapshot().maxOfOrNull { it.hlc } ?: return
+    val updated = peer.withConfirmed(scope, highest)
+    if (updated == peer) return
+    peersWriter(peersProvider().map { if (it.deviceId == peer.deviceId) updated else it })
   }
 
   /** Records a push to [peer] in the history shown in the sync screen. */

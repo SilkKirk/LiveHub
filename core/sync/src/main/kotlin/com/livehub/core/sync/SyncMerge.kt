@@ -164,4 +164,34 @@ object SyncMerge {
 
     return MergeOutcome(merged, localWins, remoteWins, identical)
   }
+
+  /**
+   * Drops the tombstones every paired peer has confirmed it holds.
+   *
+   * A tombstone is what stops "unfollow on the tablet" from being undone by a phone that still
+   * has the old follow, so it may only disappear once **no peer can resurrect the record**. That
+   * is proven rather than assumed: [TrustedPeer.confirmedHlc] is the highest clock the peer is
+   * known to hold for the scope, written after an exchange that both pulled the peer's state and
+   * pushed the delta. A tombstone at or below every peer's watermark has already been delivered
+   * to all of them, so dropping it cannot bring the record back.
+   *
+   * With no paired peers nothing is dropped: there is no one to confirm, and a later pairing
+   * would otherwise resurrect every delete made before it.
+   *
+   * (Age is deliberately *not* part of the rule. "Older than 30 days" was the previous
+   * implementation, and it resurrects deletes on any device that stayed offline longer than the
+   * window — which is exactly the device the tombstone exists for.)
+   */
+  fun <T> prune(
+    records: Collection<SyncRecord<T>>,
+    peers: Collection<TrustedPeer>,
+    scope: SyncScope,
+  ): List<SyncRecord<T>> {
+    if (peers.isEmpty()) return records.toList()
+    val watermarks = peers.map { it.confirmed(scope) }
+    return records.filter { record ->
+      // Keep the tombstone while any peer is still behind it.
+      !record.deleted || watermarks.any { it < record.hlc }
+    }
+  }
 }

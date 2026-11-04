@@ -562,6 +562,43 @@ class CrossDeviceSyncTest {
     assertEquals(3, SyncCodec.decodeRecords(far.entries).size)
   }
 
+  /**
+   * A tombstone is dropped only after the peer has confirmed holding it.
+   *
+   * The confirmation is written when an exchange *finishes*, so the tombstone survives the sync
+   * that delivers it and disappears on the next one: one extra exchange of storage, never a
+   * window in which the peer could resurrect the room. The tablet keeps its copy, because it has
+   * never run an exchange against the phone in this scenario and therefore has confirmed nothing.
+   */
+  @Test
+  fun `a tombstone is dropped once the peer has confirmed it`() = kotlinx.coroutines.test.runTest {
+    phone.pairWith(tablet)
+    phone.follow("111")
+    phone.syncWith(tablet)
+    assertEquals(1, tablet.followedIds().size)
+
+    phone.now = BASE_TIME + 1_000
+    tablet.now = BASE_TIME + 1_000
+    phone.unfollow("111")
+    phone.syncWith(tablet)
+
+    assertEquals(listOf("111"), tablet.tombstones(), "the tablet must receive the delete")
+    assertEquals(
+      listOf("111"),
+      phone.tombstones(),
+      "the exchange that delivered it cannot also have confirmed it",
+    )
+
+    phone.now = BASE_TIME + 2_000
+    tablet.now = BASE_TIME + 2_000
+    phone.syncWith(tablet)
+
+    assertTrue(phone.tombstones().isEmpty(), "the confirmed tombstone should be gone")
+    assertTrue(phone.followedIds().isEmpty())
+    assertTrue(tablet.followedIds().isEmpty())
+    assertEquals(listOf("111"), tablet.tombstones(), "the tablet has confirmed nothing itself")
+  }
+
   private companion object {
     const val PAIRING_CODE = "482913"
     const val BASE_TIME = 1_700_000_000_000L
