@@ -254,9 +254,14 @@ class SyncEngine(
   fun confirmPeer(peer: TrustedPeer, scope: SyncScope) {
     val target = targets.targetFor(scope) ?: return
     val highest = target.snapshot().maxOfOrNull { it.hlc } ?: return
-    val updated = peer.withConfirmed(scope, highest)
-    if (updated == peer) return
-    peersWriter(peersProvider().map { if (it.deviceId == peer.deviceId) updated else it })
+    // Read the stored peer rather than the caller's copy: the exchange has just written
+    // `appliedSequences` and `lastSeenAt` through `applyPayload`, and copying the stale object
+    // back would undo the replay guard for the next payload.
+    val peers = peersProvider()
+    val stored = peers.firstOrNull { it.deviceId == peer.deviceId } ?: return
+    val updated = stored.withConfirmed(scope, highest)
+    if (updated == stored) return
+    peersWriter(peers.map { if (it.deviceId == stored.deviceId) updated else it })
   }
 
   /** Records a push to [peer] in the history shown in the sync screen. */
