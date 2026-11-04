@@ -10,26 +10,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
@@ -245,69 +246,81 @@ private fun MatchingCodeDialog(
 ) {
   var code by remember { mutableStateOf("") }
 
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text("关联设备") },
-    text = {
-      // 280dp, not `fillMaxWidth`. `AlertDialog` measures this slot with
-      // `Modifier.width(IntrinsicSize.Max)`, and a `fillMaxWidth()` text field inside it makes
-      // the width depend on the intrinsic width of a field whose own intrinsic width depends on
-      // the width it was given: on a wide *and* short window (640×360dp, a landscape phone) the
-      // measure pass never settles — measured as `AppNotIdleException` after 60s and ~198k
-      // attempts, while the same field outside a dialog idles. Bounding the field instead of
-      // filling removes the circularity; 280dp is also Material's own text-field minimum, so
-      // the dialog looks the same as before and still fits a 320dp screen.
-      Column(
-        modifier = Modifier.widthIn(max = 280.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Text(
-          text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-          value = code,
-          onValueChange = { code = it.filter(Char::isDigit).take(6) },
-          label = { Text("六位匹配码") },
-          placeholder = { Text("123456") },
-          singleLine = true,
-          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-        )
-        // This device's own code is shown for comparison, with its remaining life: the
-        // common mistake is to type your own code into your own device, which looks like
-        // nothing happening.
-        Text(
-          text = if (state.pairingCodeSecondsLeft > 0) {
-            "本机匹配码 ${formatCode(state.pairingCode)}（请勿输入本机码）"
-          } else {
-            "本机匹配码已过期"
-          },
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(onClick = onRefreshCode) { Text("重新生成本机匹配码") }
-        if (state.pairing) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(
-              text = "正在附近设备中查找…",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+  // A fixed-width `Dialog`, not `AlertDialog`.
+  //
+  // `AlertDialog` measures its content with `Modifier.width(IntrinsicSize.Max)`; bisecting the
+  // content one component at a time (640×360dp, a landscape phone) showed that a text field
+  // inside a dialog stops Compose from ever idling there — `AppNotIdleException` after 60s and
+  // ~190k attempts — while the same field outside a dialog, and the same dialog with a
+  // fixed-width field, both idle. The intrinsic-width path is the difference: the content asks
+  // for the intrinsic width of a field whose intrinsic width depends on the width it is given.
+  // With an explicitly sized dialog there is no intrinsic measurement at all, and the field no
+  // longer needs (or may have) `fillMaxWidth`.
+  Dialog(onDismissRequest = onDismiss) {
+    Surface(
+      modifier = Modifier.width(280.dp),
+      shape = RoundedCornerShape(28.dp),
+      color = MaterialTheme.colorScheme.surface,
+      tonalElevation = 6.dp,
+    ) {
+      Column(modifier = Modifier.padding(24.dp)) {
+        Text("关联设备", style = MaterialTheme.typography.titleLarge)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          Text(
+            text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          OutlinedTextField(
+            value = code,
+            onValueChange = { code = it.filter(Char::isDigit).take(6) },
+            label = { Text("六位匹配码") },
+            placeholder = { Text("123456") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+          )
+          // This device's own code is shown for comparison, with its remaining life: the
+          // common mistake is to type your own code into your own device, which looks like
+          // nothing happening.
+          Text(
+            text = if (state.pairingCodeSecondsLeft > 0) {
+              "本机匹配码 ${formatCode(state.pairingCode)}（请勿输入本机码）"
+            } else {
+              "本机匹配码已过期"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          TextButton(onClick = onRefreshCode) { Text("重新生成本机匹配码") }
+          if (state.pairing) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+              Spacer(modifier = Modifier.size(8.dp))
+              Text(
+                text = "正在附近设备中查找…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
         }
+
+        Row(
+          modifier = Modifier.padding(top = 8.dp),
+          horizontalArrangement = Arrangement.End,
+        ) {
+          TextButton(onClick = onDismiss) { Text("取消") }
+          Spacer(modifier = Modifier.size(8.dp))
+          TextButton(
+            onClick = { onConfirm(code) },
+            enabled = code.length == 6 && !state.pairing,
+          ) { Text("关联") }
+        }
       }
-    },
-    confirmButton = {
-      TextButton(
-        onClick = { onConfirm(code) },
-        enabled = code.length == 6 && !state.pairing,
-      ) { Text("关联") }
-    },
-    dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-  )
+    }
+  }
 }
 
 /**
