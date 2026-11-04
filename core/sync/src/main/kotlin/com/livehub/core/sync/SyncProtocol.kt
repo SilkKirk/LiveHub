@@ -29,6 +29,14 @@ data class SyncEnvelope(
   val preferredPort: Int = 0,
   /** Set on error responses. */
   val error: String? = null,
+  /**
+   * Machine readable form of [error].
+   *
+   * [error] is what a human reads; this is what the code branches on. Without it the only way
+   * to tell "the peer does not share this scope" from "that scope does not exist" was to match
+   * on the Chinese text, which is how a switched-off scope became a red failure in the sync log.
+   */
+  val errorCode: String? = null,
   /** The payload being pushed or returned. */
   val payload: SyncPayload? = null,
 ) {
@@ -38,6 +46,15 @@ data class SyncEnvelope(
     const val PATH_PULL = "/livehub/v1/pull"
     const val PATH_PUSH = "/livehub/v1/push"
     const val PATH_PAIR = "/livehub/v1/pair"
+
+    /**
+     * The responder does not exchange this scope.
+     *
+     * Not an error: the caller should skip that scope and say so, because "the tablet has this
+     * switch off" is a setting, and reporting it as a failed sync tells the user something is
+     * broken when nothing is.
+     */
+    const val ERROR_SCOPE_DISABLED = "scope_disabled"
 
     val json: Json = Json {
       ignoreUnknownKeys = true
@@ -82,7 +99,22 @@ class SyncRejectedException(
 ) : Exception(reason)
 
 /** Reasons a peer can be unreachable, surfaced verbatim in the sync UI. */
-enum class SyncFailureReason { TIMEOUT, REFUSED, UNAUTHORIZED, VERSION_MISMATCH, PROTOCOL, UNKNOWN }
+enum class SyncFailureReason {
+  TIMEOUT,
+  REFUSED,
+  UNAUTHORIZED,
+  VERSION_MISMATCH,
+  PROTOCOL,
+  UNKNOWN,
+
+  /**
+   * The peer answered, and does not exchange this scope.
+   *
+   * Kept apart from [PROTOCOL] because the exchange should treat it as "nothing to do here",
+   * not as a failure: the request was understood and correctly refused.
+   */
+  SCOPE_DISABLED,
+}
 
 /** Wraps a transport failure with a user presentable reason. */
 class SyncTransportException(

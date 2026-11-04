@@ -69,4 +69,26 @@ class SyncEnvelopeCodecTest {
     assertEquals(0, decoded.preferredPort)
     assertEquals(SyncEnvelope.PROTOCOL_VERSION, decoded.protocolVersion)
   }
+
+  /**
+   * The refusal code has to survive the wire.
+   *
+   * It is the only thing that separates "this scope is switched off over there" from "the peer
+   * broke", and the client branches on it before any of the generic error handling runs.
+   */
+  @Test
+  fun `a refused scope carries its machine readable code`() {
+    val original = SyncEnvelope(
+      deviceId = 1,
+      deviceName = "Phone",
+      secret = "",
+      error = "未共享该同步范围: 搜索历史",
+      errorCode = SyncEnvelope.ERROR_SCOPE_DISABLED,
+    )
+
+    val decoded = SyncEnvelope.decode(SyncEnvelope.encode(original))
+
+    assertEquals(SyncEnvelope.ERROR_SCOPE_DISABLED, decoded.errorCode)
+    assertEquals("未共享该同步范围: 搜索历史", decoded.error)
+  }
 }

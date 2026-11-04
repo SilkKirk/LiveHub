@@ -203,8 +203,12 @@ class SyncHttpServer(
     // older single-shot form (no `chunk`) returns part 0, so an app that has not been
     // updated still works — it simply sees the first page.
     val chunkIndex = request.query["chunk"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+    // No payload means this device does not share the scope — either the user switched it off
+    // or there is no such target. Both are answered with a *successful* HTTP status plus a
+    // machine readable code: the scope is simply not on the table, so the caller must skip it
+    // rather than show "对方返回 HTTP 404" and count a failure.
     val payload = handler.onPull(envelope, scope, peer, chunkIndex)
-      ?: return Response(404, errorBody("scope disabled"))
+      ?: return Response(200, scopeDisabledBody(scope))
 
     return Response(
       200,
@@ -229,7 +233,13 @@ class SyncHttpServer(
     if (peer == null && !acceptsUnpaired(envelope)) {
       return Response(403, errorBody("未配对"))
     }
-    val response = handler.onPush(envelope, payload, peer)
+    // Writers and settings look different from here, so the decision belongs to the handler.
+    // What matters is that a refusal is *not* an error response: nothing failed.
+    val response = try {
+      handler.onPush(envelope, payload, peer)
+    } catch (disabled: ScopeDisabledException) {
+      return Response(200, scopeDisabledBody(disabled.scope))
+    }
     return Response(
       200,
       SyncEnvelope.encode(
@@ -245,6 +255,20 @@ class SyncHttpServer(
       ),
     )
   }
+
+  private fun scopeDisabledBody(scope: SyncScope): String =
+    SyncEnvelope.encode(
+      SyncEnvelope(
+        deviceId = deviceId,
+        deviceName = deviceName,
+        secret = "",
+        serverDeviceId = deviceId,
+        serverDeviceName = deviceName,
+        preferredPort = port,
+        error = "未共享该同步范围: ${scope.displayName}",
+        errorCode = SyncEnvelope.ERROR_SCOPE_DISABLED,
+      ),
+    )
 
   /** A peer is trusted when it presents the secret issued during pairing. */
   private fun authenticate(envelope: SyncEnvelope): TrustedPeer? {
@@ -379,3 +403,13 @@ sealed interface PairingOutcome {
 
   data class Rejected(val reason: String) : PairingOutcome
 }
+
+/**
+ * Thrown by a [SyncHttpServer.Handler] to refuse work for a scope this device does not share.
+ *
+ * The user turned that switch off, so the data must not be written and the peer must not be
+ * told anything went wrong. The server answers with [SyncEnvelope.ERROR_SCOPE_DISABLED], which
+ * the caller turns into "skipped", not "failed".
+ */
+class ScopeDisabledException(val scope: SyncScope) : Exception("未共享该同步范围: ${scope.displayName}")
+

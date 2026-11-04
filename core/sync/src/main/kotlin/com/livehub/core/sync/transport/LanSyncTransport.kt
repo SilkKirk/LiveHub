@@ -216,6 +216,12 @@ class LanSyncTransport(
         "设备协议版本不一致 (${decoded.protocolVersion})",
       )
     }
+    // A shared scope the peer has switched off. This is answered with a 2xx because nothing
+    // failed, so it has to be recognised by its code here — the response never reaches the
+    // callers' generic "the server said something" handling.
+    if (decoded.errorCode == SyncEnvelope.ERROR_SCOPE_DISABLED) {
+      throw SyncTransportException(SyncFailureReason.SCOPE_DISABLED, "对方未开启该同步范围")
+    }
     return decoded
   }
 

@@ -11,17 +11,23 @@ import org.junit.jupiter.api.Test
 private class FakeTransport(
   private val remotePayloads: Map<SyncScope, SyncPayload> = emptyMap(),
   private val failOn: Set<SyncScope> = emptySet(),
+  /** Scopes the peer answers with "not shared" when pulled. */
+  private val disabledForPull: Set<SyncScope> = emptySet(),
+  /** Scopes the peer answers with "not shared" when pushed to. */
+  private val disabledForPush: Set<SyncScope> = emptySet(),
 ) : SyncTransport {
   val calls = mutableListOf<String>()
 
   override suspend fun pull(peer: TrustedPeer, scope: SyncScope): SyncPayload? {
     calls += "pull:${scope.wireName}"
+    if (scope in disabledForPull) throw disabledException()
     if (scope in failOn) error("pull failed for $scope")
     return remotePayloads[scope]
   }
 
   override suspend fun push(peer: TrustedPeer, payload: SyncPayload): SyncPayload? {
     calls += "push:${payload.scope}"
+    if (disabledForPush.any { it.wireName == payload.scope }) throw disabledException()
     return null
   }
 
@@ -29,6 +35,9 @@ private class FakeTransport(
     calls += "probe"
     return true
   }
+
+  private fun disabledException() =
+    SyncTransportException(SyncFailureReason.SCOPE_DISABLED, "对方未开启该同步范围")
 }
 
 class SyncCoordinatorTest {
@@ -319,6 +328,67 @@ class SyncCoordinatorTest {
 
     assertTrue(engine.buildPayloads(SyncScope.FOLLOWS).isEmpty())
     assertNull(engine.buildPayload(SyncScope.FOLLOWS))
+  }
+
+  /**
+   * The peer's switch is not a broken link.
+   *
+   * A scope the other device does not share used to arrive as an HTTP 404: the summary said
+   * "部分同步失败 (1)" and the log row was red, on every single sync, for a configuration the
+   * user had chosen on purpose.
+   */
+  @Test
+  fun `a scope the peer does not share is skipped rather than failed`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    target.apply(
+      listOf(
+        SyncRecord(key = "douyu:1", value = SyncCodec.stringValue("a"), hlc = Hlc(1, 1), deviceId = 1, updatedAt = now),
+      ),
+    )
+
+    val transport = FakeTransport(disabledForPull = setOf(SyncScope.FOLLOWS))
+    val outcomes = SyncCoordinator(engine, transport).syncWith(peers.first())
+
+    val follows = outcomes.first { it.scope == SyncScope.FOLLOWS }
+    assertTrue("a switched-off scope is not a failure", follows.success)
+    assertTrue(follows.skipped)
+    assertEquals(0, follows.pushed)
+    assertFalse("nothing may be pushed to a scope the peer refused", "push:follows" in transport.calls)
+
+    // The log explains it instead of showing a red arrow pointing nowhere.
+    val entry = engine.logEntries().first()
+    assertTrue(entry.success)
+    assertEquals(SyncLogEntry.Direction.PULL, entry.direction)
+    assertEquals(SyncCoordinator.SKIPPED_NOTE, entry.note)
+  }
+
+  /** A push the peer refuses must not be reported as sent: the records did not arrive. */
+  @Test
+  fun `a push refused by the peer is skipped and counted as nothing`() = runTest {
+    val target = Target(SyncScope.FOLLOWS)
+    val peers = mutableListOf(
+      TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
+    )
+    val engine = engine(listOf(target), peers)
+    target.apply(
+      listOf(
+        SyncRecord(key = "douyu:1", value = SyncCodec.stringValue("a"), hlc = Hlc(1, 1), deviceId = 1, updatedAt = now),
+      ),
+    )
+
+    val transport = FakeTransport(disabledForPush = setOf(SyncScope.FOLLOWS))
+
+    val outcomes = SyncCoordinator(engine, transport).syncWith(peers.first())
+    val follows = outcomes.first { it.scope == SyncScope.FOLLOWS }
+
+    assertTrue(follows.success)
+    assertTrue(follows.skipped)
+    assertEquals(0, follows.pushed, "records the peer refused must not be counted as sent")
+    assertEquals(1, transport.calls.count { it == "pull:follows" }, "the pull still happens once")
   }
 
   @Test

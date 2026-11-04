@@ -15,6 +15,7 @@ import com.livehub.core.sync.TrustedPeer
 import com.livehub.core.sync.discovery.PeerDiscovery
 import com.livehub.core.sync.discovery.SubnetScanner
 import com.livehub.core.sync.server.PairingOutcome
+import com.livehub.core.sync.server.ScopeDisabledException
 import com.livehub.core.sync.server.SyncHttpServer
 import com.livehub.core.sync.transport.LanSyncHttpTransport
 import com.livehub.core.sync.transport.LanSyncTransport
@@ -144,15 +145,26 @@ class SyncController(
         // One part per request: the caller pages through them with `chunk`. Sending the
         // whole scope in one response meant a large follow list produced a single unbounded
         // document, which is the same problem the push path already solved by chunking.
+        //
+        // A scope the user switched off is not served at all. The engine only checks for the
+        // existence of a target, so without this guard the switch stopped the *local* sync
+        // loop and nothing else: the other device could still pull every follow while this
+        // one had 关注列表 turned off.
         override fun onPull(
           envelope: SyncEnvelope,
           scope: SyncScope,
           peer: TrustedPeer?,
           chunkIndex: Int,
-        ): SyncPayload? = engine.buildPullPayload(scope, chunkIndex)
+        ): SyncPayload? {
+          if (!isShared(scope)) return null
+          return engine.buildPullPayload(scope, chunkIndex)
+        }
 
         override fun onPush(envelope: SyncEnvelope, payload: SyncPayload, peer: TrustedPeer?): SyncPayload? {
           val scope = payload.parsedScope ?: return null
+          // Incoming data for a switched-off scope is refused rather than stored: "关掉关注列表
+          // 同步" has to mean the list stays put, not just that it stops being sent.
+          if (!isShared(scope)) throw ScopeDisabledException(scope)
           engine.applyPayload(payload, peer)
           // Answer with the delta only: the peer provably holds every record it just sent,
           // so echoing those back would double the traffic for no gain. Anything else this
@@ -316,15 +328,20 @@ class SyncController(
     var pulled = 0
     var pushed = 0
     var failures = 0
+    var skipped = 0
     peers.forEach { peer ->
       coordinator.syncWith(peer).forEach { outcome ->
         pulled += outcome.pulled
         pushed += outcome.pushed
         if (!outcome.success) failures++
+        if (outcome.skipped) skipped++
       }
     }
     val message = when {
       failures > 0 -> "部分同步失败 ($failures)"
+      // Nothing moved and nothing failed, because the other device has these scopes switched
+      // off. Saying "已是最新" would claim the two devices agree, which was never checked.
+      pulled == 0 && pushed == 0 && skipped > 0 -> "对方未开启所选同步内容"
       pulled == 0 && pushed == 0 -> "已是最新"
       else -> "同步完成：接收 $pulled，发送 $pushed"
     }
@@ -341,6 +358,15 @@ class SyncController(
   }
 
   data class SyncSummary(val pulled: Int, val pushed: Int, val message: String)
+
+  /**
+   * Whether the user still has this scope switched on.
+   *
+   * The single question both server paths ask. `SyncTargets.enabledScopes()` is read from the
+   * settings on every call, so flipping a chip takes effect on the next request without
+   * restarting the server.
+   */
+  private fun isShared(scope: SyncScope): Boolean = engine.enabledScopes().contains(scope)
 
   /**
    * Secret this installation presents to peers.

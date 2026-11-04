@@ -240,10 +240,24 @@ class SyncEngine(
   }
 
   /** Records a push to [peer] in the history shown in the sync screen. */
-  fun recordPush(peer: TrustedPeer, scope: SyncScope, itemCount: Int, success: Boolean, note: String? = null) {    record(
+  fun recordPush(
+    peer: TrustedPeer,
+    scope: SyncScope,
+    itemCount: Int,
+    success: Boolean,
+    note: String? = null,
+    /**
+     * Which arrow the row shows.
+     *
+     * A skipped scope is not a push and not a pull — nothing moved — but it was the *pull* half
+     * of the exchange that found it, so the caller passes the direction it was attempted in.
+     */
+    direction: SyncLogEntry.Direction = SyncLogEntry.Direction.PUSH,
+  ) {
+    record(
       SyncLogEntry(
         at = clock(),
-        direction = SyncLogEntry.Direction.PUSH,
+        direction = direction,
         peerName = peer.deviceName,
         scope = scope.displayName,
         itemCount = itemCount,

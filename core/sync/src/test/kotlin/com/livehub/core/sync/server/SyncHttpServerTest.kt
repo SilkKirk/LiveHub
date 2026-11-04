@@ -1,10 +1,15 @@
 package com.livehub.core.sync.server
 
+import com.livehub.core.sync.DiscoveredPeer
 import com.livehub.core.sync.SyncEnvelope
+import com.livehub.core.sync.SyncFailureReason
 import com.livehub.core.sync.SyncPayload
 import com.livehub.core.sync.SyncScope
+import com.livehub.core.sync.SyncTransportException
 import com.livehub.core.sync.TrustedPeer
 import com.livehub.core.sync.server.PairingOutcome
+import com.livehub.core.sync.transport.LanSyncTransport
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -27,6 +32,8 @@ class SyncHttpServerTest {
   private var pushCalls = 0
   private var lastPushed: SyncPayload? = null
   private var expectedPairCode: String? = "123456"
+  private var pullDisabled = false
+  private var pushRefuses = false
 
   @BeforeEach
   fun setUp() {
@@ -55,6 +62,7 @@ class SyncHttpServerTest {
           chunkIndex: Int,
         ): SyncPayload? {
           pullCalls++
+          if (pullDisabled) return null
           return SyncPayload(
             scope = scope.wireName,
             sourceDeviceId = 1,
@@ -68,6 +76,7 @@ class SyncHttpServerTest {
 
         override fun onPush(envelope: SyncEnvelope, payload: SyncPayload, peer: TrustedPeer?): SyncPayload? {
           pushCalls++
+          if (pushRefuses) throw ScopeDisabledException(payload.parsedScope ?: SyncScope.FOLLOWS)
           lastPushed = payload
           return null
         }
@@ -152,6 +161,57 @@ class SyncHttpServerTest {
     assertEquals(5, lastPushed?.sequence)
   }
 
+  /**
+   * A scope the host does not share is answered, not failed.
+   *
+   * It used to be a 404, which the client rendered as「对方返回 HTTP 404」and counted as a
+   * failed sync — for every device pair where the two switches differ.
+   */
+  @Test
+  fun `a switched off scope answers with a code instead of an error status`() {
+    pullDisabled = true
+
+    val response = post(
+      "${SyncEnvelope.PATH_PULL}?scope=follows",
+      SyncEnvelope.encode(SyncEnvelope(deviceId = 2, deviceName = "tablet", secret = "sekret")),
+    )
+
+    val envelope = SyncEnvelope.decode(response.body)
+    assertEquals(200, response.status)
+    assertEquals(SyncEnvelope.ERROR_SCOPE_DISABLED, envelope.errorCode)
+    assertNull(envelope.payload)
+  }
+
+  /**
+   * A push for a switched-off scope is refused and *not* stored.
+   *
+   * The switch used to gate only the sending side, so a peer could still overwrite a scope the
+   * user had deliberately turned off on this device.
+   */
+  @Test
+  fun `a push for a switched off scope is refused instead of stored`() {
+    pushRefuses = true
+    val payload = SyncPayload(
+      scope = "follows",
+      sourceDeviceId = 2,
+      sequence = 9,
+      createdAt = 0,
+      entries = """[{"key":"a","deleted":false,"hlc":"1-0","deviceId":2,"updatedAt":1}]""",
+    )
+
+    val response = post(
+      SyncEnvelope.PATH_PUSH,
+      SyncEnvelope.encode(
+        SyncEnvelope(deviceId = 2, deviceName = "tablet", secret = "sekret", payload = payload),
+      ),
+    )
+
+    val envelope = SyncEnvelope.decode(response.body)
+    assertEquals(200, response.status)
+    assertEquals(SyncEnvelope.ERROR_SCOPE_DISABLED, envelope.errorCode)
+    assertNull(lastPushed, "the payload must not reach the handler's store")
+  }
+
   @Test
   fun `push without a payload is rejected`() {
     val response = post(
@@ -234,6 +294,33 @@ class SyncHttpServerTest {
       post(SyncEnvelope.PATH_PING, SyncEnvelope.encode(SyncEnvelope(deviceId = 2, deviceName = "t", secret = "")))
     }
     assertTrue(failed.isFailure)
+  }
+
+  /**
+   * The refusal has to survive the real transport, not just the raw HTTP body.
+   *
+   * This is the join the unit tests cannot see: the server writes the code, the client maps it
+   * to [SyncFailureReason.SCOPE_DISABLED]. Without that mapping the caller only has an
+   * unparseable 404 (or, worse, an "unknown error") to work with.
+   */
+  @Test
+  fun `the real client reports a switched off scope as scope disabled`() {
+    pullDisabled = true
+    val transport = LanSyncTransport(
+      deviceId = 2,
+      deviceName = "tablet",
+      localSecret = "sekret",
+      peersProvider = { paired },
+      addressProvider = { peer -> DiscoveredPeer(peer.deviceId, peer.deviceName, "127.0.0.1", port) },
+      timeoutMillis = 3_000,
+    )
+
+    val error = runCatching {
+      runBlocking { transport.pull(paired.first(), SyncScope.FOLLOWS) }
+    }.exceptionOrNull()
+
+    val failure = error as? SyncTransportException
+    assertEquals(SyncFailureReason.SCOPE_DISABLED, failure?.reason)
   }
 
   private data class Raw(val status: Int, val body: String)

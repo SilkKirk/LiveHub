@@ -23,8 +23,18 @@ class SyncCoordinator(
     val pulled: Int,
     val pushed: Int,
     val error: String? = null,
+    /**
+     * Set when the peer answered that it does not exchange this scope.
+     *
+     * Not an error: the peer's switch is off, so there is nothing to exchange and nothing to
+     * report as broken. Kept apart from [error] so the summary can say "跳过" instead of
+     * "部分同步失败", which is what the user saw when this was an HTTP 404.
+     */
+    val skippedReason: String? = null,
   ) {
     val success: Boolean get() = error == null
+
+    val skipped: Boolean get() = skippedReason != null
   }
 
   /** Runs the full exchange against every paired peer. */
@@ -38,9 +48,15 @@ class SyncCoordinator(
     for (scope in engine.enabledScopes()) {
       val remote = try {
         transport.pull(peer, scope)
+      } catch (error: SyncTransportException) {
+        if (error.reason == SyncFailureReason.SCOPE_DISABLED) {
+          outcomes += skippedPull(scope, peer)
+          continue
+        }
+        outcomes += failed(scope, peer, error.message ?: "拉取失败")
+        continue
       } catch (error: Exception) {
-        outcomes += ScopeOutcome(scope, pulled = 0, pushed = 0, error = error.message ?: "拉取失败")
-        engine.recordPush(peer, scope, itemCount = 0, success = false, note = error.message)
+        outcomes += failed(scope, peer, error.message ?: "拉取失败")
         continue
       }
 
@@ -62,6 +78,7 @@ class SyncCoordinator(
 
       var pushed = 0
       var pushError: String? = null
+      var pushSkipped: String? = null
       for (payload in payloads) {
         if (payload.recordCount == 0) {
           // Nothing to send: skip the round trip instead of pushing an empty document.
@@ -69,6 +86,16 @@ class SyncCoordinator(
         }
         val response = try {
           transport.push(peer, payload)
+        } catch (error: SyncTransportException) {
+          if (error.reason == SyncFailureReason.SCOPE_DISABLED) {
+            // The peer has this scope switched off, so the rest of the parts would be refused
+            // too. Stop here: pushing on would only repeat a refusal we already understand.
+            pushSkipped = SKIPPED_NOTE
+            break
+          }
+          pushError = error.message ?: "推送失败"
+          engine.recordPush(peer, scope, itemCount = pushed, success = false, note = pushError)
+          break
         } catch (error: Exception) {
           pushError = error.message ?: "推送失败"
           engine.recordPush(peer, scope, itemCount = pushed, success = false, note = pushError)
@@ -79,6 +106,12 @@ class SyncCoordinator(
           pulled += applied.added
         }
         pushed += payload.recordCount
+      }
+
+      if (pushSkipped != null) {
+        engine.recordPush(peer, scope, itemCount = 0, success = true, note = pushSkipped)
+        outcomes += ScopeOutcome(scope, pulled = pulled, pushed = 0, skippedReason = pushSkipped)
+        continue
       }
 
       if (pushError != null) {
@@ -103,6 +136,30 @@ class SyncCoordinator(
     return outcomes
   }
 
+  /** Records and reports an unreachable or rejected peer for one scope. */
+  private fun failed(scope: SyncScope, peer: TrustedPeer, reason: String): ScopeOutcome {
+    engine.recordPush(peer, scope, itemCount = 0, success = false, note = reason)
+    return ScopeOutcome(scope, pulled = 0, pushed = 0, error = reason)
+  }
+
+  /** The peer does not exchange this scope: log it as a direction-less zero, not as a failure. */
+  private fun skippedPull(scope: SyncScope, peer: TrustedPeer): ScopeOutcome {
+    engine.recordPush(
+      peer = peer,
+      scope = scope,
+      itemCount = 0,
+      success = true,
+      note = SKIPPED_NOTE,
+      direction = SyncLogEntry.Direction.PULL,
+    )
+    return ScopeOutcome(scope, pulled = 0, pushed = 0, skippedReason = SKIPPED_NOTE)
+  }
+
   /** Checks reachability, used to grey out offline peers in the UI. */
   suspend fun ping(peer: TrustedPeer): Boolean = transport.probe(peer)
+
+  companion object {
+    /** Wording shared by every place that reports a switched-off scope. */
+    const val SKIPPED_NOTE = "对方未开启该同步范围"
+  }
 }
