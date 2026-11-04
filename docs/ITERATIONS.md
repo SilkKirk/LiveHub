@@ -4182,3 +4182,94 @@ hls/flv map 是否为空判断；搜索框占位文案是「输入抖音房间�
 连麦等全部字段）。关注 20 个抖音房间，进一次关注页就要拉约 10 MB。可选方向：换更轻的状态
 接口（`webcast/room/web/enter` 之外有没有只回状态的端点需要实测）、限制并发并缓存结果、
 或把刷新做成可见的后台批处理。这属于性能改造，需要单独一轮并先量基线。
+
+---
+
+## 第四十三轮迭代：抖音扫码登录 + 登录后按昵称搜索
+
+### 需求
+
+用户要求三件事：抖音扫码登录、抖音按名字搜索、抖音/B 站登录信息同步。本轮做前两件——顺序不是
+选的，是接口决定的：**关键词搜索必须有登录态**。
+
+### 先确认的事实（本机实测，2026-11-04）
+
+- `www.douyin.com/aweme/v1/web/live/search/` 对匿名请求回
+  `status_code = 2483` / `「请先登录，再继续搜索吧」`。试过三种请求：只有几个参数、照
+  `dart_simple_live` 的完整参数表、再加协商出来的 `ttwid`，**三次都是 2483**。所以"按名字搜索"
+  不能在没有登录的情况下做出来。
+- 抖音没有可用的"取二维码"接口。网页登录是一个页面（扫码 / 短信），确认后由站点自己种
+  `sessionid`。逆向 passport 流程要猜设备参数和签名，参考项目也没有实现——它只有一个拿
+  `__ac_nonce`/`tt_scid` 的 WebView 工具（`DouyinWebViewCookieAndroid`），真正的登录参考是它给
+  B 站做的 `BilibiliWebLoginSheet`。
+- 登录态的判据是 `sessionid` / `sessionid_ss` / `sid_tt`；`ttwid` 是每个请求都带的匿名
+  cookie，**不能**当成登录。
+
+### 怎么做的
+
+**一、扫码登录（WebView + cookie 捕获）**
+
+- 新增 `DouyinWebLoginSheet`：`Dialog` + `WebView` 加载 `https://www.douyin.com/`，用户在页面
+  右上角点「登录」扫码；每 800ms 读 `CookieManager.getCookie("https://www.douyin.com")`，出现
+  会话 cookie 就把整条 Cookie 头回传并关闭。WebView 的 UA 与 REST 请求一致（否则抖音会把会话
+  当成另一个客户端）。
+- 设置页「账号」区新增「抖音账号」卡片：未登录「扫码登录」，已登录「退出登录」，并说明
+  房间号搜索不需要登录。
+- `UiState.douyinLoggedIn`、`UiAction.DouyinLoggedIn(cookie)` / `LogoutDouyin`；
+  ViewModel 只负责落库并回报"是否真的拿到会话"（避免"点完显示已登录、其实没登录"）。
+
+**二、cookie store 从"替换"改成"合并"（这是登录能生效的前提）**
+
+`ttwid` 来自匿名协商、`sessionid` 来自登录，到达时间不同。原来的 `save()` 整体替换，后到的会把
+先到的抹掉——症状是"刚登录，搜索还让我登录"。现在 `mergeDouyinCookies()` 合并、同名以后者为
+准；`DataStoreDouyinCookies` 与内存实现都走它。另外 `DouyinApi.cookieHeader()` 删掉了进程内
+缓存：登录是在运行中写入的，缓存会让后续请求继续发匿名 `ttwid` 直到下次启动。
+
+**三、按昵称搜索**
+
+`DouyinApi.search` 分两条路：
+
+- 纯数字 → 仍走 `room/web/enter`（参考项目的做法，不需要登录）；
+- 其它关键词 → 有会话才请求 `aweme/v1/web/live/search/`；没会话时抛
+  `PlatformAuthRequiredException`，文案直接指出「设置 → 抖音账号」。
+
+请求参数与解析形状取自 `dart_simple_live` 的 `DouyinSite.searchRooms`：`search_source=switch_tab`、
+`count=10`、`webid`、`pc_client_type` 等；响应里 `data[].lives.rawdata` 是**再次编码的 JSON
+字符串**，解开后与分区列表同构（`owner.web_rid`、`stats.total_user`、`cover.url_list`…）。
+解析是防御式的：形状不对返回空列表，被拒就把平台自己的 `status_msg` 抛给用户。
+
+**四、文案**
+
+搜索框 label 改成「输入抖音房间号或主播昵称」（原来写「搜索 抖音 主播 / 直播间」，而当时只能
+收房间号）；空态提示说明"房间号不用登录、昵称要先登录"。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **574** 条（上一轮 567，本轮 +7），failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `f25e5f4` 三个 job 全绿 |
+
+新增：`DouyinCookieStoreTest` 5 条（ttwid 不算登录、三种会话 cookie、合并保留、同名覆盖、
+清理）、`DouyinSearchTest` +2（登录态关键词命中并按形状解析、搜索期被登录墙拦住）。
+
+### 没做到的（重要）
+
+- **登录与关键词搜索都没有真机验证**：本机没有抖音账号，模拟器里也无法自动化扫码。目前只到
+  "能编译、分支与解析有测试、接口行为按公开实现对齐"这一层。装到手机上第一件事请验：
+  设置 → 抖音账号 → 扫码登录，然后搜索页输入主播昵称。
+- 关键词搜索的**响应形状**来自 `dart_simple_live`（该客户端在这个端点还不需要登录时在用），
+  本仓库无法取到登录态样本。若真机上出现"搜索失败: status=0"但列表为空，说明形状变了，
+  需要抓一次真实响应再改解析。
+- 登录态同步（第三件事）**本轮没做**：它要新增一个同步范围、涉及把会话凭据放进局域网明文
+  payload，需要先定"默认关 + 明确警告"还是"用两端配对密钥加密"，属于单独一轮的设计决定。
+
+### 下一轮
+
+- 抖音/B 站登录态同步：新增 `SyncScope.CREDENTIALS` + `SyncTarget`（每平台一条记录，
+  HLC 决定新旧、退出登录写成墓碑），同步页给出开关与风险说明；是否加密（HKDF(两个 pairing
+  secret) → AES-GCM）先定方案再动手。
+- 上一轮留下的性能项（抖音关注列表刷新每房间 536 KB）仍在待办里。
