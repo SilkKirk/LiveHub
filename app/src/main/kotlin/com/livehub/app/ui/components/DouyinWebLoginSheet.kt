@@ -29,18 +29,43 @@ import com.livehub.platform.douyin.hasDouyinSession
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicReference
 
+/** What the sheet should do next, given the cookies each host currently holds. */
+sealed interface DouyinLoginProgress {
+  data object Waiting : DouyinLoginProgress
+
+  /** The passport host has a session; the site itself has not received it yet. */
+  data class Handoff(val siteUrl: String) : DouyinLoginProgress
+
+  data class Done(val siteCookie: String) : DouyinLoginProgress
+}
+
 /**
- * Douyin's own login page, in a `WebView`, with the session captured from `CookieManager`.
+ * Decides the next step from both cookie jars.
  *
- * There is no QR endpoint to call: Douyin's web login is a page that shows a QR code (or an
- * SMS form) and sets `sessionid` once the app confirms the scan. Reverse-engineering the
- * passport flow would mean guessing at device parameters and signatures, so the sheet loads
- * the real site and watches for the cookie — the same approach the reference project uses for
- * Bilibili (`BilibiliWebLoginSheet`).
+ * The login happens on `sso.douyin.com`, which sets its own host-scoped cookies; the REST calls
+ * need the ones on `www.douyin.com`. Loading the site after the passport host reports a session
+ * is what completes that handoff, and it has to be a real navigation — the cookies are set by
+ * the redirect chain, not by the login page itself.
+ */
+fun douyinLoginProgress(siteCookie: String, ssoCookie: String): DouyinLoginProgress = when {
+  hasDouyinSession(siteCookie) -> DouyinLoginProgress.Done(siteCookie)
+  hasDouyinSession(ssoCookie) -> DouyinLoginProgress.Handoff(SITE_URL)
+  else -> DouyinLoginProgress.Waiting
+}
+
+/**
+ * Douyin's passport login page, in a `WebView`, with the session captured from `CookieManager`.
  *
- * What this sheet does **not** do is trust a page-level "logged in" signal: the only evidence
- * accepted is a session cookie, because that is exactly what [DouyinApi]'s keyword search
- * sends when it asks the server for results.
+ * Loading `www.douyin.com` and asking the user to find a login button was the first attempt and
+ * it was unusable: the desktop page is laid out for ~980 CSS pixels, so on a phone it rendered
+ * as giant, horizontally clipped text. `sso.douyin.com` is the real login page — its title is
+ * 「登录抖音短视频」, it ships a `width=device-width` viewport and it calls `/get_qrcode` — so the
+ * QR code is the first thing on screen and nothing needs hunting for.
+ *
+ * No QR endpoint is called directly: reverse-engineering the passport handshake would mean
+ * guessing at device parameters, and the reference project takes the same WebView route for
+ * Bilibili (`BilibiliWebLoginSheet`). What counts as "logged in" is only ever the session
+ * cookie that [DouyinApi] will actually send.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -61,14 +86,23 @@ fun DouyinWebLoginSheet(
     }
   }
 
-  // The cookie is the credential, so it is polled rather than injected: the page navigates
-  // across several hosts during login and only the final cookie header is complete.
+  // Polled rather than injected: the page navigates across hosts during login and only the
+  // final cookie jars are complete.
   LaunchedEffect(Unit) {
+    var handoffDone = false
     while (true) {
-      val cookie = CookieManager.getInstance().getCookie(SITE_URL).orEmpty()
-      if (hasDouyinSession(cookie)) {
-        onLoggedIn(cookie)
-        return@LaunchedEffect
+      val site = CookieManager.getInstance().getCookie(SITE_URL).orEmpty()
+      val sso = CookieManager.getInstance().getCookie(SSO_URL).orEmpty()
+      when (val progress = douyinLoginProgress(site, sso)) {
+        is DouyinLoginProgress.Done -> {
+          onLoggedIn(progress.siteCookie)
+          return@LaunchedEffect
+        }
+        is DouyinLoginProgress.Handoff -> if (!handoffDone) {
+          handoffDone = true
+          viewHolder.get()?.loadUrl(progress.siteUrl)
+        }
+        DouyinLoginProgress.Waiting -> Unit
       }
       delay(POLL_INTERVAL_MILLIS)
     }
@@ -88,11 +122,12 @@ fun DouyinWebLoginSheet(
           Column(modifier = Modifier.weight(1f)) {
             Text("抖音登录", style = MaterialTheme.typography.titleMedium)
             Text(
-              text = "在页面右上角点「登录」，用抖音 App 扫码。登录成功会自动返回。",
+              text = "用抖音 App 扫下方二维码；登录成功会自动返回。页面可双指缩放。",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
+          TextButton(onClick = { viewHolder.get()?.reload() }) { Text("刷新") }
           TextButton(onClick = onDismiss) { Text("关闭") }
         }
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
@@ -100,11 +135,20 @@ fun DouyinWebLoginSheet(
           modifier = Modifier.fillMaxSize(),
           factory = { context ->
             val view = WebView(context)
-            view.settings.javaScriptEnabled = true
-            view.settings.domStorageEnabled = true
-            // The UA has to match what the REST calls send, or Douyin treats the session as
-            // belonging to a different client and the cookies do not travel with them.
-            view.settings.userAgentString = DouyinSigner.USER_AGENT
+            view.settings.apply {
+              javaScriptEnabled = true
+              domStorageEnabled = true
+              // The UA has to match what the REST calls send, or Douyin treats the session as
+              // belonging to a different client and the cookies do not travel with them.
+              userAgentString = DouyinSigner.USER_AGENT
+              // Without these a page that has no mobile viewport (the desktop fallback) is
+              // rendered at ~980px and clipped, which is what made the first version unusable.
+              useWideViewPort = true
+              loadWithOverviewMode = true
+              setSupportZoom(true)
+              builtInZoomControls = true
+              displayZoomControls = false
+            }
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
             view.loadUrl(LOGIN_URL)
@@ -117,6 +161,7 @@ fun DouyinWebLoginSheet(
   }
 }
 
-private const val LOGIN_URL = "https://www.douyin.com/"
+private const val LOGIN_URL = "https://sso.douyin.com/"
+private const val SSO_URL = "https://sso.douyin.com"
 private const val SITE_URL = "https://www.douyin.com"
 private const val POLL_INTERVAL_MILLIS = 800L
