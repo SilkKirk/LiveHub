@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiState
@@ -13,6 +14,7 @@ import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -96,5 +98,52 @@ class PlayerSettingsTest {
 
     composeRule.onNodeWithText("清晰度").assertExists()
     composeRule.onNodeWithText("线路").assertExists()
+  }
+
+  /**
+   * Every row has to end up *inside* the window, not merely composed.
+   *
+   * The three tests above pin one historically broken row each. This one walks the whole panel
+   * because "composed but measured outside the visible window" was the original bug, and a
+   * screenshot of a landscape sheet cannot be produced on this project's device (a 320x640 px
+   * window; see the round-34 notes): scrolling to a row and then checking its bounds against
+   * the root is the same statement a picture would make, and it fails automatically instead of
+   * needing a human to notice.
+   */
+  @Test
+  fun `every settings row lands inside the landscape window`() {
+    composeInLandscapeHeight()
+
+    val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+    landscapeRows.forEach { label ->
+      composeRule.onNodeWithText(label).performScrollTo()
+      val bounds = composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
+
+      assertTrue("$label: top ${bounds.top} is above the window", bounds.top >= 0f)
+      assertTrue(
+        "$label: bottom ${bounds.bottom} is below the window ${root.bottom}",
+        bounds.bottom <= root.bottom,
+      )
+      assertTrue(
+        "$label: right ${bounds.right} is outside the window ${root.right}",
+        bounds.right <= root.right,
+      )
+    }
+  }
+
+  private companion object {
+    /**
+     * Every section title, in the order the panel draws them — including
+     * 「横屏弹幕字号」, which only exists in landscape.
+     */
+    val landscapeRows = listOf(
+      "清晰度",
+      "线路",
+      "弹幕",
+      "弹幕显示区域",
+      "弹幕字号",
+      "弹幕透明度",
+      "横屏弹幕字号",
+    )
   }
 }
