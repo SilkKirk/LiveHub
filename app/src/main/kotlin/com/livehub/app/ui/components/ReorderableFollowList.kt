@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
+import com.livehub.core.common.ViewerCountFormatter
 import com.livehub.core.model.Streamer
 
 /**
@@ -199,12 +200,33 @@ private fun FollowRow(
       }
 
       Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = streamer.streamerName.ifBlank { "未知主播" },
-          style = MaterialTheme.typography.titleSmall,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = streamer.streamerName.ifBlank { "未知主播" },
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            // `fill = false` so a short name does not push the audience figure to the edge of
+            // the column: the figure sits right after the name, the way the reference's
+            // 关注列表 puts it on the card.
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          // The one place in the app that showed a followed room without its audience figure.
+          // The store has carried `viewerCount` all along (`FollowStore.fromStreamer`,
+          // refreshed by `FollowRefreshWorker`), and the reference's 关注列表 prints it on every
+          // card, so the only thing missing was this Text. 0 means "unknown", not "empty room".
+          if (streamer.viewerCount > 0) {
+            Text(
+              text = ViewerCountFormatter.format(streamer.viewerCount),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+              maxLines = 1,
+            )
+          }
+        }
         Text(
           text = streamer.title.ifBlank { "暂无标题" },
           style = MaterialTheme.typography.bodySmall,

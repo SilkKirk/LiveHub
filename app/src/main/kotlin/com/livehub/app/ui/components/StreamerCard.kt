@@ -157,7 +157,11 @@ fun StreamerCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
           )
-          PlatformChip(name = streamer.platform.displayName)
+          // No platform chip. This tile only appears on the home grid, which the switcher
+          // above it already scopes to one platform, so every card repeated the same label —
+          // and the label took width from the streamer name. The search rows dropped it for
+          // the same reason in round 29; the follow list filters by platform instead of
+          // labelling each row.
         }
       }
     }
@@ -347,21 +351,6 @@ private fun Avatar(streamer: Streamer) {
         .size(16.dp)
         .clip(CircleShape)
         .background(MaterialTheme.colorScheme.surfaceVariant),
-    )
-  }
-}
-
-@Composable
-private fun PlatformChip(name: String) {
-  Surface(
-    color = MaterialTheme.colorScheme.secondaryContainer,
-    shape = RoundedCornerShape(4.dp),
-  ) {
-    Text(
-      text = name,
-      style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.onSecondaryContainer,
-      modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
     )
   }
 }
