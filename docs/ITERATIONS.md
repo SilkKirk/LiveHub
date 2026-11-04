@@ -3844,3 +3844,84 @@ README 的墓碑段落已按实现改写。
 
 - 待办清单**已清空**。下一轮做最终收尾审计：`grep TODO`、死代码、README 与实现一致性、
   每轮记录的验证表是否齐全，然后才判断目标是否达成。
+
+---
+
+## 第三十九轮迭代：收尾审计（四项检查 + 两处真修正）
+
+待办清空后的最后一轮。按 runbook「六、完成的标准」逐条核，审计本身也修了两处东西。
+
+### 一、仓库卫生
+
+| 检查 | 结果 |
+| --- | --- |
+| `TODO` / `FIXME`（区分大小写、词边界） | 0 |
+| 注释掉的代码（`// val|fun|if|return|import …`） | 0 |
+| 空 `catch {}` | 0 |
+| `println` / `System.out` / `printStackTrace` | 0 |
+| 日志 | 4 处 `Log`：`NsdPeerDiscovery` 的「registered」「discovery started」两条 `Log.d`（设备侧 mDNS 诊断，CI 看不到的东西只能靠它），两条 `Log.w`（注册失败、后台刷新调度失败）。**有意保留**，不是残留的调试输出 |
+
+### 二、`ITERATIONS.md` 的验证表
+
+38 个轮次小节里 34 个带验证表（含 `| 检查项 |` 的表格 34 张；另有 27 个显式的
+`### 本轮验证` 小标题）。缺的 4 个是最早的「里程碑」小节与第二、三、五轮——它们写在约定
+形成之前。**没有补写**：那些 CI 产物早已不存在，现在补的数字只能是编的。改为在文件开头加
+一段「记录格式」说明，讲清楚从第十六轮起的约定与早期的空缺。
+
+### 三、README 与实现一致性
+
+核了功能表、技术栈、协议表、构建/发布流程、已知限制五处，只有一处过时：
+
+- **斗鱼的签名描述**原文是「`ub98484234` 签名（原生 Kotlin 实现，无需 JS 引擎）」。实际代码
+  （`DouyuApi.sign`）是**优先拉取站点自己的 `homeH5Enc` 脚本、用 Rhino 执行**，失败才回退到
+  原生 `DouyuSigner.sign`——注释里写明了原因（算法轮换后固定摘要会被 403）。已按实现改写。
+
+其余核对通过的：`assembleDebug/assembleRelease`、`connectedDebugAndroidTest` 的 CI 步骤与
+workflow 一致；「后台每 30 分钟刷新」= `FollowRefreshWorker.INTERVAL_MINUTES = 30`；
+「播放器错误自动重试一次」= `LivePlayer.RETRY_DELAY_MILLIS = 1_500` 后重试；同步章节与
+第三十八轮的墓碑实现一致；已知限制四条都能在代码/抓包里找到依据。
+
+### 四、死代码 / 会撒谎的 API
+
+两处，都改掉了：
+
+1. **`SyncApplyResult` 有四个字段只有一个被读。** `updated` 永远是 0（没有任何地方把"更新"
+   与"新增"分开算），`skipped` 与 `scope` 没人读，`total = added + updated` 只是把 added 又说
+   一遍；而且 `added` 这个名字本身也不准——远端胜出的记录可能是**替换**本地记录。
+   收敛成 `applied`（真正写进库的条数）+ `rejectedReason`，`accepted` 由后者派生。
+2. **`SyncEngine.buildAllPayloads()` 只有它自己的测试在调。** 删掉；那条测试改成直接断言
+   `enabledScopes()`——"启用的范围来自 targets 注册表"这个属性不变，只是不再依赖死方法。
+
+### 五、适配器契约覆盖（objective 的功能面）
+
+`LivePlatformAdapter` 的 8 个操作（`categories` / `rooms` / `subCategories` / `search` /
+`roomDetail` / `liveStatus` / `playback` / `danmaku`）在四个平台适配器里**全部有 override**：
+
+| 平台 | 分类 | 直播源 | 弹幕 | 搜索 | 直播页 | 审计轮次 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 斗鱼 | 三级分类 + 翻页（按 `data.rl` 到底） | 探针 + CDN 排序 | `@=value/` 小端帧 | 翻页按原始文档 | 清晰度/线路 | 第二十三轮 |
+| 虎牙 | 分区表与参考逐字节相同 | `wsSecret` 签名实证 200 | Tars，真 socket 24 帧 | `numFound` + 回显 `start` | 一条原画 + 3 条线路 | 第二十四／二十七轮 |
+| 抖音 | 分区表逐字节相同 | `enter` 一次请求 | Protobuf 字段对齐 | 仅房间号（无参考依据，如实标注） | 同档画质去重 | 第二十五／三十二轮 |
+| 哔哩哔哩 | `w_rid` 签名一致 + `has_more` | `getRoomPlayInfo` + 线路轴 | WBI + `protover=1` | 读 `live_room` 桶 | 主播名走 `getH5InfoByRoom` | 第二十六／三十四轮 |
+
+跨设备同步：六位码配对 + mDNS/网段扫描、HLC 合并、双向增量分片、幂等去重、
+"对端未开启"跳过、墓碑按确认水位回收、只同步关注列表（第三十二轮的产品决定）。
+
+### 六、本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **548** 条，failures=0 errors=0 |
+| 仪器测试 | ✅ 47 条 `@Test`（截图 38 张） |
+| Release assembly（R8） | ✅ |
+| CI 四个 job | ✅ Build & test / Instrumented tests / Release assembly / Build & publish APK |
+
+### 七、完成标准核对
+
+- 待办清单：**空**（最后一条墓碑 GC 在第三十八轮完成）；
+- `python ci.py status`：三个 job 全绿（第四个 APK job 也在同一 workflow 里绿）；
+- 每轮记录的验证表：齐（早期四节的历史空缺已在文件开头说明，未编造数字）；
+- 没有 `TODO`、注释掉的死代码、调试输出（四条 `Log` 是有意的设备侧诊断）。
+
+据此，本轮结束时可以判断目标达成。
