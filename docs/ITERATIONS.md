@@ -3768,3 +3768,74 @@ CI 上跑了 **6 次**（3 次探针矩阵 + 3 次修法尝试，其中两次红
 
 - 墓碑 GC 的 per-peer 水位字段（唯一还剩的待办；README 已如实写明"目前不回收"）。
 - 收尾审计再来一遍（本轮已顺手核过 TODO/死代码/README 两条实现细节），然后才谈"目标达成"。
+
+---
+
+## 第三十八轮迭代：墓碑回收——判据是"所有已配对设备都确认过"，不是时间
+
+待办最后一条。第三十二轮删掉过一个假实现（比较一个从未被写入的 scope 序号，判据恒假、
+production 无调用点），当时 README 如实写成"目前不回收"。这轮把真的做出来。
+
+### 为什么不能按时间清
+
+墓碑的作用是阻止"平板上的取关"被"手机里还没同步的关注"复活。丢掉墓碑等于忘掉这次删除：
+任何一台仍持有旧关注记录的设备，在下一次合并时都会把它带回来。按时间清（比如 30 天）恰好
+在**那台离线更久的设备**上复活删除——也就是墓碑最需要保护的那台。
+
+安全的判据只有一个：**没有任何配对设备还可能持有那条旧记录**。这不能靠时间推断，只能靠
+对端确认。
+
+### 怎么做的
+
+1. `TrustedPeer` 新增 `confirmedHlc: Map<String, String>`（scope → HLC 编码），语义是
+   "这台设备已持有本机到该 HLC 为止的全部记录"。
+2. 协调器在一段范围**成功**交换完之后调 `engine.confirmPeer(peer, scope)`：拉取给了对端
+   状态、推送补齐了差额，此刻对端至少和本机一样新。取本机该范围所有记录里最大的 HLC 写入。
+3. `SyncMerge.prune(records, peers, scope)`：墓碑只有在**不高于每一台**已配对设备的水位时
+   才丢；只要有一台落后就留着。没有配对设备时一条都不丢——没人能确认，而之后才配对的设备
+   会让所有旧删除一起复活。
+4. 调用点放在 `SyncEngine.applyPayload` 合并之后、`target.apply` 之前：那里同时知道记录与
+   对端水位，而且"正在同步"本来就是唯一需要判断的时刻。
+
+### 一个自己抓到的 bug（值得单独记）
+
+第一版 `confirmPeer` 用调用方传进来的 `peer` 做 `copy(confirmedHlc = ...)` 再写回。问题是
+协调器手里的 `peer` 是**交换开始时的快照**，而交换过程中 `applyPayload` 已经通过
+`peersWriter` 写过 `appliedSequences` / `lastSeenAt`——用旧对象 copy 回去会把这两个字段一起
+回滚，等于把"同一 sequence 不重复应用"的守卫抹掉。
+
+改成重新读 peers、按 deviceId 找到存储里那份、只改 `confirmedHlc`。提交在 CI 绿之前就自查
+出来了（写代码时顺手推演了一遍谁在什么时候写这个对象）。
+
+### 时序上的一处刻意选择
+
+确认是在一次交换**结束时**写入的，所以投递墓碑的那次同步**不能同时**算作确认：墓碑会多活
+一次交换，在下一次同步时才被回收。换来的是不需要在推送过程中插入"提前确认"的特例。端到端
+测试把这一点写成了断言（"the exchange that delivered it cannot also have confirmed it"）。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **548** 条，failures=0 errors=0（540 → 548，新增 8） |
+| 仪器测试 | ✅ 47 条 `@Test`（未新增；截图仍 38 张） |
+| Release assembly（R8） | ✅ |
+
+新增 8 条：
+
+- `SyncMergeTest` 5：`a tombstone confirmed by every peer is dropped`、
+  `a tombstone one peer has not confirmed is kept`（安全条件本身）、
+  `live records survive pruning`、`nothing is pruned without paired peers`、
+  `a watermark only counts for its own scope`；
+- `SyncCoordinatorTest` 2：`a completed exchange confirms the peer up to the newest local record`、
+  `a failed exchange confirms nothing`；
+- `CrossDeviceSyncTest` 1：`a tombstone is dropped once the peer has confirmed it`（真实 LAN
+  传输，两次同步，并断言"从未主动同步过的平板保留自己的墓碑"）。
+
+README 的墓碑段落已按实现改写。
+
+### 下一轮
+
+- 待办清单**已清空**。下一轮做最终收尾审计：`grep TODO`、死代码、README 与实现一致性、
+  每轮记录的验证表是否齐全，然后才判断目标是否达成。
