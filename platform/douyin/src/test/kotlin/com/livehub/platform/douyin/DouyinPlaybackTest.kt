@@ -135,7 +135,7 @@ class DouyinPlaybackTest {
 
     val source = adapter(http).playback(roomId = "164485212", preferredQuality = null, preferredLine = null)
 
-    assertEquals(3, source.variants.size, "every rendition from the first response must survive")
+    assertEquals(2, source.variants.size, "every distinct quality from the first response must survive")
     assertEquals(1, http.urls.size, "no second fetch may happen at all: ${http.urls}")
   }
 
@@ -155,14 +155,22 @@ class DouyinPlaybackTest {
     assertTrue(source.room.isLive)
   }
 
+  /**
+   * One chip per quality, and hls wins the tie.
+   *
+   * `enter` describes the same renditions twice — once under `hls_pull_url_map`, once under
+   * `flv_pull_url` — with the same keys. Both mapped `FULL_HD1` to 原画, so the 清晰度 row
+   * showed two identical chips, and the second one was the container the reference resolver
+   * warns about (H.265-in-FLV renders as audio only on many devices).
+   */
   @Test
-  fun `hls renditions come before flv ones`() = runBlocking {
+  fun `a quality listed in both containers appears once and keeps hls`() = runBlocking {
     val http = FakeDouyinHttp { _, _ -> ok(enter()) }
 
     val source = adapter(http).playback(roomId = "164485212", preferredQuality = null, preferredLine = null)
 
-    assertEquals(listOf("原画", "蓝光", "原画"), source.variants.map { it.qualityLabel })
-    assertEquals(listOf(true, true, false), source.variants.map { it.isHls })
+    assertEquals(listOf("原画", "蓝光"), source.variants.map { it.qualityLabel })
+    assertEquals(listOf(true, true), source.variants.map { it.isHls })
     assertEquals("原画", source.defaultVariant?.qualityLabel)
     assertTrue(source.defaultVariant!!.isHls, "the default rendition should be the best hls one")
   }
@@ -174,7 +182,7 @@ class DouyinPlaybackTest {
     // HD1 ranks second, so without the preference it would never be the default variant.
     val source = adapter(http).playback(roomId = "164485212", preferredQuality = 1, preferredLine = null)
 
-    assertEquals(3, source.variants.size, "a preference reorders, it does not filter")
+    assertEquals(2, source.variants.size, "a preference reorders, it does not filter")
     assertEquals("蓝光", source.defaultVariant?.qualityLabel)
   }
 
@@ -186,6 +194,9 @@ class DouyinPlaybackTest {
    * audio-only on many devices". Before the ranks were clamped, an unmapped hls key took
    * `10 + index` and therefore landed *after* the flv renditions, so a single new key would
    * have made the player default to the format that can render as audio only.
+   *
+   * `SD1` is deliberately flv-only here: since a quality offered by both containers collapses
+   * to one chip, this is the only way left to observe the hls/flv ordering at all.
    */
   @Test
   fun `an unmapped hls key still sorts ahead of every flv rendition`() = runBlocking {
@@ -196,12 +207,17 @@ class DouyinPlaybackTest {
             "FULL_HD1" to "https://pull-flv-l1.douyincdn.com/stage/full.m3u8",
             "HD2" to "https://pull-flv-l1.douyincdn.com/stage/hd2.m3u8",
           ),
+          flv = mapOf(
+            "FULL_HD1" to "https://pull-flv-l1.douyincdn.com/stage/full.flv",
+            "SD1" to "https://pull-flv-l1.douyincdn.com/stage/sd.flv",
+          ),
         ),
       )
     }
 
     val source = adapter(http).playback(roomId = "164485212", preferredQuality = null, preferredLine = null)
 
+    assertEquals(listOf("原画", "HD2", "高清"), source.variants.map { it.qualityLabel })
     assertEquals(listOf(true, true, false), source.variants.map { it.isHls })
     assertEquals("HD2", source.variants[1].qualityLabel, "the unmapped key keeps its own label")
     assertTrue(source.defaultVariant!!.isHls)

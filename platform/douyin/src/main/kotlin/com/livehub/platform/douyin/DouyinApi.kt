@@ -534,7 +534,16 @@ class DouyinApi(
         rank = qualityRank(entry.key, index) + FLV_OFFSET,
       )
     }
-    return builder.sortedBy { it.rank }
+    builder.sortedBy { it.rank }.let { ordered ->
+      // One chip per quality. `enter` describes the *same* renditions twice — once under
+      // `hls_pull_url_map` and once under `flv_pull_url` — and both maps use the same keys, so
+      // `FULL_HD1` produced two variants that both display as 原画: the 清晰度 row offered two
+      // identical chips and one of them was the container the reference resolver warns about
+      // ("some Douyin FLV streams may be H.265-in-FLV which Media3/ExoPlayer may not render —
+      // audio-only on many devices"). Keeping the best-ranked candidate resolves the duplicate
+      // in favour of hls, and a quality that exists *only* as flv is still offered.
+      ordered.distinctBy { it.name }
+    }
   }
 
   private fun qualityName(key: String): String = when {

@@ -647,6 +647,64 @@ class ScreenshotTest {
    * composed directly because the sheet only opens on a tap and the screenshot has to freeze
    * the clock, but it is the same composable `PlayerScreen` opens.
    */
+  /**
+   * A 抖音 room's 清晰度 row: one chip per quality.
+   *
+   * `enter` lists the same renditions twice, under `hls_pull_url_map` and under
+   * `flv_pull_url`, and both maps spell `FULL_HD1` as 原画. Before `parseVariants` collapsed
+   * the duplicates this panel showed 原画 twice, with nothing on screen to tell them apart —
+   * and the second one is the container the reference resolver warns may be H.265-in-FLV
+   * (audio only on many devices). 抖音 has no CDN line axis, so `lines` stays empty.
+   */
+  @Test
+  fun playerSettingsDouyin() {
+    val state = douyinPlayerState()
+    capture(
+      "22b-player-settings-douyin",
+      state,
+      content = {
+        MaterialTheme {
+          Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+          ) {
+            PlayerSettings(state = state, variant = state.selectedVariant, onAction = {})
+          }
+        }
+      },
+    )
+  }
+
+  private fun douyinPlayerState(): UiState {
+    val original = StreamVariant(
+      qualityLabel = "原画",
+      url = "https://pull-flv-l1.douyincdn.com/stage/full.m3u8",
+      lineName = "抖音",
+      isHls = true,
+      qualityRank = 0,
+      qualityCode = 0,
+    )
+    return baseState().copy(
+      screen = Screen.Player,
+      platform = Platform.DOUYIN,
+      room = streamer(Platform.DOUYIN, "7380123456789012345", "KPL赛事", "王者荣耀职业联赛", 123_456),
+      variants = listOf(
+        original,
+        StreamVariant(
+          qualityLabel = "蓝光",
+          url = "https://pull-flv-l1.douyincdn.com/stage/hd.m3u8",
+          lineName = "抖音",
+          isHls = true,
+          qualityRank = 1,
+          qualityCode = 1,
+        ),
+      ),
+      selectedVariant = original,
+      lines = emptyList(),
+      selectedLine = null,
+    )
+  }
+
   @Test
   fun playerSettingsHuya() {
     val state = huyaPlayerState()
