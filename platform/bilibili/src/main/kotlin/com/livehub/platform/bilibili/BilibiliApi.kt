@@ -404,44 +404,66 @@ class BilibiliApi(
       ?: throw PlatformProtocolException("B站播放数据为空", Platform.BILIBILI)
     val streams = playurl.jsonObject["stream"]?.jsonArray ?: JsonArray(emptyList())
 
-    val variants = mutableListOf<StreamVariant>()
-    streams.forEach { streamElement ->
-      val stream = streamElement as? JsonObject ?: return@forEach
+    // Every `url_info` entry is the same rendition served from a different CDN, and the same
+    // quality comes back once per container (flv / ts / fmp4) × codec (avc / hevc). The capture
+    // in `fixtures/bilibili-playinfo.json` answers **six** entries for one quality, two hosts
+    // each, and a different host pair per container — reading only `url_info[0]` threw away
+    // every alternative, which is why the 线路 row had nothing to switch to.
+    val candidates = mutableListOf<Candidate>()
+    for (streamElement in streams) {
+      val stream = streamElement as? JsonObject ?: continue
       val formats = stream["format"]?.jsonArray ?: JsonArray(emptyList())
-      formats.forEach { formatElement ->
-        val format = formatElement as? JsonObject ?: return@forEach
+      for (formatElement in formats) {
+        val format = formatElement as? JsonObject ?: continue
         val codecs = format["codec"]?.jsonArray ?: JsonArray(emptyList())
-        codecs.forEach { codecElement ->
-          val codec = codecElement as? JsonObject ?: return@forEach
-          val baseUrl = codec.str("base_url") ?: return@forEach
-          val urlInfo = codec["url_info"]?.jsonArray?.firstOrNull() as? JsonObject
-          val host = urlInfo?.str("host") ?: return@forEach
-          val extra = urlInfo.str("extra").orEmpty().trimStart('?', '&')
-          val full = buildPlayUrl(host, baseUrl, extra)
+        for (codecElement in codecs) {
+          val codec = codecElement as? JsonObject ?: continue
+          val baseUrl = codec.str("base_url") ?: continue
+          val qn = codec.qualityQn()
           val isHls = baseUrl.contains(".m3u8", ignoreCase = true)
-          variants += StreamVariant(
-            qualityLabel = BilibiliQuality.labelForQn(codec.qualityQn()),
-            url = full,
-            lineName = host.removePrefix("https://").removePrefix("http://").substringBefore('/'),
-            isHls = isHls,
-            qualityRank = BilibiliQuality.rankOf(baseUrl),
-            qualityCode = codec.qualityQn(),
-          )
+          val rank = BilibiliQuality.rankOf(baseUrl)
+          val infos = codec["url_info"]?.jsonArray ?: JsonArray(emptyList())
+          for (infoElement in infos) {
+            val urlInfo = infoElement as? JsonObject ?: continue
+            val host = urlInfo.str("host") ?: continue
+            val extra = urlInfo.str("extra").orEmpty().trimStart('?', '&')
+            candidates += Candidate(
+              qn = qn,
+              baseUrl = baseUrl,
+              host = host.removePrefix("https://").removePrefix("http://").substringBefore('/'),
+              url = buildPlayUrl(host, baseUrl, extra),
+              isHls = isHls,
+              rank = rank,
+            )
+          }
         }
       }
     }
 
-    if (variants.isEmpty()) {
+    if (candidates.isEmpty()) {
       throw PlatformProtocolException("B站未解析到播放地址", Platform.BILIBILI)
     }
-    // One entry per quality: the same qn shows up once per container, and the UI can
-    // only meaningfully move between qualities.
-    val ordered = variants
-      .groupBy { it.qualityCode }
-      .values
-      .map { candidates -> candidates.minWith(compareBy({ it.qualityRank }, { it.lineName })) }
-      .sortedWith(compareBy({ qualityOrder(it.qualityCode) }, { it.qualityRank }))
-    val preferred = preferredQn?.let { code -> ordered.firstOrNull { it.qualityCode == code } }
+    // One entry per quality, best container first: HLS before FLV, then whatever the answer
+    // listed first, then the first CDN of that container.
+    val bestPerQuality = candidates
+      .groupBy { it.qn }
+      .mapValues { (_, list) -> list.minWith(compareBy({ it.rank }, { it.baseUrl }, { it.host })) }
+    val defaultQn = preferredQn?.takeIf { bestPerQuality.containsKey(it) }
+      ?: bestPerQuality.keys.minWith(compareBy { qualityOrder(it) })
+
+    // The line axis is the CDN list of the container this quality actually resolves through.
+    // Mixing in the other containers' hosts offered six chips, four of which pointed at a
+    // format the player was not using.
+    val container = bestPerQuality.getValue(defaultQn).baseUrl
+    val containerHosts = candidates.filter { it.qn == defaultQn && it.baseUrl == container }
+    val lines = containerHosts.map { it.host }.distinct()
+    // A line the room no longer publishes (or one remembered from another room) falls back to
+    // the first CDN of this container instead of failing: a stale preference must still play.
+    val chosen = preferredLine?.let { line -> containerHosts.firstOrNull { it.host == line } }
+      ?: containerHosts.first()
+    val ordered = bestPerQuality
+      .map { (qn, best) -> if (qn == defaultQn) chosen else best }
+      .sortedWith(compareBy({ qualityOrder(it.qn) }, { it.rank }))
     val room = Streamer(
       platform = Platform.BILIBILI,
       roomId = roomId,
@@ -452,10 +474,29 @@ class BilibiliApi(
     )
     return PlaybackSource(
       room = room,
-      variants = ordered,
-      defaultVariant = preferred ?: ordered.first(),
-      lines = ordered.mapNotNull { it.lineName }.distinct(),
-      selectedLine = (preferred ?: ordered.first()).lineName,
+      variants = ordered.map { it.toVariant() },
+      defaultVariant = chosen.toVariant(),
+      lines = lines,
+      selectedLine = chosen.host,
+    )
+  }
+
+  /** One rendition: a quality, in one container, served from one CDN. */
+  private data class Candidate(
+    val qn: Int,
+    val baseUrl: String,
+    val host: String,
+    val url: String,
+    val isHls: Boolean,
+    val rank: Int,
+  ) {
+    fun toVariant(): StreamVariant = StreamVariant(
+      qualityLabel = BilibiliQuality.labelForQn(qn),
+      url = url,
+      lineName = host,
+      isHls = isHls,
+      qualityRank = rank,
+      qualityCode = qn,
     )
   }
 

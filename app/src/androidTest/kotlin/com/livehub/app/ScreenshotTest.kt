@@ -675,6 +675,33 @@ class ScreenshotTest {
     )
   }
 
+  /**
+   * A 哔哩哔哩 room's settings panel: three qualities and, for the first time, two CDN lines.
+   *
+   * The panel renders `state.lines` only when there are at least two, so this row could not
+   * appear before `BilibiliApi.playback` started keeping every `url_info` entry: it read only
+   * the first host, so every quality had exactly one line and the row was hidden — the 线路
+   * selector existed for Douyu and Huya and silently did nothing here.
+   */
+  @Test
+  fun playerSettingsBilibili() {
+    val state = bilibiliPlayerState()
+    capture(
+      "22c-player-settings-bilibili",
+      state,
+      content = {
+        MaterialTheme {
+          Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+          ) {
+            PlayerSettings(state = state, variant = state.selectedVariant, onAction = {})
+          }
+        }
+      },
+    )
+  }
+
   private fun douyinPlayerState(): UiState {
     val original = StreamVariant(
       qualityLabel = "原画",
