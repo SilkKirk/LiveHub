@@ -3925,3 +3925,100 @@ workflow 一致；「后台每 30 分钟刷新」= `FollowRefreshWorker.INTERVAL
 - 没有 `TODO`、注释掉的死代码、调试输出（四条 `Log` 是有意的设备侧诊断）。
 
 据此，本轮结束时可以判断目标达成。
+
+---
+
+## 第四十轮迭代：关注列表同步"点了没反应"——重放水位跨进程存活、序号每次归零、地址不落盘
+
+### 缺陷是什么
+
+用户报告："关注列表同步很慢，经常匹配不上、同步不过去"。落到界面上是三种：
+
+1. 两台设备已经关联好，点「立即同步」提示"部分同步失败 (1)"，两边的关注列表都没变；
+   再点、再点，若干次之后忽然又能同步了。
+2. 杀掉 App 再打开，同一个 Wi-Fi 下同步永远失败，日志里是
+   `↓ 关注列表 · 小米平板 6 / 接收 0 条 · 该版本已应用`，或者干脆是"不在线"——
+   只有「附近设备」碰巧刷出对方时才有救。
+3. 对方关着机时，按钮转很久才回一句不知道在说谁的"部分同步失败 (1)"。
+
+### 为什么会这样
+
+**一、重放守卫的水位跨进程存活，序号却每次启动归零。** 这是"要点很多次"的根因，也是本轮
+最重的一条。`SyncEngine.sequence` 是进程内字段、从 0 数起；而接收方的水位
+`TrustedPeer.appliedSequences` 写在 DataStore 里，跨进程存活。于是重启后的本机发出
+1、2、3……，对端逐条判 `sequence > 水位` 为假 → "该版本已应用"。一次成功交换会让水位涨
+**2**（拉取响应一片 +1、推送响应一片 +1），所以用过 N 次同步的设备重启之后，要点约 2N 次
+才能追平——每次点只把对端序号推进 1（`buildPullPayload` 每次请求都重算 `buildPayloads`）。
+
+**二、被拒的拉取被当成失败，整段交换直接结束。** `SyncCoordinator` 在拉取被拒时
+`continue`，连"该发的增量"一起跳过。所以重放一来，不是"少发一条"，而是这一轮什么都没发生，
+用户看到的红字也只有"部分同步失败"。
+
+**三、对端地址只活在内存里。** `TrustedPeer` 只有密钥、没有地址字段，`SyncController` 里的
+`PeerAddressBook()` 是新建的，配对与 mDNS 学到的地址随进程一起消失。重启后只剩 mDNS 一条路，
+而屏蔽组播（AP 隔离、IGMP snooping）恰恰是家用路由器最常见的毛病——配对一直有"扫网段"兜底
+（`CodePairing`），同步没有，于是在这种网络上只能永远报"不在线"。
+
+**四、连接与读共用一个超时预算。** `LanSyncTransport.call` 用 `socket.connect(..., budget)`
+加 `soTimeout = budget`，budget 默认 8 秒；地址过期时 SYN 没人应答，按钮就要占满 8 秒。
+
+### 怎么修的
+
+1. `SyncEngine.nextSequence()`：`AtomicLong.updateAndGet { maxOf(前一个 + 1, clock()) }`。
+   从时钟起算而不是从 0，重启后的序号必然高于本机此前发出去的任何值；`+1` 保证同一毫秒内
+   两次构建也不撞号。用 `AtomicLong` 是因为服务端拉取线程与客户端推送线程会同时取号
+   （原来的 `sequence += 1` 是读-改-写，本身也不是原子的）。
+2. 重放改成 no-op：`SyncApplyResult(applied = 0)`、`accepted = true`，并记一条
+   `该版本已应用，跳过` 的日志行。合并本来幂等，所以"重复到达"不需要靠错误来表达。
+3. 地址持久化：`PeerAddressBook(initial, onChange)` 从 DataStore 播种、变化时写回
+   （`UserPreferences.peerAddresses()` / `savePeerAddresses()`）。同步前先 `ping` 已存地址
+   （一次往返），不通就交给新的 `PeerLocator` 按设备 id 扫本机 /24——`ping` 端点本来就回
+   `serverDeviceId`，因此不用重新配对就能确认"这个地址是不是它"。
+4. `LanSyncTransport` 拆成连接预算 3 秒（`DEFAULT_CONNECT_TIMEOUT_MILLIS`）+ 读预算 8 秒。
+5. 失败摘要带上设备名与原因（"同步失败：小米平板 6 不在线"），不再是纯计数。
+6. 解除配对时一并 `forgetPeer`，避免把已解除的地址留在持久化表里。
+
+### 踩到的坑
+
+- **CI 第一次是红的**（`Build & test`）：`CrossDeviceSyncTest:405` "None of the following
+  candidates is applicable"——JUnit 6 只保留 condition-first 的 `assertTrue`，而我把新断言写成
+  了 message-first。注意 app 模块的 Robolectric 测试跑在 JUnit 4 上，那边的 message-first
+  是合法的，所以仓库里两种写法并存、照抄会踩坑。修在 `be2dc3a`。
+- `PeerAddressBook.clear()` 全仓库零调用，顺手删掉（与第三十九轮"死代码"口径一致）。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **560** 条（上一轮 548，本轮净增 12），failures=0 errors=0 |
+| 仪器测试 | ✅ 全绿（本轮不动 UI，未新增仪器测试、未比对截图） |
+| Release assembly（R8） | ✅ |
+| CI 三个 job | ✅ `83463cf..be2dc3a` 全绿 |
+
+新增/改写的测试（从 `test-reports` 产物核对过确实执行）：
+
+| 测试 | 条数 | 钉住什么 |
+| --- | --- | --- |
+| `SyncEngineTest.a payload from a restarted sender still reaches the receiver` | 1 | 旧代码上必红：新进程序号 1 < 水位 1000，记录到不了对端 |
+| `SyncEngineTest.a replayed payload is applied as a no-op` | 1 | 重复包 `accepted`、`applied = 0`、仓库不变、日志有说明 |
+| `CrossDeviceSyncTest.a replayed payload is a no-op instead of a failure` | 1 | 原"重放被拒"按新语义改写，端到端再钉一次 |
+| `PeerAddressBookTest` | 5 | 播种、写回、重复广播不重写、forget、未知设备 |
+| `PeerLocatorTest` | 4 | 按设备 id 命中、不误认别的设备、异常不中断、空答案不占满预算 |
+| `PeerAddressPersistenceTest`（Robolectric） | 2 | DataStore 往返：配对学到的地址下次启动还在 |
+
+### 没做到的
+
+- **配对的读预算仍是 1 秒**（`CodePairing.attemptTimeoutMillis`）。主机在 `onPair` 里要写两次
+  DataStore（`selfSecret` 与 `linkPeer`），低端机上理论上可能超过 1 秒，那样对方会先超时、
+  而匹配码已经被消费掉。要拆预算得给 `SyncHttpTransport.call` 加第二个超时参数（现在只有
+  一个 `timeoutMillis`），会动到测试桩，本轮没做。
+- **跨进程验证仍靠 Robolectric 的同文件往返**，CI 里没有第二台真机；真实 DHCP 换租约、
+  真路由器屏蔽组播这两条只有手工验收。
+- **蓝牙 / RFCOMM 作为"没有同一局域网"时的备用通道**：评估过（权限、系统配对框、
+  模拟器没有蓝牙栈），不作为本轮内容——而且本轮三个根因都在协议层，换传输层不会修好它们。
+
+### 下一轮
+
+- 配对的超时预算与 `onPair` 的两写，一起收敛（要么合并写，要么把读预算调大）。
+- 地址表目前只有 deviceId → 地址一条记录，没有"上次成功连通时间"，出问题时仍要靠日志猜。
