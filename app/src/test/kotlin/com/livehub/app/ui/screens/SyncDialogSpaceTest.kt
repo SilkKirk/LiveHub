@@ -102,13 +102,13 @@ class SyncDialogSpaceTest {
   /**
    * The shortest window the app renders in: a 640×360 landscape phone.
    *
-   * This one does not idle yet (`AppNotIdleException` after 60s, reproduced on the first run),
-   * which is a *layout* failure rather than the "cut off" this test was written to check. The
-   * scenario stays here, disabled, until the cause is fixed — see `SyncDialogProbeTest`.
+   * This is the case that exposed the real defect: at this size `AlertDialog` never settled
+   * (`AppNotIdleException` after 60s), which on a device is a frozen UI. `MatchingCodeDialog`
+   * is a plain `Dialog` with an explicitly bounded width and a scrollable body now, and this
+   * test is the regression guard for it.
    */
   @Test
   @Config(qualifiers = "w640dp-h360dp-land")
-  @org.junit.Ignore("held back while the landscape dialog layout loop is being fixed")
   fun `the dialog also fits a landscape phone`() {
     openDialog()
 

@@ -308,10 +308,15 @@ class ScreenshotTest {
     peers = listOf(
       TrustedPeer(2, "小米平板 6", "secret", 1_700_000_000_000, lastSeenAt = 1_700_000_100_000),
     ),
+    // Every row says 关注列表 because it is the only scope there is (round 32). The fixture
+    // used to list 分区订阅 and 播放设置, which the app can no longer produce — a reviewer
+    // reading the log in `13b-sync-log` would have been told the app syncs more than it does.
+    // The deepest row is on the second paired device so `scrollToText` still has one unique
+    // target: with a single peer, all three rows render identical text.
     syncLog = listOf(
       SyncLogEntry(1_700_000_100_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 3, true, "更新 3 条"),
-      SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "分区订阅", 2, true, null),
-      SyncLogEntry(1_700_000_080_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "播放设置", 0, false, "对方拒绝连接"),
+      SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "关注列表", 2, true, null),
+      SyncLogEntry(1_700_000_080_000, SyncLogEntry.Direction.PUSH, "客厅电视", "关注列表", 0, false, "对方拒绝连接"),
     ),
   )
 
@@ -504,6 +509,21 @@ class ScreenshotTest {
 
   @Test
   fun syncEmpty() = capture("14-sync-empty", baseState().copy(screen = Screen.Sync))
+
+  /**
+   * The 关联设备 dialog, which had no render and no test before round 36.
+   *
+   * That is how a dialog that never settled on a landscape phone survived: opening it was
+   * only ever done by hand. The dialog is a plain `Dialog` with a bounded width and a
+   * scrollable body now, and this render is what shows the result.
+   */
+  @Test
+  fun syncPairingDialog() = capture(
+    "14b-sync-pairing-dialog",
+    syncState(),
+    clickText = "关联设备",
+    expectText = "六位匹配码",
+  )
 
   @Test
   fun settings() = capture("15-settings", settingsState())
@@ -946,7 +966,7 @@ class ScreenshotTest {
      * section in frame: the scroll stops as soon as the target is visible, so aiming at the
      * heading would park it at the bottom edge with every row still below it.
      */
-    const val LAST_SYNC_LOG_ROW = "播放设置 · 小米平板 6"
+    const val LAST_SYNC_LOG_ROW = "关注列表 · 客厅电视"
   }
 }
 

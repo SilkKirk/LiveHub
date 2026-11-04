@@ -10,15 +10,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
@@ -234,6 +238,17 @@ private fun formatCode(code: String): String =
  *
  * Deliberately has no address field. Reading an IP off another screen is the step this
  * whole change removes, and an optional field would quietly reintroduce it.
+ *
+ * **A plain [Dialog] rather than `AlertDialog`.** Material3's `AlertDialog` measures its
+ * content column with `Modifier.width(IntrinsicSize.Max)` and scrolls it when it does not fit
+ * the window; on a wide *and* short window (640×360dp, i.e. a landscape phone) the two
+ * together never settle — the composition spins without becoming idle, which on a device is a
+ * frozen UI. It reproduced in Robolectric as `AppNotIdleException: Compose did not get idle
+ * after 125826 attempts in 60 SECONDS`, and narrowing the variables showed it needs width and
+ * height to be tight at the same time (600×800 and 320×360 both settle).
+ *
+ * Here the width is bounded explicitly and only the body scrolls, so there is no intrinsic
+ * measurement anywhere and nothing to fight over.
  */
 @Composable
 private fun MatchingCodeDialog(
@@ -244,59 +259,79 @@ private fun MatchingCodeDialog(
 ) {
   var code by remember { mutableStateOf("") }
 
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text("关联设备") },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-          text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-          value = code,
-          onValueChange = { code = it.filter(Char::isDigit).take(6) },
-          label = { Text("六位匹配码") },
-          placeholder = { Text("123456") },
-          singleLine = true,
-          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-          modifier = Modifier.fillMaxWidth(),
-        )
-        // This device's own code is shown for comparison, with its remaining life: the
-        // common mistake is to type your own code into your own device, which looks like
-        // nothing happening.
-        Text(
-          text = if (state.pairingCodeSecondsLeft > 0) {
-            "本机匹配码 ${formatCode(state.pairingCode)}（请勿输入本机码）"
-          } else {
-            "本机匹配码已过期"
-          },
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(onClick = onRefreshCode) { Text("重新生成本机匹配码") }
-        if (state.pairing) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(
-              text = "正在附近设备中查找…",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+  Dialog(onDismissRequest = onDismiss) {
+    Surface(
+      modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
+      shape = RoundedCornerShape(28.dp),
+      color = MaterialTheme.colorScheme.surface,
+      tonalElevation = 6.dp,
+    ) {
+      Column(modifier = Modifier.padding(24.dp)) {
+        Text("关联设备", style = MaterialTheme.typography.titleLarge)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // `weight(fill = false)` so the body takes what it needs and gives the rest back to
+        // the window; `verticalScroll` then makes the overflow reachable instead of clipped.
+        Column(
+          modifier = Modifier
+            .weight(1f, fill = false)
+            .verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Text(
+            text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          OutlinedTextField(
+            value = code,
+            onValueChange = { code = it.filter(Char::isDigit).take(6) },
+            label = { Text("六位匹配码") },
+            placeholder = { Text("123456") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            modifier = Modifier.fillMaxWidth(),
+          )
+          // This device's own code is shown for comparison, with its remaining life: the
+          // common mistake is to type your own code into your own device, which looks like
+          // nothing happening.
+          Text(
+            text = if (state.pairingCodeSecondsLeft > 0) {
+              "本机匹配码 ${formatCode(state.pairingCode)}（请勿输入本机码）"
+            } else {
+              "本机匹配码已过期"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          TextButton(onClick = onRefreshCode) { Text("重新生成本机匹配码") }
+          if (state.pairing) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+              Spacer(modifier = Modifier.size(8.dp))
+              Text(
+                text = "正在附近设备中查找…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
         }
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+        ) {
+          TextButton(onClick = onDismiss) { Text("取消") }
+          Spacer(modifier = Modifier.size(8.dp))
+          TextButton(
+            onClick = { onConfirm(code) },
+            enabled = code.length == 6 && !state.pairing,
+          ) { Text("关联") }
+        }
       }
-    },
-    confirmButton = {
-      TextButton(
-        onClick = { onConfirm(code) },
-        enabled = code.length == 6 && !state.pairing,
-      ) { Text("关联") }
-    },
-    dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-  )
+    }
+  }
 }
 
 /**
