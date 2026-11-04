@@ -172,6 +172,11 @@ fun DouyinWebLoginSheet(
             view.webViewClient = object : WebViewClient() {
               override fun onPageFinished(view: WebView?, url: String?) {
                 loadError.value = null
+                // The one difference between this WebView and the user's browser: the login
+                // card collapsed into a single column (验证码/密码 only, no QR) because the CSS
+                // viewport was ~411px wide. Forcing a desktop width brings the two-column card
+                // — the one with the QR — back.
+                view?.evaluateJavascript(WIDE_VIEWPORT_JS, null)
               }
 
               @Deprecated("Deprecated in Java")
@@ -211,3 +216,36 @@ private const val LOGIN_URL = "https://www.douyin.com/"
 private const val SSO_URL = "https://sso.douyin.com"
 private const val SITE_URL = "https://www.douyin.com"
 private const val POLL_INTERVAL_MILLIS = 800L
+
+/**
+ * Pins the CSS viewport to a desktop width, whatever the page asks for.
+ *
+ * Measured on a real device: at ~411 CSS px the login card renders as a single column with only
+ * 验证码/密码 tabs, while the same page in the phone's browser (which lays an unmeta'd page out at
+ * 980px) shows the two-column card whose left half *is* the QR code the user needs. 768 is the
+ * width above which the card keeps both columns; anything narrower folds it away.
+ *
+ * A `MutationObserver` keeps it pinned because the SPA rewrites the meta tag as it renders.
+ */
+private const val WIDE_VIEWPORT_JS = """
+  (function () {
+    var want = 'width=768';
+    function fix() {
+      var metas = document.querySelectorAll('meta[name="viewport"]');
+      if (!metas.length) {
+        var meta = document.createElement('meta');
+        meta.setAttribute('name', 'viewport');
+        meta.setAttribute('content', want);
+        (document.head || document.documentElement).appendChild(meta);
+        return;
+      }
+      for (var i = 0; i < metas.length; i++) {
+        if (metas[i].getAttribute('content') !== want) metas[i].setAttribute('content', want);
+      }
+    }
+    fix();
+    try {
+      new MutationObserver(fix).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) { }
+  })();
+"""
