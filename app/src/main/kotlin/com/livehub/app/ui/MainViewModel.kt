@@ -3,15 +3,12 @@ package com.livehub.app.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.livehub.app.di.AppContainer
-import com.livehub.app.di.PreferenceKeys
-import com.livehub.app.di.PreferenceLimits
 import com.livehub.app.ui.components.BiliLoginUi
 import com.livehub.app.sync.SyncController
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
-import com.livehub.core.sync.SyncScope
 import com.livehub.platform.api.PlatformException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -63,12 +60,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         danmakuAreaFraction = settings.danmakuAreaFraction,
         landscapeDanmakuFontScale = settings.landscapeDanmakuFontScale,
         blockedKeywords = settings.blockedKeywords,
-        syncScopes = settings.syncScopes
-          .mapNotNull(SyncScope::fromWireName)
-          .toSet()
-          .ifEmpty { SyncScope.default },
         deviceName = preferences.deviceName,
-        searchHistory = container.historyStore.keywords(),
+        searchHistory = settings.searchHistory,
         followed = container.followStore.followed(),
         peers = preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
@@ -135,7 +128,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SetDanmakuOpacity -> setDanmakuOpacity(action.opacity)
       is UiAction.SetLandscapeDanmakuFontScale -> setLandscapeDanmakuFontScale(action.scale)
       is UiAction.SetBlockedKeywords -> setBlockedKeywords(action.keywords)
-      is UiAction.SetSyncScopes -> setSyncScopes(action.scopes)
       UiAction.RefreshPeers -> refreshPeers()
       is UiAction.UnpairPeer -> unpair(action.deviceId)
       is UiAction.PairWithCode -> pairWithCode(action.code)
@@ -428,7 +420,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       _state.update { it.copy(message = "请输入要搜索的主播或直播间名称") }
       return
     }
-    container.historyStore.add(query)
+    container.preferences.addSearchHistory(query)
     searchJob?.cancel()
     searchCursor = null
     searchJob = viewModelScope.launch {
@@ -447,7 +439,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           searchResults = if (sameKeyword) current.searchResults else emptyList(),
           searchHasMore = false,
           error = null,
-          searchHistory = container.historyStore.keywords(),
+          searchHistory = container.preferences.settings.searchHistory,
         )
       }
       try {
@@ -518,7 +510,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   }
 
   private fun clearSearchHistory() {
-    container.historyStore.clear()
+    container.preferences.clearSearchHistory()
     _state.update { it.copy(searchHistory = emptyList()) }
   }
 
@@ -649,7 +641,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     // picked instead of resetting to 原画 every time. The preference map existed with a
     // setter but nothing ever wrote or read it.
     if (quality != null) {
-      container.preferencesStore.setInt(PreferenceKeys.QUALITY_PREFIX + room.platform.id, quality)
+      container.preferences.setPreferredQuality(room.platform, quality)
     }
 
     // Picking a variant that is already resolved needs no network round trip, unless the
@@ -766,7 +758,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val platform = _state.value.room?.platform
     val code = variant.qualityCode
     if (platform != null && code != null) {
-      container.preferencesStore.setInt(PreferenceKeys.QUALITY_PREFIX + platform.id, code)
+      container.preferences.setPreferredQuality(platform, code)
     }
     _state.update { it.copy(selectedVariant = variant, playerError = null) }
   }
@@ -774,7 +766,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   // ---------------------------------------------------------------- preferences
 
   private fun setDanmakuEnabled(enabled: Boolean) {
-    container.preferencesStore.setFlag(PreferenceKeys.DANMAKU_ENABLED, enabled)
+    container.preferences.setDanmakuEnabled(enabled)
     _state.update { it.copy(danmakuEnabled = enabled) }
   }
 
@@ -804,27 +796,27 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   /** Danmaku area and font scale are persisted so the choice survives a restart. */
   private fun setDanmakuAreaFraction(fraction: Float) {
-    val clamped = fraction.coerceIn(PreferenceLimits.AREA_FRACTION)
-    container.preferencesStore.setNumber(PreferenceKeys.DANMAKU_AREA_FRACTION, clamped)
+    val clamped = fraction.coerceIn(0.1f, 1f)
+    container.preferences.update { it.copy(danmakuAreaFraction = clamped) }
     _state.update { it.copy(danmakuAreaFraction = clamped) }
   }
 
   private fun setDanmakuFontScale(scale: Float) {
-    val clamped = scale.coerceIn(PreferenceLimits.FONT_SCALE)
-    container.preferencesStore.setNumber(PreferenceKeys.DANMAKU_FONT_SCALE, clamped)
+    val clamped = scale.coerceIn(0.6f, 2f)
+    container.preferences.update { it.copy(danmakuFontScale = clamped) }
     _state.update { it.copy(danmakuFontScale = clamped) }
   }
 
   /** Opacity had a persisted field but no setter, so the overlay was always opaque. */
   private fun setDanmakuOpacity(opacity: Float) {
-    val clamped = opacity.coerceIn(PreferenceLimits.OPACITY)
-    container.preferencesStore.setNumber(PreferenceKeys.DANMAKU_OPACITY, clamped)
+    val clamped = opacity.coerceIn(0.2f, 1f)
+    container.preferences.update { it.copy(danmakuOpacity = clamped) }
     _state.update { it.copy(danmakuOpacity = clamped) }
   }
 
   private fun setLandscapeDanmakuFontScale(scale: Float) {
-    val clamped = scale.coerceIn(PreferenceLimits.LANDSCAPE_FONT_SCALE)
-    container.preferencesStore.setNumber(PreferenceKeys.LANDSCAPE_DANMAKU_FONT_SCALE, clamped)
+    val clamped = scale.coerceIn(0.8f, 2f)
+    container.preferences.update { it.copy(landscapeDanmakuFontScale = clamped) }
     _state.update { it.copy(landscapeDanmakuFontScale = clamped) }
   }
 
@@ -834,7 +826,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       .filter { it.isNotEmpty() }
       .distinctBy { it.lowercase() }
       .take(50)
-    container.preferencesStore.setStringList(PreferenceKeys.BLOCKED_KEYWORDS, normalized)
+    container.preferences.setBlockedKeywords(normalized)
     _state.update { it.copy(blockedKeywords = normalized) }
   }
 
@@ -973,11 +965,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   }
   // ----------------------------------------------------------------------- sync
 
-  private fun setSyncScopes(scopes: Set<SyncScope>) {
-    container.preferences.setSyncScopes(scopes)
-    _state.update { it.copy(syncScopes = scopes) }
-  }
-
   private fun refreshPeers() {
     _state.update {
       it.copy(
@@ -1084,27 +1071,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           message = summary.message,
         )
       }
-      // The PREFERENCES and HISTORY scopes can change what the UI shows while the exchange
-      // runs, so the mirrored copy in UiState has to be re-read. Without this a danmaku
-      // setting that arrived from the tablet only took effect after the app was restarted —
-      // the value was in DataStore, but every screen renders from UiState.
-      readPreferencesIntoState()
-    }
-  }
-
-  /** Re-reads every setting the UI mirrors, after something other than a tap changed them. */
-  private fun readPreferencesIntoState() {
-    val settings = container.preferences.settings
-    _state.update {
-      it.copy(
-        danmakuEnabled = settings.danmakuEnabled,
-        danmakuOpacity = settings.danmakuOpacity,
-        danmakuFontScale = settings.danmakuFontScale,
-        danmakuAreaFraction = settings.danmakuAreaFraction,
-        landscapeDanmakuFontScale = settings.landscapeDanmakuFontScale,
-        blockedKeywords = settings.blockedKeywords,
-        searchHistory = container.historyStore.keywords(),
-      )
     }
   }
 

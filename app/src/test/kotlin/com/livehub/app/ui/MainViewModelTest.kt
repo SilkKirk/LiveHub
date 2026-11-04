@@ -409,18 +409,6 @@ class MainViewModelTest {
   // ----------------------------------------------------------------------- sync ---
 
   @Test
-  fun `the sync scope selection is persisted`() {
-    viewModel.onAction(UiAction.SetSyncScopes(setOf(com.livehub.core.sync.SyncScope.FOLLOWS)))
-    idle()
-
-    assertEquals(setOf(com.livehub.core.sync.SyncScope.FOLLOWS), state.syncScopes)
-    assertEquals(
-      listOf(com.livehub.core.sync.SyncScope.FOLLOWS.wireName),
-      container.preferences.settings.syncScopes,
-    )
-  }
-
-  @Test
   fun `syncing with no paired device explains why nothing happened`() {
     viewModel.onAction(UiAction.SyncNow)
     // The exchange runs on Dispatchers.IO, so the snackbar message arrives after the

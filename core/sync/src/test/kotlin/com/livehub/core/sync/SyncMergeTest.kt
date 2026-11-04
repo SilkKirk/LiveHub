@@ -3,7 +3,6 @@ package com.livehub.core.sync
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -112,25 +111,6 @@ class SyncMergeTest {
     assertEquals(1, outcome.identical)
     assertEquals(0, outcome.remoteWins)
     assertFalse(outcome.changed)
-  }
-
-  @Test
-  fun `tombstones are pruned once older than the retention window`() {
-    val records = listOf(tombstone("a", Hlc(1_000, 0)))
-    val peers = listOf(
-      TrustedPeer(deviceId = 2, deviceName = "peer", sharedSecret = "s", pairedAt = 0),
-    )
-    val now = 1_000 + SyncMerge.TOMBSTONE_RETENTION_MILLIS + 1
-
-    assertTrue(SyncMerge.prune(records, peers, now).isEmpty())
-    assertNotNull(SyncMerge.prune(records, peers, 1_000).firstOrNull())
-  }
-
-  @Test
-  fun `pruning keeps live records and is skipped when no peers exist`() {
-    val records = listOf(alive("a", Hlc(1, 0)), tombstone("b", Hlc(1, 0)))
-    assertEquals(2, SyncMerge.prune(records, emptyList(), Long.MAX_VALUE / 2).size)
-    assertEquals(1, SyncMerge.prune(records, listOf(TrustedPeer(2, "p", "s", 0)), Long.MAX_VALUE / 2).size)
   }
 
   /**

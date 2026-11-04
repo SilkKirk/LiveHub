@@ -203,7 +203,7 @@ class FollowStore(private val preferences: UserPreferences) {
   }
 }
 
-/** [SyncTarget] implementation for the follow scope. */
+/** [SyncTarget] implementation for the follow scope — the only scope there is. */
 class FollowSyncTarget(private val store: FollowStore) : SyncTarget {
   override val scope: SyncScope = SyncScope.FOLLOWS
 
@@ -218,55 +218,19 @@ class FollowSyncTarget(private val store: FollowStore) : SyncTarget {
   }
 }
 
-/** [SyncTarget] implementation for the danmaku/playback settings. */
-class PreferencesSyncTarget(private val store: PreferencesStore) : SyncTarget {
-  override val scope: SyncScope = SyncScope.PREFERENCES
-
-  override fun snapshot(): List<SyncRecord<out Any>> = store.records()
-
-  override fun apply(records: List<SyncRecord<out Any>>): Int {
-    @Suppress("UNCHECKED_CAST")
-    val typed = records as List<SyncRecord<JsonObject>>
-    return store.applyRemote(typed)
-  }
-}
-
-/** [SyncTarget] implementation for the search history. */
-class HistorySyncTarget(private val store: HistoryStore) : SyncTarget {
-  override val scope: SyncScope = SyncScope.HISTORY
-
-  override fun snapshot(): List<SyncRecord<out Any>> = store.records()
-
-  override fun apply(records: List<SyncRecord<out Any>>): Int {
-    @Suppress("UNCHECKED_CAST")
-    val typed = records as List<SyncRecord<JsonObject>>
-    return store.merge(typed)
-  }
-}
-
 /**
- * Wires every scope the app can exchange.
+ * Wires the scopes the app exchanges.
  *
- * The set here has to cover all of [SyncScope]: the sync screen renders one chip per entry,
- * so a scope with no target is a switch that silently does nothing on this device and answers
- * the peer with an HTTP 404 it reports as a failure. `SyncScopeCoverageTest` pins that.
+ * One entry, because the follow list is the only thing worth synchronising between two
+ * installs — see [SyncScope]. `FollowsOnlySyncTest` pins both halves of that decision: this
+ * registry exposes exactly the follow list, and the engine builds nothing for anything else.
  */
-class AppSyncTargets(
-  private val preferences: UserPreferences,
-  private val followStore: FollowStore,
-  private val preferencesStore: PreferencesStore,
-  private val historyStore: HistoryStore,
-) : SyncTargets {
-  private val targets = listOf(
-    FollowSyncTarget(followStore),
-    PreferencesSyncTarget(preferencesStore),
-    HistorySyncTarget(historyStore),
-  ).associateBy { it.scope }
+class AppSyncTargets(private val followStore: FollowStore) : SyncTargets {
+  private val targets = listOf(FollowSyncTarget(followStore)).associateBy { it.scope }
 
   override fun targetFor(scope: SyncScope): SyncTarget? = targets[scope]
 
   override fun available(): List<SyncTarget> = targets.values.toList()
 
-  override fun enabledScopes(): Set<SyncScope> =
-    preferences.settings.syncScopes.mapNotNull { SyncScope.fromWireName(it) }.toSet()
+  override fun enabledScopes(): Set<SyncScope> = targets.keys
 }

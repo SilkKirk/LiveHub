@@ -164,35 +164,4 @@ object SyncMerge {
 
     return MergeOutcome(merged, localWins, remoteWins, identical)
   }
-
-  /** Drops tombstones that every known peer has already observed. */
-  fun <T> prune(
-    records: Collection<SyncRecord<T>>,
-    peers: Collection<TrustedPeer>,
-    nowMillis: Long,
-    retentionMillis: Long = TOMBSTONE_RETENTION_MILLIS,
-  ): List<SyncRecord<T>> {
-    if (peers.isEmpty()) return records.toList()
-    return records.filter { record ->
-      if (!record.deleted) {
-        true
-      } else {
-        val expired = nowMillis - record.updatedAt > retentionMillis
-        val everyoneSawIt = peers.all { peer ->
-          (peer.appliedSequences.entries.firstOrNull { it.key == TOMBSTONE_SCOPE }?.value ?: 0L) >=
-            record.hlc.physical
-        }
-        !(expired || everyoneSawIt)
-      }
-    }
-  }
-
-  /** Tombstones are retained for 30 days; long enough for a rarely used tablet. */
-  const val TOMBSTONE_RETENTION_MILLIS: Long = 30L * 24 * 60 * 60 * 1000
-
-  /**
-   * Synthetic scope key used by [prune]; tombstones are only dropped once the peer
-   * has acknowledged a payload produced after them.
-   */
-  const val TOMBSTONE_SCOPE: String = "__tombstone_ack"
 }

@@ -8,7 +8,6 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.livehub.core.model.Platform
-import com.livehub.core.sync.SyncScope
 import com.livehub.core.sync.TrustedPeer
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -33,19 +32,10 @@ data class UserSettings(
   val preferredQuality: Map<String, Int> = emptyMap(),
   val autoRefreshFollows: Boolean = true,
   val lastPlatform: String = Platform.DOUYU.id,
-  val syncScopes: List<String> = SyncScope.default.map { it.wireName },
-  /**
-   * Keywords the search screen shows, newest first.
-   *
-   * Projection of [historyRecords] — never written directly. See `HistoryStore`.
-   */
+  /** Keywords the search screen shows, newest first. Local only — never synchronised. */
   val searchHistory: List<String> = emptyList(),
-  /** Serialised follow records, including tombstones. */
+  /** Serialised follow records, including tombstones. The one synchronised scope. */
   val followRecords: String = "",
-  /** Serialised preference records used by the sync engine. */
-  val preferenceRecords: String = "",
-  /** Serialised search-history records, including tombstones. */
-  val historyRecords: String = "",
   /**
    * Secret this device presents to paired peers.
    *
@@ -94,8 +84,30 @@ class UserPreferences(private val context: Context) {
 
   fun setLastPlatform(platform: Platform) = update { it.copy(lastPlatform = platform.id) }
 
-  fun setSyncScopes(scopes: Set<SyncScope>) =
-    update { it.copy(syncScopes = scopes.map { scope -> scope.wireName }) }
+  fun setDanmakuEnabled(enabled: Boolean) = update { it.copy(danmakuEnabled = enabled) }
+
+  fun setBlockedKeywords(keywords: List<String>) = update { it.copy(blockedKeywords = keywords) }
+
+  /**
+   * Records a submitted keyword, newest first.
+   *
+   * Local only: the search history is not a sync scope. Re-searching an old keyword moves it
+   * back to the front instead of adding a duplicate.
+   */
+  fun addSearchHistory(keyword: String) {
+    val trimmed = keyword.trim()
+    if (trimmed.isEmpty()) return
+    update { current ->
+      val next = (listOf(trimmed) + current.searchHistory.filterNot { it == trimmed }).take(MAX_SEARCH_HISTORY)
+      current.copy(searchHistory = next)
+    }
+  }
+
+  fun clearSearchHistory() = update { it.copy(searchHistory = emptyList()) }
+
+  fun setPreferredQuality(platform: Platform, quality: Int) = update {
+    it.copy(preferredQuality = it.preferredQuality + (platform.id to quality))
+  }
 
   // ------------------------------------------------------------------ identity
 
@@ -135,5 +147,10 @@ class UserPreferences(private val context: Context) {
   fun saveTrustedPeers(peers: List<TrustedPeer>) {
     val encoded = json.encodeToString(peers)
     runBlocking { context.dataStore.edit { it[keyPeers] = encoded } }
+  }
+
+  private companion object {
+    /** Enough to be useful in the search field, short enough to stay readable. */
+    const val MAX_SEARCH_HISTORY = 20
   }
 }

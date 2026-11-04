@@ -172,15 +172,18 @@ class SyncEngineTest {
     assertEquals(3L, peers.first().appliedSequences["follows"])
   }
 
+  /**
+   * `buildAllPayloads` follows the *enabled* set, not merely the registered targets.
+   *
+   * Only the follow list is a scope now, so "several scopes, one enabled" can no longer be
+   * expressed with the enum — the same property is pinned by registering the target and
+   * enabling nothing.
+   */
   @Test
   fun `buildAllPayloads only covers enabled scopes`() {
     val follows = FakeTarget(SyncScope.FOLLOWS)
-    val prefs = FakeTarget(SyncScope.PREFERENCES)
-    val engine = SyncEngine(
-      targets = MapSyncTargets(
-        mapOf(SyncScope.FOLLOWS to follows, SyncScope.PREFERENCES to prefs),
-        enabled = setOf(SyncScope.FOLLOWS),
-      ),
+    fun engineFor(enabled: Set<SyncScope>) = SyncEngine(
+      targets = MapSyncTargets(mapOf(SyncScope.FOLLOWS to follows), enabled = enabled),
       deviceIdProvider = { 1 },
       deviceNameProvider = { "phone" },
       peersProvider = { emptyList() },
@@ -188,7 +191,9 @@ class SyncEngineTest {
       clock = { now },
     )
 
-    val payloads = engine.buildAllPayloads()
+    assertTrue(engineFor(emptySet()).buildAllPayloads().isEmpty())
+
+    val payloads = engineFor(setOf(SyncScope.FOLLOWS)).buildAllPayloads()
     assertEquals(1, payloads.size)
     assertEquals("follows", payloads.first().scope)
   }
@@ -269,7 +274,14 @@ class SyncEngineTest {
 
   @Test
   fun `missing target returns null instead of throwing`() {
-    val engine = engine(listOf(FakeTarget(SyncScope.FOLLOWS)))
-    assertNull(engine.buildPayload(SyncScope.HISTORY))
+    val engine = SyncEngine(
+      targets = MapSyncTargets(emptyMap()),
+      deviceIdProvider = { 1 },
+      deviceNameProvider = { "phone" },
+      peersProvider = { emptyList() },
+      peersWriter = {},
+      clock = { now },
+    )
+    assertNull(engine.buildPayload(SyncScope.FOLLOWS))
   }
 }

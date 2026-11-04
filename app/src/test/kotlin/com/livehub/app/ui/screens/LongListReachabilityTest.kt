@@ -47,10 +47,11 @@ class LongListReachabilityTest {
   /**
    * The last row of the exchange log, which is the deepest thing on the page.
    *
-   * The scope is unique among the entries so the matcher cannot accidentally hit an earlier
-   * row and pass without the list ever scrolling.
+   * The peer is what makes it unique: only the follow list is synchronised now, so every row
+   * says 关注列表 and matching on the scope alone would hit an earlier row and pass without the
+   * list ever scrolling.
    */
-  private val lastLogRow = "搜索历史 · 小米平板 6"
+  private val lastLogRow = "关注列表 · 客厅电视"
 
   private fun syncState() = UiState(
     screen = Screen.Sync,
@@ -65,13 +66,13 @@ class LongListReachabilityTest {
     ),
     syncLog = listOf(
       SyncLogEntry(1_700_000_080_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "关注列表", 3, true),
-      SyncLogEntry(1_700_000_085_000, SyncLogEntry.Direction.PULL, "小米平板 6", "分区订阅", 2, true),
-      SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "播放设置", 1, true),
+      SyncLogEntry(1_700_000_085_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 2, true),
+      SyncLogEntry(1_700_000_090_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "关注列表", 1, true),
       SyncLogEntry(1_700_000_095_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 4, true),
-      SyncLogEntry(1_700_000_100_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "分区订阅", 1, false),
-      SyncLogEntry(1_700_000_105_000, SyncLogEntry.Direction.PULL, "小米平板 6", "播放设置", 2, true),
+      SyncLogEntry(1_700_000_100_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "关注列表", 1, false),
+      SyncLogEntry(1_700_000_105_000, SyncLogEntry.Direction.PULL, "小米平板 6", "关注列表", 2, true),
       SyncLogEntry(1_700_000_110_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "关注列表", 1, true),
-      SyncLogEntry(1_700_000_115_000, SyncLogEntry.Direction.PUSH, "小米平板 6", "搜索历史", 2, true),
+      SyncLogEntry(1_700_000_115_000, SyncLogEntry.Direction.PUSH, "客厅电视", "关注列表", 2, true),
     ),
   )
 

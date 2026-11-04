@@ -129,34 +129,7 @@ class AppContainer(
 
   val followStore: FollowStore by lazy { FollowStore(preferences) }
 
-  /**
-   * Search history as syncable records.
-   *
-   * The clock comes from the sync engine (one HLC per installation, so local edits across
-   * every scope are totally ordered) and the engine in turn needs the targets, which need this
-   * store. The cycle is broken by passing the clock as a lambda: nothing evaluates it while
-   * these objects are constructed, so `syncEngine` is only touched on the first write.
-   */
-  val historyStore: HistoryStore by lazy {
-    HistoryStore(
-      preferences = preferences,
-      nextHlc = { syncEngine.nextHlc() },
-      deviceIdProvider = { preferences.deviceId },
-    )
-  }
-
-  /** Danmaku/playback settings as syncable records; see [PreferencesStore]. */
-  val preferencesStore: PreferencesStore by lazy {
-    PreferencesStore(
-      preferences = preferences,
-      nextHlc = { syncEngine.nextHlc() },
-      deviceIdProvider = { preferences.deviceId },
-    )
-  }
-
-  val syncTargets: AppSyncTargets by lazy {
-    AppSyncTargets(preferences, followStore, preferencesStore, historyStore)
-  }
+  val syncTargets: AppSyncTargets by lazy { AppSyncTargets(followStore) }
 
   val syncEngine: SyncEngine by lazy {
     SyncEngine(

@@ -179,20 +179,18 @@ class SyncCoordinatorTest {
   }
 
   @Test
-  fun `a failing pull is reported per scope and does not stop other scopes`() = runTest {
+  fun `a failing pull is reported without being thrown`() = runTest {
     val follows = Target(SyncScope.FOLLOWS)
-    val prefs = Target(SyncScope.PREFERENCES)
     val peers = mutableListOf(
       TrustedPeer(deviceId = 2, deviceName = "tablet", sharedSecret = "s", pairedAt = 0),
     )
-    val engine = engine(listOf(follows, prefs), peers)
+    val engine = engine(listOf(follows), peers)
     val transport = FakeTransport(failOn = setOf(SyncScope.FOLLOWS))
 
     val outcomes = SyncCoordinator(engine, transport).syncWith(peers.first())
 
-    assertEquals(2, outcomes.size)
-    assertFalse(outcomes.first { it.scope == SyncScope.FOLLOWS }.success)
-    assertTrue(outcomes.first { it.scope == SyncScope.PREFERENCES }.success)
+    assertEquals(1, outcomes.size)
+    assertFalse(outcomes.single().success)
   }
 
   @Test

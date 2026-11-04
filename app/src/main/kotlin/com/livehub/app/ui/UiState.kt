@@ -6,7 +6,6 @@ import com.livehub.core.model.RoomPage
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.core.sync.SyncLogEntry
-import com.livehub.core.sync.SyncScope
 import com.livehub.core.sync.TrustedPeer
 
 /** Top level destinations of the single-activity app. */
@@ -65,7 +64,6 @@ data class UiState(
   val peers: List<TrustedPeer> = emptyList(),
   val discoveredPeers: List<com.livehub.core.sync.DiscoveredPeer> = emptyList(),
   val syncLog: List<SyncLogEntry> = emptyList(),
-  val syncScopes: Set<SyncScope> = SyncScope.default,
   val deviceName: String = "",
   val localAddress: String = "",
   /** The matching code this device is showing, empty when none. */
@@ -183,8 +181,6 @@ sealed interface UiAction {
   data class SetLandscapeDanmakuFontScale(val scale: Float) : UiAction
 
   data class SetBlockedKeywords(val keywords: List<String>) : UiAction
-
-  data class SetSyncScopes(val scopes: Set<SyncScope>) : UiAction
 
   data object RefreshPeers : UiAction
 

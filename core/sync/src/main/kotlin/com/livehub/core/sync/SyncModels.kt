@@ -2,18 +2,25 @@ package com.livehub.core.sync
 
 import kotlinx.serialization.Serializable
 
-/** Everything that can be synchronised between two LiveHub installs. */
+/**
+ * What gets synchronised between two LiveHub installs.
+ *
+ * **The follow list and nothing else.** Preferences and the search history were scopes in an
+ * earlier design, and making them work was real work — but they are not what this feature is
+ * for: the follow list is the only thing whose value is destroyed by having two devices, and
+ * pushing danmaku settings or recent keywords between them was a solution looking for a
+ * problem. The enum stays (rather than a bare string) because the payload's `scope` field has
+ * to be checkable and the log row needs a display name.
+ */
 enum class SyncScope(val wireName: String, val displayName: String) {
   FOLLOWS("follows", "关注列表"),
-  PREFERENCES("preferences", "播放与弹幕设置"),
-  HISTORY("history", "搜索历史"),
   ;
 
   companion object {
     fun fromWireName(name: String): SyncScope? =
       entries.firstOrNull { it.wireName.equals(name, ignoreCase = true) }
 
-    val default: Set<SyncScope> = setOf(FOLLOWS, PREFERENCES)
+    val default: Set<SyncScope> = setOf(FOLLOWS)
   }
 }
 

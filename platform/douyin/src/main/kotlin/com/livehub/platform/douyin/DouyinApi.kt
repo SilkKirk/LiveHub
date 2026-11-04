@@ -534,7 +534,7 @@ class DouyinApi(
         rank = qualityRank(entry.key, index) + FLV_OFFSET,
       )
     }
-    builder.sortedBy { it.rank }.let { ordered ->
+    return builder.sortedBy { it.rank }.let { ordered ->
       // One chip per quality. `enter` describes the *same* renditions twice — once under
       // `hls_pull_url_map` and once under `flv_pull_url` — and both maps use the same keys, so
       // `FULL_HD1` produced two variants that both display as 原画: the 清晰度 row offered two
