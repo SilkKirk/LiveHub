@@ -3204,3 +3204,151 @@ nothing failed"就是这个意思。
 - 抖音 `hls FULL_HD1` / `flv FULL_HD1` 两个同名「原画」chip。
 - 横屏设置抽屉的截图覆盖；`BilibiliApi.playback` 的 `preferredLine`；待办第 12 条剩下的
   4 张参考截图对照。
+
+---
+
+## 第三十二轮迭代：同步只保留关注列表；抖音清晰度行的两份「原画」
+
+> 本轮有一个**产品决定**：跨设备同步只同步关注列表，搜索历史与播放/弹幕设置留在本机。
+> 这条决定把第三十、三十一轮刚刚"做通"的两个范围又删掉了，先说清楚为什么这不是来回折腾。
+
+### 一、范围收敛：删掉两个刚做通的范围
+
+#### 决定，以及为什么它推翻了两轮工作
+
+第三十轮证明"三个 chip 里两个是摆设"，并把它们做成了真的：`PreferencesStore` 让每次改
+弹幕设置都产生一条带 HLC 的记录，`HistoryStore` 让搜索历史成为可合并、可传墓碑的记录集。
+第三十一轮又补齐了"关掉某个范围"在对端两侧的语义。
+
+然后产品侧看了一遍实际用法：**这两个范围解决的问题并不存在**。
+
+- 关注列表是唯一一份"两台设备同时存在就会互相破坏"的数据——手机上关注了、平板上也关注了、
+  在一台上取关，另一台必须知道。这是同步存在的理由。
+- 弹幕透明度、字号、屏蔽词、最近搜过的词，在另一台设备上没有使用场景。把它们传过去不是
+  用户要的，是我们能在枚举里多加一个值就顺手加上的。
+
+而为了"做通"它们引入的机制是有成本的：一套 HLC 记录集、墓碑、旧数据迁移、每个 scope 的
+写入路径与映射函数。在没有同步需求时这些只剩维护负担——搜索历史本来只是个 `List<String>`，
+为了同步它得背上墓碑和逻辑时钟。
+
+所以：**枚举收缩到一个值，实现按枚举删干净**。留着"能同步但没打开"的第二个范围比没有这个
+功能更糟：用户会以为设置跟着走了（第三十轮的核心结论），而下一个读代码的人会以为它还有用。
+
+#### 删了什么
+
+- `SyncScope` 只剩 `FOLLOWS`；`PREFERENCES` / `HISTORY` 两个枚举值删除。`default` 也随之
+  只剩一个值。
+- `PreferencesStore`、`HistoryStore` 两个文件删除；`AppSyncTargets` 只剩 `FollowSyncTarget`，
+  `enabledScopes()` 改为 `targets.keys`（不再读设置）。
+- 同步页的「同步内容」不再是 `SyncScope.entries.forEach { FilterChip }`，改成一张说明卡：
+  标题 + 「关注列表」+ 一句"只同步关注列表。播放设置与搜索历史留在本机，不会上传到另一台
+  设备。" 没有第二个取值，开关没有意义。
+- `UiState.syncScopes`、`UiAction.SetSyncScopes`、`UserSettings.syncScopes` 删除；同步页的
+  `FlowRow`/`FilterChip` 导入一并删除。
+- `UserSettings.preferenceRecords`、`historyRecords` 删除；`UserPreferences` 恢复
+  `addSearchHistory` / `clearSearchHistory` / `setDanmakuEnabled` / `setBlockedKeywords` /
+  `setPreferredQuality` 这几个直接 `update {}` 的方法（搜索历史的 20 条上限抽成
+  `MAX_SEARCH_HISTORY`）。
+
+#### 保留了什么，以及为什么
+
+第三十一轮加的 `SyncEnvelope.errorCode`、`SyncFailureReason.SCOPE_DISABLED`、
+`SyncController.isShared()` 全部保留。功能上它们现在恒为真（唯一范围总是共享的），但它们是
+"服务端拒绝一个范围"的唯一表达方式：删掉之后一旦再加范围，就会重新踩回"对端没开 = 一条红色
+失败"那个坑，而那条坑有三条测试与一整节记录。
+
+#### 测试上的取舍
+
+新增 `FollowsOnlySyncTest` 3 条，分别在**三层**各钉一条，因为三处都能把第二个范围带回来：
+
+- `the follow list is the only scope the app exchanges`——注册表（`available()` 只有一个
+  target）、引擎（`enabledScopes()`）、枚举本身（`entries.map { wireName } == ["follows"]`）。
+- `a followed room still reaches the peer payload`——收敛不能顺手把唯一能用的范围弄坏。
+- `the sync screen names the follow list and offers no scope switch`——界面上没有
+  「播放与弹幕设置」「搜索历史」两个字样（Robolectric Compose，真实 `SyncScreen`）。
+
+删掉 `SyncScopeCoverageTest` 12 条（它测的两个范围不存在了）。三条依赖多 scope 的断言改写
+成单 scope 下**等价**的形态，而不是删掉：
+
+| 原断言 | 现在怎么表达 |
+| --- | --- |
+| `buildAllPayloads only covers enabled scopes`（两个 target 只开一个） | 同一个 target，`enabled = emptySet()` → 0 个 payload；`enabled = {FOLLOWS}` → 1 个 |
+| `missing target returns null instead of throwing`（用 HISTORY 当没有 target 的 scope） | 用空 target 表 + FOLLOWS |
+| `a failing pull is reported per scope and does not stop other scopes` | 只剩一个 scope，改成 `a failing pull is reported without being thrown` |
+| `tombstones are pruned once older than the retention window` / `pruning keeps live records…` | 删除（`prune` 本身删了，见第三节） |
+
+### 二、抖音清晰度行：同一档画质出现两次
+
+`enter` 把同一批清晰度描述了两遍：`hls_pull_url_map` 与 `flv_pull_url`，键名完全相同
+（`FULL_HD1`/`HD1`/`SD1`/`SD2`）。`parseVariants` 展开两个 map，`qualityName` 又把
+`FULL_HD1` 两边都映射成「原画」，于是播放页清晰度行出现两个一模一样的「原画」chip。
+
+依据参考项目 `AndroidDtvRepository.resolveDouyinStreamUrl`：
+
+```kotlin
+val hlsFallback = room.hlsPullUrlMap["ORIGIN"] ?: room.hlsPullUrlMap.values.firstOrNull()
+val flvFallback = room.flvPullUrlMap["ORIGIN"] ?: room.flvPullUrlMap.values.firstOrNull()
+// some Douyin FLV streams may be H.265-in-FLV which Media3 may not render
+// (audio-only on many devices). Prefer HLS first; fallback to FLV.
+(hls ?: hlsFallback ?: flv ?: flvFallback)
+```
+
+参考项目最终只取一个地址，而且优先 HLS、FLV 只在 HLS 完全没有时兜底——FLV 从来不是 HLS 的
+并列项。我们保留清晰度菜单（参考项目只有 `desiredQuality` 字符串、没有菜单），因此按
+**同一档画质只留一条、排名靠前者胜（即 HLS）** 收敛：`sortedBy { rank }.distinctBy { it.name }`。
+只在 FLV 里出现的画质仍然保留，与参考项目的兜底分支同义。按标签而不是按 key 去重，是因为
+`origin` 与 `FULL_HD1` 是两个 key、同一个标签。
+
+**踩的坑（真实发生）**：改动把 `return builder.sortedBy { it.rank }` 换成了
+`builder.sortedBy { it.rank }.let { … }`，但 `parseVariants` 是块体函数——最后一次 CI 红在
+`DouyinApi.kt:547:3 Missing return statement`。补上 `return` 才转绿。这是"没有本地编译器时
+最便宜也最容易漏"的一类错误。
+
+测试：`hls renditions come before flv ones` 原本**把缺陷当成断言**
+（`listOf("原画","蓝光","原画")`），改写为 `a quality listed in both containers appears once
+and keeps hls`（`["原画","蓝光"]` + 两条都是 HLS）；另外两条改掉"3 条 variant"的条数断言；
+`an unmapped hls key still sorts ahead of every flv rendition` 补了一条**只存在于 FLV** 的
+`SD1`，否则"HLS 排在 FLV 之前"这条性质已经没有任何观察对象。
+
+截图新增 `22b-player-settings-douyin`：抖音播放页的第一次渲染，也是本轮缺陷唯一的肉眼证据
+（清晰度行只有「原画」「蓝光」，且没有「线路」行——抖音没有 CDN 轴）。
+
+### 三、删掉 `SyncMerge.prune`：README 里那句话是假的
+
+README 的墓碑一节写着"墓碑保留 30 天，或在所有配对设备确认收到之后才回收"。两条都不成立：
+
+- `prune` 的"所有人都看到"分支读 `peer.appliedSequences["__tombstone_ack"]`——这个 key 全仓库
+  没有任何写入点，恒为 0，而被比较的是 `record.hlc.physical`（≈1.7e12），即使写了也比不上；
+- production 里没有任何调用点（只有它自己的测试调用它）。
+
+所以实际行为是"墓碑永不回收"，而按时间清理本身也不安全：一台离线比窗口更久的设备带着旧记录
+回来，会把删除复活。真正的判据需要 per-peer 的 HLC 水位字段，目前没有。
+
+处理：删掉 `prune`、`TOMBSTONE_RETENTION_MILLIS`、`TOMBSTONE_SCOPE` 与其两条测试；README 改成
+如实描述（不回收 + 为什么 + 一年量级的墓碑只有几十 KB），并说明这次删除。留下的问题写进
+runbook 待办，而不是留一段看起来在工作的死代码。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **527** 条，failures=0 errors=0（539 → 527：删 15 条、加 3 条） |
+| 仪器测试 | ✅ 45 条 `@Test`（44 → 45，截图 36 → 37 张） |
+| Release assembly（R8） | ✅ |
+
+截图比对（与第三十一轮的 36 张逐张 SHA256）：**33 张逐字节相同**，3 张同步页变化
+（`13-sync`、`13b-sync-log`、`14-sync-empty`——正是本轮改的那张卡），1 张新增
+（`22b-player-settings-douyin`）。
+
+`13-sync` 现在读作：本机 / 482 913 / 立即同步 / **同步内容：关注列表 — 只同步关注列表。
+播放设置与搜索历史留在本机，不会上传到另一台设备。** / 我的设备。三个 chip 变成了一段
+可以截图直读的说明。
+
+### 下一轮
+
+- 横屏设置抽屉的截图覆盖（第二十八轮起一直挂着）。
+- `BilibiliApi.playback` 的 `preferredLine`：按同清晰度候选选主机，或承认 B 站没有独立线路轴。
+- 待办第 12 条：`home.jpeg` / `douyu.jpeg` / `b.jpeg` / `share.jpeg` 四张参考截图逐张对照；
+  顺带 `wechat.jpg`——它是同步页的心智模型来源，而同步页刚刚改过。
+- 墓碑 GC 的 per-peer 水位字段（本轮只删掉了假实现，真问题还在）。
