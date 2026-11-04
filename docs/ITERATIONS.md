@@ -2965,3 +2965,148 @@ URL 里的 `kw`。失败时清空结果并置 `error`（参考项目的 `SearchS
   Robolectric 的高度断言）。
 - `BilibiliApi.playback` 的 `preferredLine` 仍未使用。
 - 待办第 12 条还剩 4 张参考截图未对照；已发现的"弹幕发送者彩色胶囊"差异属于该条。
+
+---
+
+## 第三十轮迭代：同步内容三个开关，只有关注列表真的在工作
+
+本轮做待办第 11 条（跨设备同步）的第一段：**同步范围开关**。六位码配对、增量传输、墓碑在
+第四／十／十四轮已经做过端到端验证，所以这轮没有重做那三件事，而是问了一个更基本的问题：
+**把「同步内容」里的某个 chip 打开之后，到底会发生什么？** 答案让人不太舒服——三个 chip 里
+只有一个真的在工作。
+
+### 缺陷是什么
+
+1. **「播放与弹幕设置」没有任何写入方，出站 payload 永远是空数组。**
+   `UserSettings.preferenceRecords` 全仓库只有两处引用：`PreferencesSyncTarget.snapshot()`
+   读它、`PreferencesSyncTarget.apply()` 写它（加上字段声明本身）。也就是说这条记录集**只
+   承接从对端来的数据**。用户在设置页拖弹幕透明度、关弹幕、加屏蔽词、选清晰度，走的都是
+   `UserPreferences.update/setDanmakuEnabled/...`，一个字节都不会变成记录。发给平板的
+   `buildPayload(PREFERENCES)` 因此恒为 `entries = "[]"`。这台手机上改的设置**从来没有到过
+   另一台设备**，而另一台设备改的能过来——单向，且是错的那个方向。
+2. **「搜索历史」连一个 `SyncTarget` 都没有。** `AppSyncTargets.targets` 只有 `follows` 与
+   `preferences` 两项，而 `SyncScreen.kt:317` 是 `SyncScope.entries.forEach { chip }` ——
+   枚举里三个，界面上就三个。于是选中「搜索历史」：本机 `buildPayload(HISTORY)` 拿不到
+   target、返回空列表（什么都不发）；对端 `onPull` 返回 null、服务端回 **404
+   `scope disabled`**，客户端把它翻成 `SyncTransportException(PROTOCOL, "对方返回 HTTP 404")`，
+   同步页上就是一条红色的「↓ 搜索历史 · 平板　接收 0 条 · 对方返回 HTTP 404」，`syncNow`
+   的汇总还会说「部分同步失败 (1)」。一个从来没实现的功能，表现成一个错误。
+3. **对端同步过来的设置只进了 DataStore，界面不认。** `syncNow()` 结束时只回灌了
+   `peers` / `followed` / `syncLog` 三项，`danmakuEnabled`、`danmakuOpacity`、
+   `blockedKeywords` 这些镜像字段还是打开 App 时的旧值：数据是对的，屏幕是旧的，要重启才生效。
+   修好第 1 条之后这条立刻从"理论问题"变成"必然发生"——第一次真的把设置同步过来就会撞上。
+
+### 为什么会这样
+
+第 1、2 条是同一个根：**`SyncScope` 这个枚举被当成了功能的定义**。加一个枚举值、界面就多一个
+chip，而"这个范围必须有一个写入方、一个 target、一个 key→字段的映射"这条约束没有任何地方
+表达，也没有测试守着。`preferences` 当时补了 target 却漏了写入方，`history` 连 target 都漏了，
+两种漏法都没被现有测试发现——因为所有同步测试都是自己构造 `SyncTarget`，没有任何一条断言
+"枚举里的每个 scope 在 AppContainer 里都有实现"。本轮补的正是这条断言。
+
+第 3 条是状态镜像问题：`UserSettings` 是持久层，`UiState` 是渲染层，两者之间只有"用户点了一
+下"这一条同步路径。任何**不经过点击**的变更（后台 worker、对端同步）都需要显式回灌，而当时
+只想到了 follow 列表。
+
+### 怎么修的
+
+**两个 store，各管一个范围，写入路径只有一条。**
+
+- `PreferencesStore`（新）：`setFlag/setNumber/setInt/setStringList` 是唯一入口，一次
+  `preferences.update {}` 里同时写"可见字段"和"带 HLC 的记录"，两者不可能漂移；远端 apply
+  走同一个 `UserSettings.withPreference(key, value)` 映射，所以"本地改"和"远端来"落到的字段
+  是同一段代码。滑杆边界抽成 `PreferenceLimits`（`OPACITY 0.2..1`、`FONT_SCALE 0.6..2`、
+  `AREA_FRACTION 0.1..1`、`LANDSCAPE 0.8..2`）：拖动时夹一次，远端到达时再夹一次——对端可以
+  发 9.0，而透明度 9 等于弹幕不可见。记录 key 用 `quality:<platform>`，一个平台一条，
+  `preferredQuality` 的 map 结构因此不用改。
+  顺带删掉 `UserPreferences` 上那三个直接写字段的方法（`setDanmakuEnabled` /
+  `setBlockedKeywords` / `setPreferredQuality`），否则第二个写入方就是下一次漂移的入口。
+
+- `HistoryStore`（新）：关键字就是 key，`value` 也是关键字，带 HLC 与墓碑；
+  `searchHistory` 降级成记录的**投影**，每次写入顺手重算，所以搜索页、`UiState` 那些读
+  `settings.searchHistory` 的地方一行没改。
+  - **清空写墓碑，不删记录**：删掉的话本机变成"从没搜过这个词"，下一次同步会把对端的词原样
+    拉回来，用户会觉得"清空没生效"。
+  - **老数据在内存里迁移**，`hlc = Hlc.ZERO`、`deviceId = 0`、`updatedAt = -index`：
+    负数时间戳让旧列表的先后顺序保留、又永远排在新记录后面；ZERO 版本保证任何真实编辑
+    （本机或对端）都能赢过它。读取不落盘，只有第一次真实写入才迁移。
+  - **窗口 20 条**，与原来的纯列表一致；超出的在本机 `add` 时转成墓碑（`trimOverflow`），
+    **merge 时不做**——merge 里裁剪会让本机删掉对端刚发来的词并回传墓碑，用户会遇到
+    "我刚搜的词在另一台设备上没了"。
+  - 缓存按 `historyRecords` 原文比对而不是"加载过没有"：`preferences.update {}` 在本 store
+    之外也会被调用（测试里重置设置就是），只认一次的缓存会一直吐旧列表。
+
+- `AppSyncTargets` 三个 target 齐全；`AppContainer` 用 lambda 注入 `nextHlc`，绕开
+  "engine 要 targets、targets 要 store、store 要 engine 的时钟"这个环（构造时没人求值）。
+
+- `MainViewModel`：写设置全部改走 `preferencesStore`，搜索历史改走 `historyStore`；
+  `syncNow()` 结束后调 `readPreferencesIntoState()` 回灌全部镜像字段。这是缺陷 3 的修法。
+
+### 第一次推送为什么是红的
+
+`e648091` 三个 job 全红，`ci.py why` 抓到唯一一条编译错误：
+
+```
+e: .../app/src/main/kotlin/com/livehub/app/di/HistoryStore.kt:103:25
+   Argument type mismatch: actual type is 'List<SyncRecord<out JsonObject>>',
+   but 'List<SyncRecord<JsonObject>>' was expected.
+```
+
+`SyncRecord(key=..., value = null, ...)` 里 `T` 无从推断（`value` 是 `T?` 且只给了 null），
+Kotlin 把 `map` 的公共类型推成 `SyncRecord<out JsonObject>`，与 store 的
+`List<SyncRecord<JsonObject>>` 不匹配。`clear()` 与 `trimOverflow()` 两处墓碑构造都补上显式
+`SyncRecord<JsonObject>` 后转绿（`3ae45b2`）。教训是老一套：没有本地编译器时，构造器里留空
+类型参数是最容易漏的一类。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **533** 条，failures=0 errors=0（521 → 533，新增 12） |
+| 仪器测试 | ✅ 44 条 `@Test`（未新增；本轮不动 UI） |
+| Release assembly（R8） | ✅ |
+
+新增 `SyncScopeCoverageTest` 12 条（`app/src/test/.../di/`，Robolectric + 真实 DataStore）：
+
+- `every scope offered on the sync screen has a target`（**挡住缺陷 2 的那条**）
+- `changing a danmaku setting produces a record` / `numeric settings travel as their own records`
+  （**挡住缺陷 1**：本地改一次就有记录、有本机时钟）
+- `a preference from the other device changes the setting` / `an applied preference is not echoed back`
+  / `an out of range remote value is clamped`
+- `a submitted keyword becomes a history record` / `a keyword from the other device appears in the history`
+  / `clearing the history leaves tombstones that travel` / `the history keeps the newest twenty keywords`
+  / `researching a keyword moves it to the top` / `a legacy plain list is migrated into synced records`
+
+条数来自 `python ci.py shots --name test-reports --out ...` 下载的 `TEST-*.xml` 求和
+（`tests=533 failures=0 errors=0`，`SyncScopeCoverageTest` 自己 12/0）。
+
+### 截图
+
+下载 36 张，与第二十九轮**逐字节相同**（SHA256 全量比对：same=36 diff=0 new=0）。这是预期的：
+本轮只改数据层与状态回灌，没有动任何 composable。零差异在这里是"没有视觉回归"的正面证据，
+而不是"截图没更新"。
+
+### 本轮审计发现、但没修的四条
+
+写下来是为了下一轮不用重新发现：
+
+1. **对端没开某个范围 = 一条红色失败。** `handlePull` 对未启用的 scope 回 404，
+   客户端把 404 变成用户可见的「对方返回 HTTP 404」，还计入 `syncNow` 的 failures。
+   只要两台设备勾选不同，每次同步都会红一条。要修得让协议能表达"这个范围我没共享"，
+   并由协调器当作"跳过"而不是"失败"。
+2. **push 侧根本不看开关。** `handlePush` 不检查 scope 是否启用，直接把对端的关注列表写进
+   本机。也就是说关掉某范围只挡"发出去"，挡不住"收进来"——对隐私选项来说这是错的那一半。
+3. **`SyncMerge.prune` 是死代码，而且规则不成立。** `TOMBSTONE_SCOPE`（`__tombstone_ack`）
+   全仓库没有写入点，`appliedSequences` 里永远是 0，而被比较的是 `record.hlc.physical`
+   （≈1.7e12）——即使写入了也比不上；production 里也没有任何调用点。结果墓碑只增不减
+   （关注列表、搜索历史都会留）。要么按 per-peer 的 HLC 水位重写并接上，要么删掉。
+4. **墓碑只按时间清理是不安全的。** 丢掉墓碑后，对端那条旧记录会在下次同步里"复活"。
+   真正的判据是"每个已配对设备都确认过比这条墓碑更新的版本"，这需要新的水位字段。
+
+### 下一轮
+
+- 上面第 1、2 条一起做：「同步范围开关」的另一半——对端未开启要能表达、push 要尊重开关。
+- 抖音 `hls FULL_HD1` / `flv FULL_HD1` 两个同名「原画」chip（第二十八、二十九轮连续记了两次）。
+- 横屏设置抽屉的截图覆盖；`BilibiliApi.playback` 的 `preferredLine`；待办第 12 条剩下的
+  4 张参考截图对照。
