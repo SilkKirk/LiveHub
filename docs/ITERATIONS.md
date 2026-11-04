@@ -3110,3 +3110,97 @@ Kotlin 把 `map` 的公共类型推成 `SyncRecord<out JsonObject>`，与 store 
 - 抖音 `hls FULL_HD1` / `flv FULL_HD1` 两个同名「原画」chip（第二十八、二十九轮连续记了两次）。
 - 横屏设置抽屉的截图覆盖；`BilibiliApi.playback` 的 `preferredLine`；待办第 12 条剩下的
   4 张参考截图对照。
+
+---
+
+## 第三十一轮迭代：同步范围开关（二）——开关只挡住了发起端
+
+上一轮证明三个 chip 里有两个是摆设；这一轮追同一批开关的另外半边：**它们只在本机主动发起
+同步时生效**。同一份设置，从对端看过去没有任何约束。
+
+### 缺陷是什么
+
+1. **对端来拉，照样给。** `SyncController.onPull` 直接调 `engine.buildPullPayload(scope, chunk)`，
+   而 `buildPayloads` 只检查 `targets.targetFor(scope)` 是否存在——那是"这台设备有没有这个
+   范围"，不是"用户开没开"。于是平板上把「关注列表」关掉之后，手机仍然可以拉走整份关注列表。
+2. **对端来推，照样写。** `handlePush` 从头到尾没有问过 scope 是否启用，`payload` 直接进
+   `engine.applyPayload`。关掉某个范围最要紧的一半（别覆盖我这台设备的本地数据）完全没有实现。
+3. **对端没开的那个范围，被记成一条红色失败。** `handlePull` 对 `onPull` 返回 null 的回应是
+   `404 scope disabled`，而客户端把 404 一律翻成 `SyncTransportException(PROTOCOL,
+   "对方返回 HTTP 404")`：同步页上是一条红色的「↓ 搜索历史 · 平板　接收 0 条 · 对方返回
+   HTTP 404」，汇总还会说「部分同步失败 (1)」。只要两台设备的勾选不同，**每次同步都红一条**。
+
+### 为什么会这样
+
+开关的语义只写进了**客户端循环**（`SyncCoordinator` 遍历 `engine.enabledScopes()`），没有写进
+**服务端**。服务端的两个入口各自有别的判断（target 存不存在、payload 能否解析），偏偏漏了
+"用户是否同意交换这个范围"这一条——而它恰恰是唯一需要用户授权的那条。
+
+第三条是协议表达力不足：协议里只有"成功"和"HTTP 错误"两种答案，没有"我理解你的请求，但我
+不共享这个范围"这一种。于是它被塞进 404，再被翻译成用户看不懂的英文状态码。
+
+### 怎么修的
+
+**协议里加一个可机读的拒绝码，把"没共享"从"出错"里分出来。**
+
+- `SyncEnvelope` 新增 `errorCode`：`error` 继续给人看，`errorCode` 给代码分支用。
+  常量 `ERROR_SCOPE_DISABLED = "scope_disabled"`。
+- `SyncFailureReason` 新增 `SCOPE_DISABLED`（与 `PROTOCOL` 分开：请求被理解并被正确拒绝，
+  不是故障）。
+- 服务端：`onPull` 返回 null → **200** + `scopeDisabledBody(scope)`（不再是 404）；
+  `onPush` 捕获 `ScopeDisabledException` → 同样 200 + code，且**不落库**。
+- 客户端：`LanSyncTransport.call` 解码后先认 `errorCode`，命中就抛
+  `SyncTransportException(SCOPE_DISABLED, "对方未开启该同步范围")`。
+- 协调器：`ScopeOutcome` 新增 `skippedReason`（`skipped` 派生），pull/push 两条路径命中
+  `SCOPE_DISABLED` 时记一条 `success = true` 的日志（`recordPush` 新增 `direction` 参数，
+  pull 侧记成 `↓`）并**不计数**：`pushed = 0`，`failures` 不加。
+- `SyncController`：`isShared(scope)` 成为服务端两侧唯一的判据（读 `engine.enabledScopes()`，
+  每次请求重读设置，所以改完 chip 立刻生效，不用重启服务）；`syncNow` 汇总新增
+  「对方未开启所选同步内容」——原来这种情况会说「已是最新」，那等于声称两台设备已经一致，
+  而根本没比过。
+
+**为什么用 200 而不是 4xx。** 4xx 的含义是"你的请求有问题"，而这里请求完全正确，只是这份
+数据不在交换范围内。用 2xx + 错误码能同时满足两件事：老式 HTTP 客户端不会把它当成连接失败，
+而我们的客户端可以从 `errorCode` 精确地分支。`SyncCoordinator` 里那句"the peer answered,
+nothing failed"就是这个意思。
+
+### 两次 CI 红，都是测试自己的错
+
+- 第一次（`5ab5243`）：`SyncCoordinatorTest.kt:357/360` —— `None of the following candidates is
+  applicable`。仓库用的是 **junit-jupiter 6.1.3**，`assertTrue("消息", 条件)` 这种 message-first
+  重载在 6.0 已经被删除。全仓库 `core:*` 里此前没有一处这么写，是这两条新断言自己写歪了。
+  改成条件在前（`assertFalse(消息, 条件)` 那条顺手写成 `assertTrue(...none{...})`，双重否定太难读）。
+- 期间还有一次 `git push` 报 `Everything up-to-date`：提交信息里的中文引号被 PowerShell 解析成
+  了参数分隔，`git commit` 其实没执行。改用 `git commit -F <文件>` 写多行中文提交信息。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **539** 条，failures=0 errors=0（533 → 539，新增 6） |
+| 仪器测试 | ✅ 44 条 `@Test`（未新增；本轮不动 UI） |
+| Release assembly（R8） | ✅ |
+
+新增 6 条：
+
+- `SyncHttpServerTest`：`a switched off scope answers with a code instead of an error status`
+  （200 + `scope_disabled` + 无 payload）、`a push for a switched off scope is refused instead of
+  stored`（handler 根本没收到 payload）。
+- `SyncHttpServerTest`：`the real client reports a switched off scope as scope disabled`——真的起一个
+  `LanSyncTransport` 打本进程的 `SyncHttpServer`，验证服务端写的 `errorCode` 与客户端映射
+  对得上。这条覆盖的是前两条各自都覆盖不到的接口处。
+- `SyncCoordinatorTest`：`a scope the peer does not share is skipped rather than failed`
+  （`success = true`、`skipped = true`、根本没发 push、日志是 `↓` 的成功行）、
+  `a push refused by the peer is skipped and counted as nothing`（`pushed = 0`，但 pull 仍然只发一次）。
+- `SyncEnvelopeCodecTest`：`a refused scope carries its machine readable code`（过线往返）。
+
+截图 36 张，与第三十轮**逐字节相同**（same=36 diff=0 new=0）——本轮没有动 UI。
+
+### 下一轮
+
+- 待办第 11 条的 c、d：`SyncMerge.prune` 是死代码且规则不成立；墓碑 GC 需要 per-peer 的
+  HLC 水位（不能只按时间清，否则对端旧记录会复活）。
+- 抖音 `hls FULL_HD1` / `flv FULL_HD1` 两个同名「原画」chip。
+- 横屏设置抽屉的截图覆盖；`BilibiliApi.playback` 的 `preferredLine`；待办第 12 条剩下的
+  4 张参考截图对照。
