@@ -4439,3 +4439,54 @@ WebView 走站点自己那套。
 - 若这一版仍不可用，下一步是在真机上抓一次「进弹层 → 页面渲染」的 `chrome://inspect` 视图，
   确认是布局问题还是页面被拦；不再靠猜。
 - 抖音关注列表刷新的性能（每房间 536 KB）仍在待办。
+
+---
+
+## 第四十七轮迭代：把抖音登录页的 CSS 视口钉到桌面宽度（找回扫码那一栏）
+
+### 缺陷是什么
+
+第四十六轮之后，弹层里终于能看到抖音的登录框了，但只有「验证码登录 / 密码登录」两个 tab，
+**没有二维码**。用户同时给了对照：同一台手机自带的浏览器打开 `www.douyin.com`，登录卡是
+**两栏**——左边是二维码，右边才是验证码/密码。
+
+### 为什么会这样
+
+同一个页面、同一个 UA（我们的 WebView 用的是桌面 QQBrowser，浏览器也是桌面 UA），差别在
+**CSS 视口宽度**：
+
+- 手机浏览器打开一个没有 viewport meta 的页面时，按约 980px 布局，再缩放到屏宽 → 登录卡走
+  "宽档"，两栏，二维码在左；
+- 我们的 WebView 虽然开了 `useWideViewPort` / `loadWithOverviewMode`，但 SPA 在渲染过程中
+  会自己写 viewport meta，实际布局停在约 411 CSS px → 登录卡走"窄档"，折成一栏，二维码列被
+  整个折掉。
+
+`www.douyin.com` 的 SSR 壳里**没有** viewport meta（实测两种 UA 都一样，72 914 字节）——它是
+SPA 运行时加的，所以我们无法只在设置里解决。
+
+### 怎么修的
+
+`onPageFinished` 里注入一段 JS，把 `<meta name="viewport">` 钉成 `width=768`，并挂一个
+`MutationObserver` 顶住 SPA 的重写；768 是两栏登录卡还能保住的那一侧宽度。视口一变，
+CSS media query 重新求值，二维码列就回来；整页仍由 `loadWithOverviewMode` 缩放到屏宽，可以
+双指放大。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ 582 条，failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `68c5082` 三个 job 全绿 |
+
+### 没做到的
+
+- 仍然要真机确认——注入视口属于"只能在设备上看到结果"的改动。若两栏卡片出现但二维码很小，
+  下一步是把 `width` 调到 980 或整页放大。
+- 若视口改了卡片却仍是单栏，说明抖音是按 JS 的 `window.innerWidth` 一次性决定布局（不是 CSS），
+  那就需要在加载前注入（WebView 没有 document-start 注入点），可行方向是改用
+  `WebViewAssetLoader` 或者干脆换成手机 UA 让站点给移动版登录页。届时不再靠猜，先在真机上
+  用 `chrome://inspect` 看一次 DOM。
+- 原生二维码接口（`passport/web/get_qrcode/`）实测被反爬拦（`error_code 4031`），不做。
