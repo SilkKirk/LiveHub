@@ -354,10 +354,14 @@ class SyncCoordinatorTest {
     val outcomes = SyncCoordinator(engine, transport).syncWith(peers.first())
 
     val follows = outcomes.first { it.scope == SyncScope.FOLLOWS }
-    assertTrue("a switched-off scope is not a failure", follows.success)
+    // Condition first: JUnit 6 dropped the message-first overloads of assertTrue/assertFalse.
+    assertTrue(follows.success, "a switched-off scope is not a failure")
     assertTrue(follows.skipped)
     assertEquals(0, follows.pushed)
-    assertFalse("nothing may be pushed to a scope the peer refused", "push:follows" in transport.calls)
+    assertTrue(
+      transport.calls.none { it == "push:follows" },
+      "nothing may be pushed to a scope the peer refused",
+    )
 
     // The log explains it instead of showing a red arrow pointing nowhere.
     val entry = engine.logEntries().first()
