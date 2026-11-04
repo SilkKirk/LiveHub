@@ -90,7 +90,9 @@ class HistoryStore(
         if (record.deleted) {
           record
         } else {
-          SyncRecord(
+          // The type argument is explicit because `value = null` leaves `T` unconstrained; the
+          // inferred `SyncRecord<out JsonObject>` then does not match the store's list type.
+          SyncRecord<JsonObject>(
             key = record.key,
             value = null,
             deleted = true,
@@ -176,7 +178,7 @@ class HistoryStore(
       if (record.deleted || record.key in keep) {
         record
       } else {
-        SyncRecord(
+        SyncRecord<JsonObject>(
           key = record.key,
           value = null,
           deleted = true,
