@@ -109,6 +109,13 @@ data class UiState(
    */
   val themeMode: com.livehub.core.designsystem.ThemeMode = com.livehub.core.designsystem.ThemeMode.System,
   val bilibiliLogin: com.livehub.app.ui.components.BiliLoginUi = com.livehub.app.ui.components.BiliLoginUi(),
+  /**
+   * True when a Douyin web session is stored.
+   *
+   * Keyword search is gated on it: the endpoint refuses anonymous callers with
+   * `2483 请先登录，再继续搜索吧`, so the search box has to know whether to offer it.
+   */
+  val douyinLoggedIn: Boolean = false,
 ) {
   /** True only when the adapter reported a next page for the current list. */
   val hasMore: Boolean get() = hasNextPage && !loading && rooms.isNotEmpty()
@@ -212,6 +219,16 @@ sealed interface UiAction {
   data object CancelBilibiliLogin : UiAction
 
   data object LogoutBilibili : UiAction
+
+  /**
+   * Stores the cookie header captured from the Douyin web login sheet.
+   *
+   * The cookie is the credential, so it travels as the action's payload rather than through a
+   * state field the UI could render.
+   */
+  data class DouyinLoggedIn(val cookie: String) : UiAction
+
+  data object LogoutDouyin : UiAction
 
   data object DismissMessage : UiAction
 }

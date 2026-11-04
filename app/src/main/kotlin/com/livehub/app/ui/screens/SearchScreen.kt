@@ -154,19 +154,20 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
 private val SEARCH_HINTS = mapOf(
   Platform.DOUYU to "输入关键词后按回车，可搜索斗鱼主播与直播间。",
   Platform.HUYA to "输入关键词后按回车，可搜索虎牙主播与直播间。",
-  Platform.DOUYIN to "抖音只支持按房间号搜索：输入 webRid 后按回车。",
+  Platform.DOUYIN to "输入房间号直接定位直播间；在「设置 → 抖音账号」扫码登录后，可按主播昵称搜索。",
   Platform.BILIBILI to "输入关键词后按回车，可搜索 B 站主播与直播间。",
 )
 
 /**
- * What the field's own label promises, where the generic wording would be a lie.
+ * What the field's own label promises, where the generic wording would mislead.
  *
- * The label used to read「搜索 抖音 主播 / 直播间」on a screen whose only working input is a
+ * The label used to read「搜索 抖音 主播 / 直播间」on a screen whose only working input was a
  * room number — so the first thing a user tried (a streamer's name) was also the one thing
- * Douyin's anonymous API cannot answer.
+ * that could not work without a login. Keyword search exists now, but only for a logged-in
+ * session, so the label names both inputs.
  */
 private val SEARCH_LABELS = mapOf(
-  Platform.DOUYIN to "输入抖音房间号",
+  Platform.DOUYIN to "输入抖音房间号或主播昵称",
 )
 
 @Composable

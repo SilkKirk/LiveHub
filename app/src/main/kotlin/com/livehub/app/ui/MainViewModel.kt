@@ -68,6 +68,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         bilibiliLogin = com.livehub.app.ui.components.BiliLoginUi(
           loggedIn = container.bilibiliAuth.isLoggedIn(),
         ),
+        douyinLoggedIn = container.douyinCookieStore.isLoggedIn(),
       )
     }
     loadCategories(platform)
@@ -148,6 +149,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       UiAction.StartBilibiliLogin -> startBilibiliLogin()
       UiAction.CancelBilibiliLogin -> cancelBilibiliLogin()
       UiAction.LogoutBilibili -> logoutBilibili()
+      is UiAction.DouyinLoggedIn -> douyinLoggedIn(action.cookie)
+      UiAction.LogoutDouyin -> logoutDouyin()
       UiAction.DismissMessage -> _state.update { it.copy(message = null, error = null) }
     }
   }
@@ -963,6 +966,30 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       )
     }
   }
+
+  /**
+   * Stores what the Douyin login sheet captured.
+   *
+   * The cookie merges into the stored header, where negotiation already put `ttwid`, so the
+   * session and the anti-bot cookie coexist. Search reads `isLoggedIn()` on the next call,
+   * which is why keyword search works immediately instead of after a restart.
+   */
+  private fun douyinLoggedIn(cookie: String) {
+    container.douyinCookieStore.save(cookie)
+    val loggedIn = container.douyinCookieStore.isLoggedIn()
+    _state.update {
+      it.copy(
+        douyinLoggedIn = loggedIn,
+        message = if (loggedIn) "抖音登录成功，现在可以按昵称搜索" else "没有取到抖音登录态，请重试",
+      )
+    }
+  }
+
+  private fun logoutDouyin() {
+    container.douyinCookieStore.clear()
+    _state.update { it.copy(douyinLoggedIn = false, message = "已退出抖音登录") }
+  }
+
   // ----------------------------------------------------------------------- sync
 
   private fun refreshPeers() {

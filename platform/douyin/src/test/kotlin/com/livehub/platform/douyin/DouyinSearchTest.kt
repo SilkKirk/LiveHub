@@ -4,6 +4,7 @@ import com.livehub.core.network.HttpClient
 import com.livehub.core.network.HttpResponse
 import com.livehub.platform.api.PlatformAuthRequiredException
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Request
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -66,8 +67,13 @@ class DouyinSearchTest {
   /** An `enter` answer for an id nobody is streaming under, plus the empty feed it falls back to. */
   private fun missingRoom(): String = """{"status_code": 0, "data": {"data": []}}"""
 
-  private fun api(http: HttpClient) =
-    DouyinApi(http, InMemoryDouyinCookieStore().apply { save("ttwid=seeded") })
+  private fun api(http: HttpClient, session: Boolean = false) =
+    DouyinApi(
+      http,
+      InMemoryDouyinCookieStore().apply {
+        save(if (session) "ttwid=seeded; sessionid=seeded-session" else "ttwid=seeded")
+      },
+    )
 
   @Test
   fun `a room number resolves to exactly that room`() = runBlocking {
@@ -119,5 +125,49 @@ class DouyinSearchTest {
 
     assertTrue(rooms.isEmpty())
     assertFalse(hasMore)
+  }
+
+  /**
+   * The keyword path, with a session stored.
+   *
+   * The response shape (`data[].lives.rawdata` as a JSON string) is the one
+   * `dart_simple_live` parses for this endpoint; without a logged-in account there is no way
+   * to capture a live sample, so the test pins the parser instead of the wire.
+   */
+  @Test
+  fun `a keyword finds rooms once a session is stored`() = runBlocking {
+    val room = """
+      {"owner":{"web_rid":"1002683794","nickname":"红眼阿旺"},
+       "title":"我的红眼看了不烧心！！",
+       "cover":{"url_list":["https://a/cover.jpg"]},
+       "stats":{"total_user":1234}}
+    """.trimIndent().replace("\n", "")
+    val body = """{"status_code":0,"data":[{"lives":{"rawdata":${JsonPrimitive(room)}}}]}"""
+    val http = FakeDouyinHttp { ok(body) }
+
+    val (rooms, hasMore) = api(http, session = true).search("红眼阿旺", page = 1)
+
+    assertEquals(1, rooms.size)
+    assertEquals("1002683794", rooms.single().roomId)
+    assertEquals("红眼阿旺", rooms.single().streamerName)
+    assertEquals("我的红眼看了不烧心！！", rooms.single().title)
+    assertEquals(1234L, rooms.single().viewerCount)
+    assertFalse(hasMore, "ten or fewer hits means there is no next page")
+    val url = http.urls.single()
+    assertTrue(url.startsWith("https://www.douyin.com/aweme/v1/web/live/search/"), url)
+    // The keyword travels percent-encoded, which is what the web client sends.
+    assertTrue(url.contains("keyword=%E7%BA%A2%E7%9C%BC%E9%98%BF%E6%97%BA"), url)
+  }
+
+  /** A session that Douyin no longer accepts must say so, not look like "no results". */
+  @Test
+  fun `a login wall during search is reported as needing a login`() {
+    val http = FakeDouyinHttp { ok("""{"status_code":2483,"status_msg":"请先登录，再继续搜索吧"}""") }
+
+    val error = assertThrows<PlatformAuthRequiredException> {
+      runBlocking { api(http, session = true).search("红眼阿旺", page = 1) }
+    }
+
+    assertTrue(error.message.orEmpty().contains("请先登录"), error.message)
   }
 }

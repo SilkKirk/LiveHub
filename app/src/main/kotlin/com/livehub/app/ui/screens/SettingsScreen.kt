@@ -34,6 +34,9 @@ import com.livehub.app.ui.UiState
 @Composable
 fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var keywordDraft by remember { mutableStateOf("") }
+  // The sheet owns a WebView, so its visibility is page state, not ViewModel state: a
+  // configuration change should close it rather than silently keep a logged-in browser alive.
+  var showDouyinLogin by remember { mutableStateOf(false) }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
@@ -136,12 +139,19 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
     item {
       SectionTitle("账号")
-      com.livehub.app.ui.components.BilibiliLoginCard(
-        state = state.bilibiliLogin,
-        onStartLogin = { onAction(UiAction.StartBilibiliLogin) },
-        onCancel = { onAction(UiAction.CancelBilibiliLogin) },
-        onLogout = { onAction(UiAction.LogoutBilibili) },
-      )
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        com.livehub.app.ui.components.BilibiliLoginCard(
+          state = state.bilibiliLogin,
+          onStartLogin = { onAction(UiAction.StartBilibiliLogin) },
+          onCancel = { onAction(UiAction.CancelBilibiliLogin) },
+          onLogout = { onAction(UiAction.LogoutBilibili) },
+        )
+        com.livehub.app.ui.components.DouyinLoginCard(
+          loggedIn = state.douyinLoggedIn,
+          onLogin = { showDouyinLogin = true },
+          onLogout = { onAction(UiAction.LogoutDouyin) },
+        )
+      }
     }
 
     item {
@@ -157,6 +167,16 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
         }
       }
     }
+  }
+
+  if (showDouyinLogin) {
+    com.livehub.app.ui.components.DouyinWebLoginSheet(
+      onDismiss = { showDouyinLogin = false },
+      onLoggedIn = { cookie ->
+        onAction(UiAction.DouyinLoggedIn(cookie))
+        showDouyinLogin = false
+      },
+    )
   }
 }
 

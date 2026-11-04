@@ -93,8 +93,6 @@ class DouyinApi(
     coerceInputValues = true
   }
 
-  @Volatile private var negotiatedCookie: String? = null
-
   /**
    * The `Cookie` header to send.
    *
@@ -104,22 +102,22 @@ class DouyinApi(
    * the second attempt — and every later one — worked. Fetching the page first means the
    * first attempt already carries a valid value.
    *
+   * Read from the store on **every** call rather than cached here: a QR login writes new
+   * cookies while the process is running, and a cached header kept sending the anonymous
+   * `ttwid` until the next launch — which reads as "just logged in, still asked to log in".
+   *
    * Everything here is best-effort: if the negotiation fails the fallback is still sent,
    * because a request with *no* cookie looks like an empty category rather than an error.
    */
   suspend fun cookieHeader(): String {
-    negotiatedCookie?.let { return it }
-    cookieStore.header().takeIf { it.isNotBlank() }?.let {
-      negotiatedCookie = it
-      return it
-    }
+    val stored = cookieStore.header()
+    if (stored.contains("ttwid=")) return stored
     val fresh = runCatching { negotiateTtwid() }.getOrNull()
     if (!fresh.isNullOrBlank()) {
-      negotiatedCookie = fresh
       cookieStore.save(fresh)
-      return fresh
+      return cookieStore.header().ifBlank { fresh }
     }
-    return DouyinSigner.FALLBACK_COOKIE
+    return stored.ifBlank { DouyinSigner.FALLBACK_COOKIE }
   }
 
   /**
@@ -328,39 +326,153 @@ class DouyinApi(
   }
 
   /**
-   * Douyin "search": one room id, resolved through `room/web/enter`.
+   * Douyin search.
    *
-   * That is what the reference client does — `AndroidDtvRepository.searchAnchors` has a
-   * `Platform.Douyin` branch that calls `fetchRoomEnter(trimmed)` and returns a single
-   * `Streamer` whose id is the text that was typed. (An earlier round recorded "the reference
-   * has no Douyin search"; the grep behind that only looked for a `douyinSearchApi`, so it
-   * missed the inline branch.) Keyword search is what does not exist anonymously: the live
-   * search endpoint that *is* real, `www.douyin.com/aweme/v1/web/live/search/`, answers
-   * `status_code = 2483` / `请先登录，再继续搜索吧` to an anonymous caller.
+   * A **room number** resolves through `room/web/enter` and needs no login — that is what the
+   * reference client does (`AndroidDtvRepository.searchAnchors`, `Platform.Douyin` branch) and
+   * what this did before keyword search existed.
    *
-   * The endpoint this used to call, `live.douyin.com/webcast/search/partition/room/`, does not
-   * exist on any host: measured 2026-11-04 it answers `404 Page not found` on `live.douyin.com`
-   * and `www.douyin.com`, and `404 Not Found` on `webcast.amemv.com` — which is exactly the
-   * `HTTP 404 for <url>` the search screen used to print.
+   * A **keyword** goes to `www.douyin.com/aweme/v1/web/live/search/`, which refuses anonymous
+   * callers with `status_code = 2483` / `请先登录，再继续搜索吧` (measured 2026-11-04, with a
+   * negotiated `ttwid` and the full parameter set). So keyword search is only offered when a
+   * QR login has put a session cookie in [cookieStore], and the message says where to log in.
    *
-   * Deviation from the reference: it returns a card even when `enter` found no room (defaults
-   * "直播中" / "抖音主播" fill it in). Here an unknown id yields an empty result, so the screen
-   * says "没有找到" instead of showing a room that does not exist.
+   * The response shape below (`data[].lives.rawdata` as a JSON *string*) is taken from
+   * `dart_simple_live`'s `DouyinSite.searchRooms`, the maintained client that hit this endpoint
+   * before it required a session. It cannot be verified from this repository — there is no
+   * Douyin account in CI — so parsing is defensive: an unexpected shape yields an empty list,
+   * and a refused status is reported with the platform's own text.
    */
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
     val trimmed = keyword.trim()
     if (trimmed.isEmpty()) return emptyList<Streamer>() to false
-    // One id can only produce one card, so there is no second page to ask for.
-    if (page > 1) return emptyList<Streamer>() to false
-    if (trimmed.any { !it.isDigit() }) {
+
+    if (trimmed.all(Char::isDigit)) {
+      // One id can only produce one card, so there is no second page to ask for.
+      if (page > 1) return emptyList<Streamer>() to false
+      val info = enterRoom(trimmed) ?: return emptyList<Streamer>() to false
+      return listOf(info.toStreamer(trimmed)) to false
+    }
+
+    if (!cookieStore.isLoggedIn()) {
       throw PlatformAuthRequiredException(
-        "抖音的网页版搜索要求登录（接口返回 2483「请先登录，再继续搜索吧」），目前只能按房间号搜索：" +
-          "在抖音直播间链接里取最后那串数字，例如 1002683794。",
+        "抖音的关键词搜索需要登录（接口返回 2483「请先登录，再继续搜索吧」）。" +
+          "在「设置 → 抖音账号」扫码登录后即可按昵称搜索；只输入房间号时不需要登录。",
         Platform.DOUYIN,
       )
     }
-    val info = enterRoom(trimmed) ?: return emptyList<Streamer>() to false
-    return listOf(info.toStreamer(trimmed)) to false
+    return searchByKeyword(trimmed, page)
+  }
+
+  /** Keyword search for a logged-in session; see [search]. */
+  private suspend fun searchByKeyword(
+    keyword: String,
+    page: Int,
+  ): Pair<List<Streamer>, Boolean> {
+    val params = listOf(
+      "device_platform" to "webapp",
+      "aid" to "6383",
+      "channel" to "channel_pc_web",
+      "search_channel" to "aweme_live",
+      "keyword" to keyword,
+      "search_source" to "switch_tab",
+      "query_correct_type" to "1",
+      "is_filter_search" to "0",
+      "from_group_id" to "",
+      "offset" to ((page - 1) * SEARCH_PAGE_SIZE).toString(),
+      "count" to SEARCH_PAGE_SIZE.toString(),
+      "pc_client_type" to "1",
+      "version_code" to "170400",
+      "version_name" to "17.4.0",
+      "cookie_enabled" to "true",
+      "screen_width" to "1980",
+      "screen_height" to "1080",
+      "browser_language" to "zh-CN",
+      "browser_platform" to "Win32",
+      "browser_name" to "Edge",
+      "browser_version" to "125.0.0.0",
+      "browser_online" to "true",
+      "engine_name" to "Blink",
+      "engine_version" to "125.0.0.0",
+      "os_name" to "Windows",
+      "os_version" to "10",
+      "cpu_core_num" to "12",
+      "device_memory" to "8",
+      "platform" to "PC",
+      "downlink" to "10",
+      "effective_type" to "4g",
+      "round_trip_time" to "100",
+      // The web client sends a browser id. The endpoint appears to require its presence
+      // rather than a particular value (the reference client hardcodes one too).
+      "webid" to SEARCH_WEB_ID,
+    )
+    val query = params.joinToString("&") { (key, value) ->
+      "$key=${DouyinSigner.encodeQueryValue(value)}"
+    }
+    // Deliberately unsigned: the reference client sends this endpoint without `a_bogus`
+    // (`getAbogusUrl` is commented out there), and a signature is bound to the UA and query
+    // shape — sending a wrong one turns a working request into a refusal.
+    val response = http.get(
+      "$URL_LIVE_SEARCH?$query",
+      headers = headers().toMutableMap().apply {
+        put("Referer", "https://www.douyin.com/search/${DouyinSigner.encodeQueryValue(keyword)}?type=live")
+        put("Accept", "application/json, text/plain, */*")
+      },
+    )
+    val body = response.requireSuccess().body
+    if (body.isBlank() || body.trim() == "blocked") {
+      throw PlatformProtocolException("抖音搜索被限制，请稍后再试", Platform.DOUYIN)
+    }
+
+    val root = parseObject(body, "live/search")
+    val status = root["status_code"]?.jsonPrimitive?.intOrNull ?: -1
+    if (status == STATUS_LOGIN_REQUIRED) {
+      throw PlatformAuthRequiredException(
+        "抖音要求重新登录后才能搜索：${root.str("status_msg") ?: "请先登录"}",
+        Platform.DOUYIN,
+      )
+    }
+    if (status != 0) {
+      throw PlatformProtocolException(
+        "抖音搜索失败: status=$status ${root.str("status_msg").orEmpty()}".trim(),
+        Platform.DOUYIN,
+      )
+    }
+
+    val items = root["data"] as? JsonArray ?: JsonArray(emptyList())
+    val rooms = items.mapNotNull { element ->
+      val lives = (element as? JsonObject)?.get("lives") as? JsonObject
+        ?: return@mapNotNull null
+      // `rawdata` is the live room object, double-encoded as a JSON string.
+      val room = lives.str("rawdata")
+        ?.let { raw -> runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() }
+        ?: lives
+      parseSearchCard(room)
+    }
+    return rooms to (rooms.size >= SEARCH_PAGE_SIZE)
+  }
+
+  /** Maps one `live/search` hit; the room object is the same shape the partition list uses. */
+  private fun parseSearchCard(room: JsonObject): Streamer? {
+    val owner = room["owner"] as? JsonObject
+    val webRid = owner?.str("web_rid") ?: room.str("web_rid") ?: return null
+    if (webRid.isBlank()) return null
+    val streamUrl = room["stream_url"] as? JsonObject
+    return Streamer(
+      platform = Platform.DOUYIN,
+      roomId = webRid,
+      streamerName = owner?.str("nickname").orEmpty().ifBlank { "抖音主播" },
+      title = room.str("title").orEmpty().ifBlank { "直播中" },
+      coverUrl = firstImage(room["cover"]),
+      avatarUrl = firstImage(owner?.get("avatar_thumb")),
+      viewerCount = room["stats"]?.jsonObject?.get("total_user")?.jsonPrimitive?.longOrNull
+        ?: room.str("user_count_str")?.let { parseCount(it) }
+        ?: 0,
+      // A search hit from the live channel is a live room; when the payload does carry pull
+      // URLs, they are the honest answer and win.
+      isLive = if (streamUrl == null) true else isRoomOnAir(streamUrl),
+      updatedAt = System.currentTimeMillis(),
+    )
   }
 
   /**
@@ -696,6 +808,25 @@ class DouyinApi(
     const val URL_PARTITION_V2 =
       "https://live.douyin.com/webcast/web/partition/detail/room/v2/"
     const val URL_ENTER = "https://live.douyin.com/webcast/room/web/enter/"
+    /**
+     * Keyword search, on the **www** host — the live host has no search path at all
+     * (`/webcast/search/partition/room/` answers 404 on every Douyin host).
+     */
+    const val URL_LIVE_SEARCH = "https://www.douyin.com/aweme/v1/web/live/search/"
+
+    /** Page size the web client asks for; doubles as the "has more" threshold. */
+    const val SEARCH_PAGE_SIZE = 10
+
+    /**
+     * Browser id sent with keyword search.
+     *
+     * Borrowed from the reference client (`dart_simple_live`), which hardcodes one as well.
+     * Douyin appears to check that the parameter exists rather than its value.
+     */
+    private const val SEARCH_WEB_ID = "7382872326016435738"
+
+    /** `status_code` Douyin uses for "log in before you search". */
+    private const val STATUS_LOGIN_REQUIRED = 2483
     const val PAGE_SIZE = 20
   }
 }
