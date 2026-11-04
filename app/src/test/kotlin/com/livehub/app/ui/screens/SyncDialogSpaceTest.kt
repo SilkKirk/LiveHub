@@ -98,4 +98,27 @@ class SyncDialogSpaceTest {
       lastRow.top >= dialog.top,
     )
   }
+
+  /**
+   * The shortest window the app renders in: a 640×360 landscape phone.
+   *
+   * `ModalBottomSheet` was capped by exactly this height in `PlayerSettingsTest`; a dialog has
+   * the whole screen, but 360dp is still the number that decides whether the body needs to
+   * scroll.
+   */
+  @Test
+  @Config(qualifiers = "w640dp-h360dp-land")
+  fun `the dialog also fits a landscape phone`() {
+    openDialog()
+
+    val dialog = composeRule.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
+    val heightDp = with(composeRule.density) { dialog.height.toDp().value }
+    val lastRow = composeRule.onNodeWithText("重新生成本机匹配码").fetchSemanticsNode().boundsInRoot
+
+    assertTrue("the dialog is ${heightDp}dp tall, the screen only has 360dp", heightDp <= 360f)
+    assertTrue(
+      "the last row ends at ${lastRow.bottom} but the dialog stops at ${dialog.bottom}",
+      lastRow.bottom <= dialog.bottom,
+    )
+  }
 }
