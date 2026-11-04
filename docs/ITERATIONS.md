@@ -4022,3 +4022,87 @@ workflow 一致；「后台每 30 分钟刷新」= `FollowRefreshWorker.INTERVAL
 
 - 配对的超时预算与 `onPair` 的两写，一起收敛（要么合并写，要么把读预算调大）。
 - 地址表目前只有 deviceId → 地址一条记录，没有"上次成功连通时间"，出问题时仍要靠日志猜。
+
+---
+
+## 第四十一轮迭代：抖音搜索打到一个不存在的端点
+
+### 缺陷是什么
+
+搜索页切到「抖音」，输入房间号 `1002683794` 回车，界面直接打印：
+
+```
+搜索失败
+HTTP 404 for https://live.douyin.com/webcast/search/partition/room/?device_platform=webapp&aid=6383&...&a_bogus=…
+```
+
+不只是搜不到，还把整条带签名的 URL 甩在页面上。用户对照的参考项目能出结果。
+
+### 为什么会这样
+
+**一、那个路径不存在。** 2026-11-04 实测三个域名：`live.douyin.com`、`www.douyin.com` 都回
+`404 Page not found`，`webcast.amemv.com` 回 `404 Not Found`。参数是照着 App 端搜索接口
+（`device_platform=webapp`、`search_channel=aweme_live`…）抄的，host 却用的是
+`live.douyin.com`，路径本身从来没有存在过——两个来源拼在一起，谁也没验证过。
+
+**二、真实存在的关键词搜索要登录。** `www.douyin.com/aweme/v1/web/live/search/` 回
+`status_code = 2483` / `「请先登录，再继续搜索吧」`（带 ttwid cookie 也一样）。本应用没有
+抖音账号，这条路走不通。
+
+**三、第二十五轮的记录是错的。** 那一轮写"参考项目根本没有抖音搜索"，依据是全仓库 grep
+`webcast/search`。实际参考项目的搜索在 `AndroidDtvRepository.searchAnchors` 里：
+`Platform.Douyin -> runCatching { douyinWebApi.fetchRoomEnter(trimmed) … }`——它搜的就是
+**房间号**，用 `room/web/enter` 解析出一张卡，`roomId` 保持用户输入的那串数字，`isLive` 由
+hls/flv map 是否为空判断；搜索框占位文案是「输入抖音房间号（webRid）...」。当时只 grep 了
+`douyinSearch` 这类名字，漏了内联分支。
+
+### 怎么修的
+
+按参考项目的形状实现，而不是继续猜关键词接口：
+
+1. `DouyinApi.search(keyword, page)`：纯数字 → `enterRoom(id)` 拿一张卡（`roomId` 用输入值，
+   因为 `roomDetail` / `playback` / 关注列表后面都把它当 `web_rid` 传回去）；非数字 →
+   `PlatformAuthRequiredException`，说明"网页版搜索要登录、只支持房间号"，不再发请求；
+   第二页 → 空（一个 id 只有一张卡）。
+2. `roomInfo` 拆出 `enterRoom(...): DouyinRoomInfo?`：搜索路径上"没有这个房间"是空结果，
+   房间页仍然抛原来的 `抖音直播间信息获取失败`，行为不变。
+3. 删掉 `URL_SEARCH` 与只被它调用的 `parseRoomCard`。
+4. 搜索框文案按平台走：抖音显示「输入抖音房间号」，不再写「搜索 抖音 主播 / 直播间」。
+5. README「已知限制」里那条"参考项目没有实现搜索"按源码更正。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **564** 条（上一轮 560，本轮 +4），failures=0 errors=0 |
+| 仪器测试 | ✅（本轮 UI 只改抖音搜索框文案，既有截图没有抖音搜索页，图集未变） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `018b47c` 三个 job 全绿 |
+
+新增 `DouyinSearchTest` 4 条：房间号 → 一张卡且**只发一次** `room/web/enter`、`roomId` 就是
+输入值、离线房间 `isLive=false`；关键词 → 一个请求都不发并给出登录原因；第二页 → 不发请求；
+不存在的房间 → 空结果不抛错。
+
+端点本身是**本机实测**的（python 直连，UA + ttwid cookie + Referer）：
+`enter?web_rid=1002683794` → HTTP 200、536 241 字节、`id_str=7703900142109592362`、
+标题「我的红眼看了不烧心！！」，与用户截图里那张卡一致。
+
+### 没做到的
+
+- **关键词搜索（按昵称/标题）仍然不可用**：需要登录网页版抖音。要做就得上抖音扫码登录
+  （B 站那套的翻版）+ 登录态 cookie 存储，单开一轮。
+- **没有真机回归**：本机只验证了端点与解析，CI 只验证分支与解析；真正"输入号码出卡"要用户在
+  手机上确认。
+
+### 下一轮（本轮顺手查实的一条，未修）
+
+**抖音房间身份在播放页被换成了内部 id。** `openRoom` 成功后会把 `state.room` 换成
+`PlaybackSource.room`，而 `DouyinAdapter.playback` 的 `room = resolved.info.toStreamer()`，
+`DouyinRoomInfo.roomId` 取的是 `room.id_str`（内部 id，如 `7703900142109592362`），不是
+`web_rid`。于是从播放页点关注，写进关注列表的是内部 id；之后
+`FollowRefreshWorker` 用 `liveStatus(roomId=内部 id)` → `enter?web_rid=<内部 id>` 实测回
+`status_code 4001038`、0 个房间——这张卡永远"未开播"，点进去也打不开。
+建议改法：适配器返回的 `Streamer.roomId` 一律保持调用方传入的 `web_rid`
+（`info.copy(roomId = roomId).toStreamer()`，`roomDetail` 与 `playback` 两处），
+`DouyinRoomInfo.roomId` 留给弹幕/播放内部用。本轮只修搜索，未动它。
