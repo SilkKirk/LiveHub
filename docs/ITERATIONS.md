@@ -3688,3 +3688,83 @@ androidx.test.espresso.AppNotIdleException:
   "30 分钟刷新"与"播放器重试一次"两条都对着代码核过）。
 - 墓碑 GC 的 per-peer 水位字段。
 - 横屏弹层挂死：按上面的二分方向继续，或明确接受"横屏下未验证"并写进 README 已知限制。
+
+---
+
+## 第三十七轮迭代：横屏弹层——二分到一行代码，并把开关真正关掉
+
+上一轮只做到"换 Dialog、限高都没治好，机制未定位"。这轮按定下的方向做逐组件二分，最后
+**定位到触发器并修好了**，横屏用例从"挂起"变成"回归守卫"。
+
+### 一、二分矩阵（全部在 640×360dp，`AppNotIdleException` 即不收敛）
+
+| 探针 | 结果 |
+| --- | --- |
+| `Dialog` + `Text` | idle |
+| `Dialog` + `Text` + `TextButton` | idle |
+| `Dialog` + `Text` + `weight(fill=false)` 滚动列 | idle |
+| 最小 `AlertDialog`（只有 `Text`） | idle |
+| 同 `OutlinedTextField` 放在弹层**外面** | idle |
+| `Dialog` + `Text` + `OutlinedTextField`（有/无 `fillMaxWidth`） | **不 idle**（约 19.8 万次） |
+| `Dialog` + `OutlinedTextField(Modifier.width(280.dp))` | idle |
+| `Dialog` + `OutlinedTextField(Modifier.widthIn(max = 280.dp))` | idle |
+| 固定宽 360dp 的 `Column` + `fillMaxWidth` 的字段 | **不 idle**（19.4 万次） |
+| `widthIn(max = 420.dp)` 的 `Column` + `fillMaxWidth` 的字段 | **不 idle**（18.3 万次） |
+
+两条结论：
+
+1. **和 `Dialog` 有关，但不是 `Dialog` 本身**——同样的字段放在弹层外完全正常；
+2. **触发器是"弹层里的输入框用了 `fillMaxWidth()`"**，不是某个具体的宽度值：把列的宽度
+   固定到 360dp 也没用，只要字段自己是 `fillMax` 就不收敛；反过来，字段**有界**（固定宽或
+   `widthIn`）就正常。
+
+原因可以从 Material3 的实现读出来：`AlertDialog` 用 `Modifier.width(IntrinsicSize.Max)`
+量它的 `text` 槽。输入框的"内在宽度"取决于它被给的宽度，而它被给的宽度又取决于容器的内在
+宽度——宽而矮的窗口下这个环没有稳定解，measure 反复重来。上一轮"限高"的方向之所以没用，
+是因为问题在**宽度**这条链上，不在高度。
+
+### 二、修法
+
+`MatchingCodeDialog` 从 `AlertDialog` 换成固定宽的 `Dialog`：
+
+```kotlin
+Dialog(onDismissRequest = onDismiss) {
+  Surface(modifier = Modifier.width(280.dp), shape = RoundedCornerShape(28.dp), ...) {
+    Column(Modifier.padding(24.dp)) { 标题 / 正文 / 取消·关联 }
+  }
+}
+```
+
+- 内部**没有任何 `fillMaxWidth`**（输入框也不再用），因此没有 intrinsic 度量，也没有环；
+- 280dp 是 Material 输入框的最小宽度，320dp 屏上（弹层内可用 272dp）仍然放得下；
+- 标题用 `titleLarge`、圆角 28dp、`tonalElevation = 6.dp`，视觉与原 `AlertDialog` 一致。
+
+上一轮那次"换 Dialog"的尝试之所以失败，是因为当时用的是
+`fillMaxWidth().widthIn(max = 420.dp)` 的 `Surface`——`fillMaxWidth` 先把宽度钉成窗口最大值，
+`widthIn` 再夹，最终仍是一个"填充"型约束，环还在。**同一个组件，约束写法不同，结果相反**，
+这正是探针表里最后两行的意义。
+
+### 三、本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **540** 条，failures=0 errors=0（539 → 540，`SyncDialogSpaceTest` 恢复横屏那条） |
+| 仪器测试 | ✅ 47 条 `@Test`（`SyncDialogDeviceTest` 在真机侧验证弹层可打开、六位后才可关联） |
+| Release assembly（R8） | ✅ |
+
+`SyncDialogSpaceTest` 三条全绿：320×470 下"弹层不超过屏幕"、"最后一行在弹层内"，以及
+640×360 横屏下的同两条断言——这条用例从"必须 `@Ignore`"变成了回归守卫。
+
+### 四、这一轮花了多少
+
+CI 上跑了 **6 次**（3 次探针矩阵 + 3 次修法尝试，其中两次红）。三次探针分别是 6 个探针、
+3 个探针、3 个探针，都是临时文件，跑完即删。真正落在主干上的改动只有一个文件、约 30 行。
+
+值得记的一条方法：**上一轮我在"高度"上猜了两版**（限高、BoxWithConstraints），都是错的；
+换成"每次只加一个组件"的矩阵之后，一次就把范围从"整个弹层"缩到"一行修饰符"。
+
+### 五、下一轮
+
+- 墓碑 GC 的 per-peer 水位字段（唯一还剩的待办；README 已如实写明"目前不回收"）。
+- 收尾审计再来一遍（本轮已顺手核过 TODO/死代码/README 两条实现细节），然后才谈"目标达成"。
