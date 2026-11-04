@@ -129,7 +129,18 @@ class AppContainer(
 
   val followStore: FollowStore by lazy { FollowStore(preferences) }
 
-  val syncTargets: AppSyncTargets by lazy { AppSyncTargets(followStore) }
+  /**
+   * Bilibili/Douyin login state, with the HLC metadata the sync merge needs.
+   *
+   * Sits above the two cookie stores: they stay the single source a request reads, this adds
+   * the per-platform clock and tombstones so "logged in on the phone" and "logged out on the
+   * tablet" resolve to one answer.
+   */
+  val credentialStore: CredentialStore by lazy {
+    CredentialStore(preferences, bilibiliCookieStore, douyinCookieStore)
+  }
+
+  val syncTargets: AppSyncTargets by lazy { AppSyncTargets(followStore, credentialStore) }
 
   val syncEngine: SyncEngine by lazy {
     SyncEngine(

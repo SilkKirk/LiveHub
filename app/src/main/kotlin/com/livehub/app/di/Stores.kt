@@ -221,12 +221,18 @@ class FollowSyncTarget(private val store: FollowStore) : SyncTarget {
 /**
  * Wires the scopes the app exchanges.
  *
- * One entry, because the follow list is the only thing worth synchronising between two
- * installs — see [SyncScope]. `FollowsOnlySyncTest` pins both halves of that decision: this
- * registry exposes exactly the follow list, and the engine builds nothing for anything else.
+ * Two entries: the follow list, and the Bilibili/Douyin login state. `SyncScopesTest` pins
+ * both halves — the registry exposes exactly these two, and the sync screen names both — and
+ * `SyncScope` documents why the login scope came back after round 32 removed the other two.
  */
-class AppSyncTargets(private val followStore: FollowStore) : SyncTargets {
-  private val targets = listOf(FollowSyncTarget(followStore)).associateBy { it.scope }
+class AppSyncTargets(
+  private val followStore: FollowStore,
+  private val credentialStore: CredentialStore,
+) : SyncTargets {
+  private val targets = listOf(
+    FollowSyncTarget(followStore),
+    CredentialSyncTarget(credentialStore),
+  ).associateBy { it.scope }
 
   override fun targetFor(scope: SyncScope): SyncTarget? = targets[scope]
 

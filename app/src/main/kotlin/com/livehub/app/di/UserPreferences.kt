@@ -38,6 +38,14 @@ data class UserSettings(
   /** Serialised follow records, including tombstones. The one synchronised scope. */
   val followRecords: String = "",
   /**
+   * Serialised login-state records (one per platform), including tombstones.
+   *
+   * Separate from the cookie stores themselves so each platform keeps working without a
+   * record (a hand-typed cookie, an anonymous `ttwid`), while the HLC metadata that decides
+   * "which device logged in last" lives in one place.
+   */
+  val loginRecords: String = "",
+  /**
    * Secret this device presents to paired peers.
    *
    * Peers store it verbatim and compare it on every request, so it must be stable

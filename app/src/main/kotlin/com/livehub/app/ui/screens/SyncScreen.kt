@@ -213,7 +213,7 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
         )
       }
       Text(
-        text = "关注和播放设置会在同一 Wi-Fi 下增量同步；删除也会同步，不会把旧数据带回来。",
+        text = "关注列表与登录状态会在同一 Wi-Fi 下增量同步；删除也会同步，不会把旧数据带回来。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
@@ -326,19 +326,23 @@ private fun MatchingCodeDialog(
 /**
  * What this page actually exchanges.
  *
- * It used to be one chip per scope, and two of the three were decoration: one had no target at
- * all, the other had a target nothing ever wrote to. The follow list is the only thing whose
- * value is destroyed by owning two devices, so the card states it instead of offering a switch
- * that can only have one useful position.
+ * Two scopes, and both are shown rather than offered as switches: they are the two things
+ * owning a second device would otherwise make you repeat. The old shape (one chip per scope,
+ * three of them, two dead) is what round 32 removed; this card is the honest list, including
+ * the fact that the login state travels unencrypted to paired devices only.
  */
 @Composable
 private fun ScopeCard() {
   Card(modifier = Modifier.fillMaxWidth()) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       Text("同步内容", style = MaterialTheme.typography.titleMedium)
-      Text(SyncScope.FOLLOWS.displayName, style = MaterialTheme.typography.bodyMedium)
       Text(
-        text = "只同步关注列表。播放设置与搜索历史留在本机，不会上传到另一台设备。",
+        text = SyncScope.entries.joinToString(" · ") { it.displayName },
+        style = MaterialTheme.typography.bodyMedium,
+      )
+      Text(
+        text = "关注列表与 B 站/抖音登录状态会同步到已配对的设备；播放设置与搜索历史留在本机。" +
+          "登录状态只在局域网内、只发给已配对的设备（明文传输，解除关联后不再发送）。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )

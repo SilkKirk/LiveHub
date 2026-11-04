@@ -5,22 +5,26 @@ import kotlinx.serialization.Serializable
 /**
  * What gets synchronised between two LiveHub installs.
  *
- * **The follow list and nothing else.** Preferences and the search history were scopes in an
- * earlier design, and making them work was real work — but they are not what this feature is
- * for: the follow list is the only thing whose value is destroyed by having two devices, and
- * pushing danmaku settings or recent keywords between them was a solution looking for a
- * problem. The enum stays (rather than a bare string) because the payload's `scope` field has
- * to be checkable and the log row needs a display name.
+ * Two scopes, and both are data whose *value* is destroyed by owning two devices: the follow
+ * list (which room you care about) and the login state (who you are on Bilibili / Douyin).
+ *
+ * The second one reverses a decision from round 32 ("the follow list and nothing else"). That
+ * decision was right for the scopes it removed — search history and danmaku settings have no
+ * reason to travel — but a login is exactly the thing a user does not want to perform twice,
+ * and it was requested explicitly. Login state only ever reaches a **paired** device: the
+ * server rejects unauthenticated requests before a payload is read
+ * ([com.livehub.core.sync.server.SyncHttpServer.authenticate]), and unpairing stops it.
  */
 enum class SyncScope(val wireName: String, val displayName: String) {
   FOLLOWS("follows", "关注列表"),
+  CREDENTIALS("credentials", "登录状态"),
   ;
 
   companion object {
     fun fromWireName(name: String): SyncScope? =
       entries.firstOrNull { it.wireName.equals(name, ignoreCase = true) }
 
-    val default: Set<SyncScope> = setOf(FOLLOWS)
+    val default: Set<SyncScope> = setOf(FOLLOWS, CREDENTIALS)
   }
 }
 

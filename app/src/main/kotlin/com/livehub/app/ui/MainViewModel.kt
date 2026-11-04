@@ -929,6 +929,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           return
         }
         is com.livehub.platform.bilibili.BilibiliAuth.PollResult.Confirmed -> {
+          // BilibiliAuth already wrote the cookies into the store; the record is what carries
+          // the clock, and what makes the login travel to the paired device.
+          container.credentialStore.set(
+            platform = Platform.BILIBILI,
+            header = container.bilibiliCookieStore.header(),
+            hlc = container.syncEngine.nextHlc(),
+            deviceId = container.preferences.deviceId,
+            now = System.currentTimeMillis(),
+          )
           _state.update {
             it.copy(
               bilibiliLogin = it.bilibiliLogin.copy(loggedIn = true, qr = null, status = "登录成功"),
@@ -958,7 +967,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun logoutBilibili() {
     cancelBilibiliLogin()
-    container.bilibiliAuth.logout()
+    // Through the credential store, so the logout is a tombstone that travels to the paired
+    // device instead of a local clear the peer silently refills on the next sync.
+    container.credentialStore.set(
+      platform = Platform.BILIBILI,
+      header = null,
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )
     _state.update {
       it.copy(
         bilibiliLogin = it.bilibiliLogin.copy(loggedIn = false, status = "已退出登录"),
@@ -970,13 +987,22 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   /**
    * Stores what the Douyin login sheet captured.
    *
-   * The cookie merges into the stored header, where negotiation already put `ttwid`, so the
-   * session and the anti-bot cookie coexist. Search reads `isLoggedIn()` on the next call,
-   * which is why keyword search works immediately instead of after a restart.
+   * The cookie is recorded through [CredentialStore.set], which both merges it into the cookie
+   * store the requests read (`ttwid` is already there from negotiation) and stamps the record
+   * with a fresh clock so this login wins the next merge. Search reads `isLoggedIn()` on the
+   * next call, which is why keyword search works immediately instead of after a restart.
    */
   private fun douyinLoggedIn(cookie: String) {
-    container.douyinCookieStore.save(cookie)
-    val loggedIn = container.douyinCookieStore.isLoggedIn()
+    val loggedIn = com.livehub.platform.douyin.hasDouyinSession(cookie)
+    if (loggedIn) {
+      container.credentialStore.set(
+        platform = Platform.DOUYIN,
+        header = cookie,
+        hlc = container.syncEngine.nextHlc(),
+        deviceId = container.preferences.deviceId,
+        now = System.currentTimeMillis(),
+      )
+    }
     _state.update {
       it.copy(
         douyinLoggedIn = loggedIn,
@@ -986,7 +1012,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   }
 
   private fun logoutDouyin() {
-    container.douyinCookieStore.clear()
+    container.credentialStore.set(
+      platform = Platform.DOUYIN,
+      header = null,
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )
     _state.update { it.copy(douyinLoggedIn = false, message = "已退出抖音登录") }
   }
 
