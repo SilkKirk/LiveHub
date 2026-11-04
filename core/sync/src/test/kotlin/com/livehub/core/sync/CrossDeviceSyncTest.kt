@@ -402,7 +402,7 @@ class CrossDeviceSyncTest {
 
     val replay = tablet.engine.applyPayload(payload, tablet.peers.first { it.deviceId == phone.id })
 
-    assertTrue("a replay must not fail the exchange", replay.accepted)
+    assertTrue(replay.accepted, "a replay must not fail the exchange")
     assertEquals(0, replay.applied)
     assertEquals(listOf("111"), tablet.followedIds(), "nothing may be applied twice")
   }
