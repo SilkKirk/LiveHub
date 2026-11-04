@@ -36,6 +36,17 @@ class LanSyncTransport(
   private val peersProvider: () -> List<TrustedPeer>,
   private val addressProvider: (TrustedPeer) -> DiscoveredPeer?,
   private val timeoutMillis: Int = DEFAULT_TIMEOUT_MILLIS,
+  /**
+   * Budget for the TCP handshake alone.
+   *
+   * Kept apart from [timeoutMillis] because the two failures look nothing alike. A peer that
+   * answered yesterday but whose lease moved, or one that went to sleep, leaves the connect
+   * hanging until the socket timeout — previously the full read budget, so the sync button
+   * sat there for eight seconds per request before reporting "部分同步失败". A live device
+   * completes the handshake in milliseconds, so a short connect budget turns that case into
+   * a prompt, actionable failure and leaves the long budget for actually reading a payload.
+   */
+  private val connectTimeoutMillis: Int = DEFAULT_CONNECT_TIMEOUT_MILLIS,
   /** Port this device listens on; advertised so peers can call back. */
   private val localPort: Int = 0,
 ) : SyncTransport {
@@ -158,7 +169,7 @@ class LanSyncTransport(
     val body = SyncEnvelope.encode(envelope)
     val response = try {
       Socket().use { socket ->
-        socket.connect(InetSocketAddress(host, port), budget)
+        socket.connect(InetSocketAddress(host, port), minOf(budget, connectTimeoutMillis))
         socket.soTimeout = budget
 
         val output: OutputStream = BufferedOutputStream(socket.getOutputStream())
@@ -268,6 +279,14 @@ class LanSyncTransport(
 
   companion object {
     const val DEFAULT_TIMEOUT_MILLIS = 8_000
+
+    /**
+     * Connect budget for the ordinary exchange.
+     *
+     * Long enough for a busy Wi-Fi to complete a handshake, short enough that a dead address
+     * does not own the sync button for the whole read budget.
+     */
+    const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 3_000
 
     /**
      * Upper bound on parts fetched for one scope in a single pull.

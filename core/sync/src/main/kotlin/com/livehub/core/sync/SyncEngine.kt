@@ -2,6 +2,7 @@ package com.livehub.core.sync
 
 import kotlinx.serialization.json.JsonObject
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Peer-to-peer sync engine.
@@ -26,7 +27,15 @@ class SyncEngine(
   /** Local physical/counter state, persisted implicitly through record timestamps. */
   @Volatile private var lastHlc: Hlc = Hlc.ZERO
 
-  @Volatile private var sequence: Long = 0
+  /**
+   * Counter behind [SyncPayload.sequence], the peer's replay guard.
+   *
+   * Deliberately not persisted: a disk write per outgoing payload is not worth it, and the
+   * value only has to be monotonic per device, which [nextSequence] guarantees from the
+   * clock. It is atomic because a pull served on a server thread and a push built on a
+   * client thread can both reach it at once.
+   */
+  private val sequence = AtomicLong(0)
 
   private val log = mutableListOf<SyncLogEntry>()
 
@@ -47,6 +56,23 @@ class SyncEngine(
   /** Converts a remote clock into the local one so causality is preserved. */
   fun observeRemote(remote: Hlc) {
     lastHlc = lastHlc.merge(remote, clock())
+  }
+
+  /**
+   * Next payload id for the peer's replay guard.
+   *
+   * Seeded from the clock rather than from zero. The guard compares against the highest
+   * sequence a peer has already applied — and that watermark is stored in [TrustedPeer], so
+   * it outlives this process while the counter used to start over at 0 on every launch. A
+   * restarted device therefore sent payloads numbered 1, 2, 3… to a peer whose watermark was
+   * already at, say, 47: every one of them was refused as "该版本已应用", which ended the
+   * scope exchange before the push half ever ran. Sync then did nothing at all until the
+   * counter had been tapped past the old value once per attempt — the "很慢 / 同步不过去"
+   * report. Clock seeding keeps the id above any watermark this device handed out before,
+   * and `previous + 1` keeps two payloads in the same millisecond distinct.
+   */
+  private fun nextSequence(): Long = sequence.updateAndGet { previous ->
+    maxOf(previous + 1, clock())
   }
 
   /**
@@ -93,12 +119,12 @@ class SyncEngine(
       } else {
         pending.subList(index * chunkSize, minOf((index + 1) * chunkSize, pending.size))
       }
-      sequence += 1
+      val payloadSequence = nextSequence()
       SyncCodec.buildPayload(
         scope = scope,
         records = slice,
         deviceId = deviceId,
-        sequence = sequence,
+        sequence = payloadSequence,
         now = clock(),
         chunkIndex = index,
         chunkCount = chunkCount,
@@ -150,9 +176,10 @@ class SyncEngine(
   /**
    * Applies a payload received from [peer].
    *
-   * Rejects payloads from a newer schema, from an unknown scope, or one whose sequence
-   * has already been applied — the latter also makes the exchange idempotent, so a
-   * retried request can never duplicate records.
+   * Rejects payloads from a newer schema or from an unknown scope. A payload whose sequence
+   * has already been applied is accepted as a no-op instead: the merge is idempotent, so a
+   * retried request cannot duplicate records, and treating the retry as an error stopped the
+   * rest of the exchange for a peer that was merely repeating itself.
    */
   fun applyPayload(payload: SyncPayload, peer: TrustedPeer?): SyncApplyResult {
     val scope = payload.parsedScope
@@ -163,7 +190,23 @@ class SyncEngine(
     }
 
     if (peer != null && !peer.isNewer(scope.wireName, payload.sequence)) {
-      return SyncApplyResult(rejectedReason = "该版本已应用 (sequence=${payload.sequence})")
+      // A sequence at or below the watermark means this payload was already applied. That is
+      // a no-op, not a failure: the merge is idempotent, so nothing can be duplicated. It
+      // used to be reported as a rejection, and `SyncCoordinator` treats a rejected pull as a
+      // failed scope and stops — so the push that would have brought this peer up to date was
+      // skipped too, and a stale watermark (see [nextSequence]) silently froze the exchange.
+      record(
+        SyncLogEntry(
+          at = clock(),
+          direction = SyncLogEntry.Direction.PULL,
+          peerName = peer.deviceName,
+          scope = scope.displayName,
+          itemCount = 0,
+          success = true,
+          note = "该版本已应用，跳过",
+        ),
+      )
+      return SyncApplyResult(applied = 0)
     }
 
     val target = targets.targetFor(scope)

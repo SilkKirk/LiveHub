@@ -1,27 +1,42 @@
 package com.livehub.core.sync.transport
 
 import com.livehub.core.sync.DiscoveredPeer
-import com.livehub.core.sync.SyncEnvelope
 import com.livehub.core.sync.TrustedPeer
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Remembers where each paired peer was last seen and keeps manual entries.
  *
- * mDNS discovery only runs while the sync screen is visible, so the engine needs a
- * way to reach a device that is no longer advertising. Addresses are keyed by device id
- * and replaced on every discovery event.
+ * A [TrustedPeer] carries the pairing secret but **not** an address, so this table is the
+ * only thing that knows where the other device is. It therefore has to outlive the process:
+ * mDNS is the fast path for re-learning an address, but it is also the first thing a home
+ * router breaks, and an app that had forgotten every address could only ever report
+ * "不在线" on a network where the peer was sitting right there. [initial] seeds the table
+ * from disk and [onChange] writes it back after every change.
+ *
+ * Reads happen from socket, discovery and UI threads at once, so the table is concurrent.
  */
-class PeerAddressBook {
-  private val addresses = mutableMapOf<Long, DiscoveredPeer>()
+class PeerAddressBook(
+  initial: Collection<DiscoveredPeer> = emptyList(),
+  /** Persists the whole table when it changes; called without holding any lock. */
+  private val onChange: (List<DiscoveredPeer>) -> Unit = {},
+) {
+  private val addresses = ConcurrentHashMap<Long, DiscoveredPeer>()
+
+  init {
+    initial.forEach { addresses[it.deviceId] = it }
+  }
 
   fun remember(peer: DiscoveredPeer) {
-    addresses[peer.deviceId] = peer
+    val previous = addresses.put(peer.deviceId, peer)
+    // mDNS re-announces the same device every few seconds; only a real change is written.
+    if (previous != peer) onChange(snapshot())
   }
 
   fun forget(deviceId: Long) {
-    addresses.remove(deviceId)
+    if (addresses.remove(deviceId) != null) onChange(snapshot())
   }
 
   fun addressFor(peer: TrustedPeer): DiscoveredPeer? = addresses[peer.deviceId]
@@ -30,16 +45,16 @@ class PeerAddressBook {
 
   fun snapshot(): List<DiscoveredPeer> = addresses.values.toList()
 
-  fun clear() = addresses.clear()
-
   /** Adds a manually entered peer (host + port typed by the user). */
   fun addManual(deviceId: Long, name: String, host: String, port: Int) {
-    addresses[deviceId] = DiscoveredPeer(
-      deviceId = deviceId,
-      deviceName = name,
-      host = host,
-      port = port,
-      discovered = false,
+    remember(
+      DiscoveredPeer(
+        deviceId = deviceId,
+        deviceName = name,
+        host = host,
+        port = port,
+        discovered = false,
+      ),
     )
   }
 

@@ -3,7 +3,6 @@ package com.livehub.core.sync
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -382,8 +381,15 @@ class CrossDeviceSyncTest {
       assertEquals(3, phone.followedIds().size)
     }
 
+  /**
+   * A replayed payload changes nothing, and is not reported as a failure.
+   *
+   * The sequence guard exists so a retried request cannot duplicate work. Treating the retry
+   * as an error is what made a stale watermark fatal: the coordinator stops the scope on a
+   * rejection, so the push never happened either.
+   */
   @Test
-  fun `peer sequence tracking blocks a replayed payload`() = kotlinx.coroutines.test.runTest {
+  fun `a replayed payload is a no-op instead of a failure`() = kotlinx.coroutines.test.runTest {
     phone.pairWith(tablet)
     phone.follow("111")
     phone.syncWith(tablet)
@@ -395,7 +401,10 @@ class CrossDeviceSyncTest {
     assertTrue(first.accepted)
 
     val replay = tablet.engine.applyPayload(payload, tablet.peers.first { it.deviceId == phone.id })
-    assertFalse(replay.accepted, "the same sequence must not be applied twice")
+
+    assertTrue("a replay must not fail the exchange", replay.accepted)
+    assertEquals(0, replay.applied)
+    assertEquals(listOf("111"), tablet.followedIds(), "nothing may be applied twice")
   }
 
   @Test

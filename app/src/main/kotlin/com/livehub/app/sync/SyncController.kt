@@ -13,6 +13,7 @@ import com.livehub.core.sync.SyncPayload
 import com.livehub.core.sync.SyncScope
 import com.livehub.core.sync.TrustedPeer
 import com.livehub.core.sync.discovery.PeerDiscovery
+import com.livehub.core.sync.discovery.PeerLocator
 import com.livehub.core.sync.discovery.SubnetScanner
 import com.livehub.core.sync.server.PairingOutcome
 import com.livehub.core.sync.server.ScopeDisabledException
@@ -44,7 +45,23 @@ class SyncController(
   private val onListening: (Int) -> Unit = {},
 ) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-  private val addressBook = PeerAddressBook()
+
+  /**
+   * Where each paired device was last seen, seeded from disk and written back on every change.
+   *
+   * Pairing learns the peer's address from the handshake and discovery learns it from mDNS,
+   * but both used to live here only for the life of the process. A [TrustedPeer] carries the
+   * secret, never the address, so after a restart the app could only reach the other device
+   * through mDNS — and a router that blocks multicast left every sync reporting "不在线" on a
+   * network where the peer was perfectly reachable.
+   */
+  private val addressBook = PeerAddressBook(
+    initial = preferences.peerAddresses(),
+    onChange = { preferences.savePeerAddresses(it) },
+  )
+
+  /** Sweeps the local subnet for a peer whose stored address does not answer. */
+  private val locator = PeerLocator()
 
   private var server: SyncHttpServer? = null
   private var transport: LanSyncTransport? = null
@@ -329,16 +346,25 @@ class SyncController(
     var pushed = 0
     var failures = 0
     var skipped = 0
+    var firstFailure: String? = null
     peers.forEach { peer ->
+      // Before anything is exchanged: a stored address is only worth using once it answers.
+      ensureReachable(peer)
       coordinator.syncWith(peer).forEach { outcome ->
         pulled += outcome.pulled
         pushed += outcome.pushed
-        if (!outcome.success) failures++
+        if (!outcome.success) {
+          failures++
+          if (firstFailure == null) firstFailure = "${peer.deviceName} ${outcome.error}"
+        }
         if (outcome.skipped) skipped++
       }
     }
     val message = when {
-      failures > 0 -> "部分同步失败 ($failures)"
+      // Name the peer and the reason. "部分同步失败 (1)" said nothing about *which* device
+      // failed or why; the reason only existed in a log row two scroll lengths further down.
+      failures > 0 && pulled == 0 && pushed == 0 -> "同步失败：" + (firstFailure ?: "$failures 项")
+      failures > 0 -> "部分同步失败：" + (firstFailure ?: "$failures 项")
       // Nothing moved and nothing failed, because the other device has these scopes switched
       // off. Saying "已是最新" would claim the two devices agree, which was never checked.
       pulled == 0 && pushed == 0 && skipped > 0 -> "对方未开启所选同步内容"
@@ -346,6 +372,64 @@ class SyncController(
       else -> "同步完成：接收 $pulled，发送 $pushed"
     }
     SyncSummary(pulled, pushed, message)
+  }
+
+  /**
+   * Makes sure [peer] can be reached before the exchange starts.
+   *
+   * Two things are repaired here, and both used to end as "不在线" on the sync button: the
+   * address was never persisted (so a restarted app only had mDNS to go on), and a DHCP lease
+   * that moved left a stored address that no longer answers. The ping is one cheap round trip
+   * over the address already known, so the common case costs nothing; only a peer that fails
+   * it is searched for.
+   */
+  private suspend fun ensureReachable(peer: TrustedPeer) {
+    val current = transport ?: return
+    if (addressBook.addressFor(peer) != null && current.probe(peer)) return
+    locate(peer)
+  }
+
+  /**
+   * Sweeps this network for [peer] and remembers where it answered.
+   *
+   * Pairing has always survived a router that blocks multicast — it offers the code to every
+   * address on the local /24 ([CodePairing]). Sync could not: it knew one address per peer,
+   * and on such a network the only outcome was "不在线" while the other device sat on the same
+   * Wi-Fi, reachable over plain TCP. The ping endpoint answers with the server's device id, so
+   * the sweep can identify the peer without pairing it again.
+   */
+  private suspend fun locate(peer: TrustedPeer): DiscoveredPeer? {
+    val current = transport ?: return null
+    val port = addressBook.addressFor(peer)?.port?.takeIf { it in 1..65535 }
+      ?: listeningPort.takeIf { it > 0 }
+      ?: DEFAULT_PORT
+    // Read once: `preferences.deviceId` is a blocking DataStore read, and the sweep asks for
+    // the envelope up to 254 times.
+    val envelope = SyncEnvelope(
+      deviceId = preferences.deviceId,
+      deviceName = preferences.deviceName,
+      secret = selfSecret(),
+      preferredPort = listeningPort,
+    )
+    val candidates = discoveredPeers().filter { it.deviceId == peer.deviceId } +
+      SubnetScanner.candidates(port)
+
+    val found = locator.locate(peer.deviceId, candidates) { candidate ->
+      runCatching {
+        current.call(
+          peer = peer,
+          host = candidate.host,
+          port = candidate.port,
+          path = SyncEnvelope.PATH_PING,
+          envelope = envelope,
+          timeoutMillis = LOCATE_ATTEMPT_TIMEOUT_MILLIS,
+        ).serverDeviceId
+      }.getOrNull()
+    } ?: return null
+
+    val address = found.copy(deviceId = peer.deviceId, deviceName = peer.deviceName)
+    addressBook.remember(address)
+    return address
   }
 
   /** Probes every paired peer so the UI can show who is online. */
@@ -383,6 +467,14 @@ class SyncController(
 
   companion object {
     const val DEFAULT_PORT = 47653
+
+    /**
+     * Per-address budget while sweeping for a peer.
+     *
+     * A live device answers a ping in milliseconds; anything slower than this is an address
+     * with nothing behind it, and waiting longer would only stall a 254 address sweep.
+     */
+    private const val LOCATE_ATTEMPT_TIMEOUT_MILLIS = 350
 
     /**
      * Secret used for the very first exchange. Pairing replaces it with a per-peer

@@ -98,11 +98,19 @@ class SyncEngineTest {
     assertEquals("huya:9", target.records.first().key)
   }
 
+  /**
+   * A payload that was already applied is a no-op, not an error.
+   *
+   * The merge is idempotent, so a retry cannot duplicate anything — that part was always
+   * true. What was wrong was reporting it as a rejection: `SyncCoordinator` treats a rejected
+   * pull as a failed scope and stops, so the push half of the exchange never ran and a peer
+   * that merely repeated itself left the two devices out of step.
+   */
   @Test
-  fun `a duplicated sequence number is rejected so retries are idempotent`() {
+  fun `a replayed payload is applied as a no-op`() {
     val target = FakeTarget(SyncScope.FOLLOWS)
-    val engine = engine(listOf(target))
-    val peer = TrustedPeer(2, "tablet", "s", 0).withApplied("follows", 5, now)
+    val peers = mutableListOf(TrustedPeer(2, "tablet", "s", 0))
+    val engineWithPeer = engine(listOf(target), peers)
 
     val duplicate = SyncPayload(
       scope = "follows",
@@ -112,11 +120,53 @@ class SyncEngineTest {
       entries = SyncCodec.encodeRecords(listOf(alive("a", Hlc(1, 0), device = 2))),
     )
 
-    val result = engine.applyPayload(duplicate, peer)
+    val result = engineWithPeer.applyPayload(duplicate, peers.first().withApplied("follows", 5, now))
 
-    assertFalse(result.accepted)
-    assertTrue(result.rejectedReason!!.contains("已应用"))
-    assertTrue(target.records.isEmpty())
+    assertTrue(result.accepted, "a replay must not fail the exchange")
+    assertEquals(0, result.applied)
+    assertTrue(target.records.isEmpty(), "nothing may reach the store twice")
+    // ...and the log still says what happened, instead of looking like an empty success.
+    assertEquals("该版本已应用，跳过", engineWithPeer.logEntries().first().note)
+  }
+
+  /**
+   * A sender whose process restarted must still be accepted.
+   *
+   * The watermark lives in [TrustedPeer] (persisted), the sender's counter lives in the
+   * engine (not persisted). When the counter started at 0 on every launch, a restarted device
+   * sent payloads numbered below the peer's watermark and every one of them was refused:
+   * sync did nothing at all, one tap at a time, until the counter climbed back past it.
+   */
+  @Test
+  fun `a payload from a restarted sender still reaches the receiver`() {
+    val receiverPeers = mutableListOf(TrustedPeer(2, "tablet", "s", 0))
+    val receiver = engine(listOf(FakeTarget(SyncScope.FOLLOWS)), receiverPeers, deviceId = 1)
+
+    val firstTarget = FakeTarget(SyncScope.FOLLOWS)
+    firstTarget.put(alive("douyu:1", Hlc(5, 0), device = 2))
+    val firstProcess = engine(listOf(firstTarget), deviceId = 2)
+    val first = firstProcess.buildPayload(SyncScope.FOLLOWS)!!
+    assertTrue(receiver.applyPayload(first, receiverPeers.first()).accepted)
+
+    // The other device was closed and reopened: a new engine, with no memory of the old
+    // counter, and one more room followed after the restart.
+    now += 60_000
+    val secondTarget = FakeTarget(SyncScope.FOLLOWS)
+    secondTarget.put(alive("douyu:1", Hlc(5, 0), device = 2))
+    secondTarget.put(alive("douyu:2", Hlc(6, 0), device = 2))
+    val secondProcess = engine(listOf(secondTarget), deviceId = 2)
+    val second = secondProcess.buildPayload(SyncScope.FOLLOWS)!!
+
+    val result = receiver.applyPayload(second, receiverPeers.first())
+
+    // The watermark the receiver stored before the restart, for the failure message only.
+    val watermark = receiverPeers.first().appliedSequences["follows"]
+    assertTrue(
+      result.accepted,
+      "the restarted sender's payload (${second.sequence}) was refused against a watermark of $watermark",
+    )
+    assertEquals(1, result.applied, "the room followed after the restart must arrive")
+    assertEquals(second.sequence, receiverPeers.first().appliedSequences["follows"])
   }
 
   @Test

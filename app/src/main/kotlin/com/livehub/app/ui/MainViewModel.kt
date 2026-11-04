@@ -980,6 +980,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun unpair(deviceId: Long) {
     container.syncEngine.unpair(deviceId)
+    // Drop the address too: it belongs to a pairing that no longer exists, and leaving it in
+    // the persisted table would keep it in play for the next sweep.
+    container.syncController.forgetPeer(deviceId)
     refreshPeers()
     _state.update { it.copy(message = "已解除配对") }
   }

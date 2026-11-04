@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.livehub.core.model.Platform
+import com.livehub.core.sync.DiscoveredPeer
 import com.livehub.core.sync.TrustedPeer
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -58,6 +59,7 @@ class UserPreferences(private val context: Context) {
   private val keySettings = stringPreferencesKey("settings_json")
   private val keyDeviceId = longPreferencesKey("sync_device_id")
   private val keyPeers = stringPreferencesKey("sync_peers_json")
+  private val keyAddresses = stringPreferencesKey("sync_addresses_json")
 
   @Volatile private var cached: UserSettings? = null
 
@@ -147,6 +149,30 @@ class UserPreferences(private val context: Context) {
   fun saveTrustedPeers(peers: List<TrustedPeer>) {
     val encoded = json.encodeToString(peers)
     runBlocking { context.dataStore.edit { it[keyPeers] = encoded } }
+  }
+
+  // ---------------------------------------------------------------- peer addresses
+
+  /**
+   * Where each paired device was last seen.
+   *
+   * Stored apart from [trustedPeers] because it is the one part of a pairing that legitimately
+   * goes stale: the secret identifies the device, the address only says where it was
+   * yesterday. Keeping it in memory alone is what left a restarted app with no way to reach a
+   * peer except mDNS — and a router that blocks multicast made that "不在线" forever.
+   */
+  fun peerAddresses(): List<DiscoveredPeer> = runBlocking {
+    val raw = context.dataStore.data.first()[keyAddresses]
+    if (raw.isNullOrBlank()) {
+      emptyList()
+    } else {
+      runCatching { json.decodeFromString<List<DiscoveredPeer>>(raw) }.getOrDefault(emptyList())
+    }
+  }
+
+  fun savePeerAddresses(addresses: List<DiscoveredPeer>) {
+    val encoded = json.encodeToString(addresses)
+    runBlocking { context.dataStore.edit { it[keyAddresses] = encoded } }
   }
 
   private companion object {
