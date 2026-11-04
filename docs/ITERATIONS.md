@@ -3599,3 +3599,92 @@ bounds.right  <= root.right
 - `关联设备` 弹层（第二十一轮）：要么在 Robolectric 里量到截断，要么写进 README 已知限制。
 - 墓碑 GC 的 per-peer 水位字段。
 - 收尾审计：`grep TODO`、死代码、README 与代码一致性，然后才谈"目标达成"。
+
+---
+
+## 第三十六轮迭代：「关联设备」弹层——一条记错的结论，和一个没定位的问题
+
+第二十一轮留下的疑点原文是"`AlertDialog` 的 text 槽被窗口高度截断且自己不滚"。这轮先量，
+结论分成两半：**竖屏那条记录是错的**，**横屏那个挂死是真的，但没定位到原因**。
+
+### 一、竖屏最小屏：没有截断，原记录错在把"挂死"当成了"截断"
+
+`SyncDialogSpaceTest`（Robolectric，320×470dp）打开弹层后量到：
+
+- 弹层窗口是 **320×380 px**，比 470dp 的屏幕矮，没有超出显示器；
+- 正文最后一行「重新生成本机匹配码」的 bounds 完全落在弹层窗口内。
+
+两条都绿。第二十一轮的怀疑来自"给它加 `verticalScroll` 后 Robolectric 60 秒没 idle"——
+现测下来，真正的原因是 `SyncScreen` 里那个倒计时 `LaunchedEffect`：`secondsLeft > 0` 时它
+一直 `delay(1_000)` 循环，`waitForIdle` 永远等不到 idle（测试里传 `pairingCodeSecondsLeft = 0`
+就完全正常）。把"测试挂死"直接读成"UI 被截断"，是这一条记录错得最贵的地方。
+
+### 二、横屏 640×360：复现了那次挂死，但没找到机制
+
+同一套断言加上 `@Config(qualifiers = "w640dp-h360dp-land")` 就红了：
+
+```
+androidx.test.espresso.AppNotIdleException:
+  Compose did not get idle after 125826 attempts in 60 SECONDS.
+```
+
+125826 —— 与第二十一轮记录里的 125201 是同一个现象。
+
+三组探针分离变量（临时文件，跑完即删）：
+
+| 窗口 | 弹层 | 结果 |
+| --- | --- | --- |
+| 600×800 | 打开 | ✅ idle |
+| 320×360 | 打开 | ✅ idle |
+| 640×360 | 不打开 | ✅ idle |
+| 640×360 | 打开 | ❌ 60 秒不 idle |
+
+所以需要**"宽且矮的窗口"+ 弹层同时成立**；既不是单纯宽、也不是单纯矮，也不是页面本身。
+
+试过两种修法，都没治好：
+
+1. 把手写 `Dialog` 换掉 `AlertDialog`（显式 `widthIn(max = 420.dp)` + 正文 `verticalScroll`
+   + `weight(fill = false)`，避开 `AlertDialog` 内部 `Modifier.width(IntrinsicSize.Max)` 的
+   内在度量）→ 仍然 146622 次不 idle。
+2. 在此基础上套 `BoxWithConstraints`，把 Surface 钉在窗口 `maxHeight - 32.dp` 内（假设是
+   "内容高于窗口 → 窗口尺寸来回改"）→ 仍然 107106 次不 idle，只是次数变少。
+
+两条改动**都没有保留**：`SyncScreen.kt` 逐字节回退到 `7580323`，弹层回到 `AlertDialog`。
+没有证据支撑的重写不该留在主干上——这是这轮花的学费，也是它唯一的产出形式。
+
+顺带一条实测：`Dialog`（以及 `AlertDialog`）的根节点本身已经带 `IsDialog` 语义，我一度又
+加了一个，测试立刻报"expected exactly 1 node but found 2"。手写弹层不需要自己补这个语义。
+
+### 三、真机上能测什么：弹层第一次有设备侧覆盖
+
+`SyncDialogDeviceTest`（仪器测试，模拟器竖屏）打开弹层、输入六位、断言「关联」在满六位前
+禁用、满六位后可用。这个弹层此前**没有任何测试、也没有任何截图**——它能带着一个横屏挂死
+活到第三十六轮，原因就是没人自动打开过它。
+
+### 四、本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **539** 条，failures=0 errors=0（537 → 539，`SyncDialogSpaceTest` 2 条） |
+| 仪器测试 | ✅ **47** 条 `@Test`（46 → 47，新增 `SyncDialogDeviceTest`；截图仍 38 张） |
+| Release assembly（R8） | ✅ |
+
+中间的失败也照记：本轮在 CI 上红了四次，前三次分别是编译错误（`isDialog` 不存在、
+`SemanticsProperties.IsDialog` 是 `Unit` 类型）、`14b-sync-pairing-dialog` 拍成纯色图
+（`capture()` 读主窗口根节点，弹层在另一个窗口）、以及未修好的横屏挂死。第四次（回退 +
+真机用例）三 job 全绿。
+
+### 五、留下的问题（如实写）
+
+- **横屏 640×360 打开弹层时 Compose 不收敛**，机制未定位。真机是否冻结**未知**：跑仪器
+  测试的模拟器只有竖屏。复现方式写在 `SyncDialogSpaceTest` 文件末尾与 runbook 里。
+- 下一轮若要继续查，建议方向是逐组件二分弹层内容（`OutlinedTextField` 是头号嫌疑），
+  而不是再猜窗口尺寸——那已经被证伪一次了。
+
+### 下一轮
+
+- 收尾审计（本轮已顺手做过一遍：`grep TODO`/注释掉的代码/空 catch/调试输出全无，README 的
+  "30 分钟刷新"与"播放器重试一次"两条都对着代码核过）。
+- 墓碑 GC 的 per-peer 水位字段。
+- 横屏弹层挂死：按上面的二分方向继续，或明确接受"横屏下未验证"并写进 README 已知限制。
