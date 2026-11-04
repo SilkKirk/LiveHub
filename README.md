@@ -209,7 +209,13 @@ keyPassword=******
 - 仍在服务的 `webcast/feed` **忽略** `partition`、`partition_type`、`tag_id` 参数，
   `count` 被服务端截断为 **6 条**、`offset` 也被忽略。它是签名被拒时的降级路径：
   此时列表会显示推荐流而不是所选分区，属于真实降级而非正常路径。
-- 搜索接口参考项目没有实现，因此无从对照；UI 已如实说明"只支持按房间号搜索"。
+- 搜索按**房间号**（webRid）走 `room/web/enter`，与参考项目
+  `AndroidDtvRepository.searchAnchors` 的抖音分支一致（那里也是
+  `fetchRoomEnter(trimmed)` → 一张卡，`roomId` 就是用户输入的那串数字）。按昵称/标题的
+  关键词搜索走不通：真实存在的 `/aweme/v1/web/live/search/` 对匿名请求回
+  `status_code = 2483`「请先登录，再继续搜索吧」，本应用没有抖音账号。
+  早先版本调用的是 `webcast/search/partition/room/`——**这个路径在三个域名上都是 404**，
+  也是搜索页曾经直接打印出 `HTTP 404 for <url>` 的原因（第四十一轮修）。
 
 「已经到底了」的提示仍然保留：feed 只有一页，分区页在没有 `has_more` 时才判到底。
 

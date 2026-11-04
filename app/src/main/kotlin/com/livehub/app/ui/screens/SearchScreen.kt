@@ -158,13 +158,26 @@ private val SEARCH_HINTS = mapOf(
   Platform.BILIBILI to "输入关键词后按回车，可搜索 B 站主播与直播间。",
 )
 
+/**
+ * What the field's own label promises, where the generic wording would be a lie.
+ *
+ * The label used to read「搜索 抖音 主播 / 直播间」on a screen whose only working input is a
+ * room number — so the first thing a user tried (a streamer's name) was also the one thing
+ * Douyin's anonymous API cannot answer.
+ */
+private val SEARCH_LABELS = mapOf(
+  Platform.DOUYIN to "输入抖音房间号",
+)
+
 @Composable
 private fun SearchField(state: UiState, onAction: (UiAction) -> Unit) {
   OutlinedTextField(
     value = state.searchQuery,
     onValueChange = { onAction(UiAction.UpdateQuery(it)) },
     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-    label = { Text("搜索 ${state.platform.displayName} 主播 / 直播间") },
+    label = {
+      Text(SEARCH_LABELS[state.platform] ?: "搜索 ${state.platform.displayName} 主播 / 直播间")
+    },
     singleLine = true,
     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
     trailingIcon = {

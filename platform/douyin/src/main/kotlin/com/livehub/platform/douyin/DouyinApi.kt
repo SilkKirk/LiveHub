@@ -6,6 +6,7 @@ import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.core.network.HttpClient
 import com.livehub.core.network.Texts
+import com.livehub.platform.api.PlatformAuthRequiredException
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
 import kotlinx.serialization.json.Json
@@ -315,29 +316,42 @@ class DouyinApi(
       ?.let(Texts::normalizeUrl)
   }
 
+  /**
+   * Douyin "search": one room id, resolved through `room/web/enter`.
+   *
+   * That is what the reference client does — `AndroidDtvRepository.searchAnchors` has a
+   * `Platform.Douyin` branch that calls `fetchRoomEnter(trimmed)` and returns a single
+   * `Streamer` whose id is the text that was typed. (An earlier round recorded "the reference
+   * has no Douyin search"; the grep behind that only looked for a `douyinSearchApi`, so it
+   * missed the inline branch.) Keyword search is what does not exist anonymously: the live
+   * search endpoint that *is* real, `www.douyin.com/aweme/v1/web/live/search/`, answers
+   * `status_code = 2483` / `请先登录，再继续搜索吧` to an anonymous caller.
+   *
+   * The endpoint this used to call, `live.douyin.com/webcast/search/partition/room/`, does not
+   * exist on any host: measured 2026-11-04 it answers `404 Page not found` on `live.douyin.com`
+   * and `www.douyin.com`, and `404 Not Found` on `webcast.amemv.com` — which is exactly the
+   * `HTTP 404 for <url>` the search screen used to print.
+   *
+   * Deviation from the reference: it returns a card even when `enter` found no room (defaults
+   * "直播中" / "抖音主播" fill it in). Here an unknown id yields an empty result, so the screen
+   * says "没有找到" instead of showing a room that does not exist.
+   */
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
-    val params = listOf(
-      "device_platform" to "webapp",
-      "aid" to "6383",
-      "channel" to "channel_pc_web",
-      "search_channel" to "aweme_live",
-      "keyword" to keyword,
-      "search_source" to "normal_search",
-      "query_correct_type" to "1",
-      "is_filter_search" to "0",
-      "offset" to ((page - 1) * PAGE_SIZE).toString(),
-      "count" to PAGE_SIZE.toString(),
-    )
-    val url = "$URL_SEARCH?${DouyinSigner.signQuery(params)}"
-    val response = http.get(url, headers = headers())
-    val root = response.requireSuccess().let { parseObject(it.body, "search") }
-    val list = root["data"]?.jsonArray ?: JsonArray(emptyList())
-    val rooms = list.mapNotNull { element ->
-      val obj = element as? JsonObject ?: return@mapNotNull null
-      val live = obj["lives"]?.jsonObject ?: obj
-      parseRoomCard(live)
+    val trimmed = keyword.trim()
+    if (trimmed.isEmpty()) return emptyList<Streamer>() to false
+    // One id can only produce one card, so there is no second page to ask for.
+    if (page > 1) return emptyList<Streamer>() to false
+    if (trimmed.any { !it.isDigit() }) {
+      throw PlatformAuthRequiredException(
+        "抖音的网页版搜索要求登录（接口返回 2483「请先登录，再继续搜索吧」），目前只能按房间号搜索：" +
+          "在抖音直播间链接里取最后那串数字，例如 1002683794。",
+        Platform.DOUYIN,
+      )
     }
-    return rooms to (rooms.size >= PAGE_SIZE)
+    val info = enterRoom(trimmed) ?: return emptyList<Streamer>() to false
+    // The card has to carry the id the user typed, not the payload's internal `id_str`: every
+    // later call (`roomDetail`, `playback`, the follow list) sends it back as `web_rid`.
+    return listOf(info.copy(roomId = trimmed).toStreamer()) to false
   }
 
   /**
@@ -360,7 +374,19 @@ class DouyinApi(
     ).requireSuccess().body
   }.getOrDefault("")
 
-  suspend fun roomInfo(roomId: String): DouyinRoomInfo {
+  suspend fun roomInfo(roomId: String): DouyinRoomInfo = enterRoom(roomId)
+    ?: throw PlatformProtocolException(
+      "抖音直播间信息获取失败，该直播间可能未开播",
+      Platform.DOUYIN,
+    )
+
+  /**
+   * One `room/web/enter` round trip, or null when the payload carries no room.
+   *
+   * Split out of [roomInfo] so [search] can ask "is there a room with this id?" without
+   * turning "no" into the error the room page needs to show.
+   */
+  private suspend fun enterRoom(roomId: String): DouyinRoomInfo? {
     val params = listOf(
       "aid" to "6383",
       "app_name" to "douyin_web",
@@ -399,11 +425,7 @@ class DouyinApi(
       ?: data?.get("room")?.let { it as? JsonObject }
     // `data.user` carries the anchor identity; the room object does not repeat it.
     val anchor = data?.get("user")?.let { it as? JsonObject }
-    val room = entered ?: findInFeed(roomId)
-      ?: throw PlatformProtocolException(
-        "抖音直播间信息获取失败，该直播间可能未开播",
-        Platform.DOUYIN,
-      )
+    val room = entered ?: findInFeed(roomId) ?: return null
     val owner = room["owner"]?.jsonObject
     val streamUrl = room["stream_url"]?.jsonObject
     // `enter` puts the anchor on `data.user`; the feed items carry it on the room's `owner`.
@@ -609,31 +631,6 @@ class DouyinApi(
       if (id == roomId) candidate else null
     }
   }
-  private fun parseRoomCard(element: JsonElement): Streamer? {
-    val obj = element as? JsonObject ?: return null
-    val room = obj["room"]?.jsonObject ?: obj
-    val idText = room["id_str"]?.jsonPrimitive?.contentOrNull
-      ?: room["web_rid"]?.jsonPrimitive?.contentOrNull
-      ?: room["id"]?.jsonPrimitive?.longOrNull?.toString()
-      ?: return null
-    val owner = room["owner"]?.jsonObject
-    return Streamer(
-      platform = Platform.DOUYIN,
-      roomId = idText,
-      streamerName = owner?.get("nickname")?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "抖音主播" },
-      title = room["title"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "直播中" },
-      coverUrl = room["cover"]?.jsonObject?.get("url_list")?.jsonArray?.firstOrNull()
-        ?.jsonPrimitive?.contentOrNull?.let(Texts::normalizeUrl),
-      avatarUrl = owner?.get("avatar_thumb")?.jsonObject?.get("url_list")?.jsonArray
-        ?.firstOrNull()?.jsonPrimitive?.contentOrNull?.let(Texts::normalizeUrl),
-      viewerCount = room["stats"]?.jsonObject?.get("total_user")?.jsonPrimitive?.longOrNull
-        ?: room["user_count_str"]?.jsonPrimitive?.contentOrNull?.let { parseCount(it) }
-        ?: 0,
-      // Same rule as the detail page, so a search hit never promises an unplayable stream.
-      isLive = isRoomOnAir(room["stream_url"]?.jsonObject),
-      updatedAt = System.currentTimeMillis(),
-    )
-  }
 
   private fun parseCount(raw: String): Long {
     val trimmed = raw.trim()
@@ -689,7 +686,6 @@ class DouyinApi(
      */
     const val URL_PARTITION_V2 =
       "https://live.douyin.com/webcast/web/partition/detail/room/v2/"
-    const val URL_SEARCH = "https://live.douyin.com/webcast/search/partition/room/"
     const val URL_ENTER = "https://live.douyin.com/webcast/room/web/enter/"
     const val PAGE_SIZE = 20
   }
