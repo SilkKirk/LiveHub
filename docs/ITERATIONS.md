@@ -3453,3 +3453,85 @@ runbook 待办第 12 条那句"wechat.jpg 是同步页的心智模型来源"是�
 - `BilibiliApi.playback` 的 `preferredLine`（第二十六轮起挂着）：二选一并写依据。
 - `关联设备` 弹层在横屏/大字号下的截断疑点（第二十一轮起挂着，要求先在真机量到）。
 - 墓碑 GC 的 per-peer 水位字段（第三十二轮只删掉了假实现）。
+
+---
+
+## 第三十四轮迭代：B站「线路」点了没用——`preferredLine` 收了从来没读
+
+第二十六轮留下的问题，这次二选一选了"真的实现线路轴"。原因写在下面：参考项目没有线路
+概念，但 B 站**确实**为同一档画质提供多台 CDN，而这正是 App 里「线路」这个轴的含义
+（斗鱼就是 CDN、虎牙也是 CDN）。
+
+### 缺陷是什么
+
+`BilibiliApi.playback(roomId, preferredQn, preferredLine)` 的 `preferredLine` 一路从
+`MainViewModel.selectQuality` → `ResilientPlatformRepository` → `BilibiliAdapter.playback`
+传进函数，**函数体里一次都没读**。同时每个 codec 只取 `url_info[0]` 一个 host，于是：
+
+- 每档画质只有 1 条线路 → `lines.size == 1` → `PlayerSettings` 要求 `lines.size > 1` 才渲染
+  「线路」行，所以 B 站的收视面板里**根本没有这一行**；
+- 即使某间房因为各档画质的第一台主机不同而凑出两行，点第二条也只是把参数丢掉，回来还是
+  同一台主机。
+
+用户侧的表现是"别的平台能选线路，B站不能"，而代码里那个参数看起来是支持的。
+
+### 依据：这次真抓了一份 `getRoomPlayInfo`
+
+`fixtures/bilibili-playinfo.json`（房间 545068，2026-11-04，匿名 `qn=10000`）的形状：
+
+| 容器/编码 | qn | base_url | 两个 host |
+| --- | --- | --- | --- |
+| flv / avc、hevc | 250 | `…/live-bvc/432850/….flv?` | `d1--cn-gotcha09` / `…09b` |
+| ts / avc、hevc | 250 | `…/live-bvc/536952/….m3u8?` | `d1--cn-gotcha104` / `…104b` |
+| fmp4 / avc、hevc | 250 | `…/live-bvc/690443/…/index.m3u8?` | `d1--cn-gotcha209` / `…209b` |
+
+三条结论：**六条 codec 条目全是同一档画质**（所以"一档画质一条变体"必须保留）；**每条都
+带两个 host**（所以线路轴有东西可选）；**三个容器的 host 家族不同**（所以线路不能简单地把
+所有 host 混在一起）。顺带确认 `accept_qn = [10000, 400, 250]` 而 `current_qn = 250`，与
+第二十六轮"匿名只给 250"的记录一致。
+
+### 怎么修的
+
+1. 保留每个 `url_info` 候选（`Candidate(qn, baseUrl, host, url, isHls, rank)`），不再只取第一个；
+2. 每档画质仍只出一条变体，容器按 `BilibiliQuality.rankOf` 选（`index.m3u8` > `.m3u8`
+   > `.flv`），同 rank 时按 base_url 再按 host 定序，保证结果稳定；
+3. **线路轴 = 该档画质实际使用的那个容器的 host 列表**。把三个容器混在一起会得到 6 个 chip，
+   其中 4 个指向播放器根本没在用的格式——容器（flv/ts/fmp4）是技术差异，不是用户能感知的
+   "线路"；
+4. `preferredLine` 在这个列表里选 host；选中了不存在的主机（换了房间、CDN 下线）就回退到该
+   容器第一台，而不是抛错——陈旧偏好也得能播。
+
+`lines` 只有 1 条时 UI 仍然不渲染「线路」行，这条规则没变（只有一台 CDN 的房间不该出现一个
+假的二选一）。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **536** 条，failures=0 errors=0（529 → 536，新增 7） |
+| 仪器测试 | ✅ 46 条 `@Test`（45 → 46，截图 37 → 38 张） |
+| Release assembly（R8） | ✅ |
+
+新增 `BilibiliPlaybackTest` 7 条，全部打在真实抓包上——**B站模块此前没有任何 playback
+测试**，`getRoomPlayInfo` 的解析只被第二十六轮的人工核对覆盖过：
+
+- `six codec entries collapse into one quality`（六条 → 一档，且落在 fmp4/avc、`index.m3u8`）
+- `the line axis lists both CDNs of the chosen container`（`…209` / `…209b` 两台，顺序与响应一致）
+- `a preferred line switches the url to that CDN`（**本轮缺陷的直接反证**）
+- `an unknown or stale line falls back to the first CDN`（拿另一容器的 `…09` 当陈旧偏好）
+- `a quality the room does not offer falls back to the best one`（要 400 给 250）
+- `the url carries the host the path and the signed query`
+- `the request asks for the captured room`（`room_id=545068&…&qn=10000`）
+
+截图新增 `22c-player-settings-bilibili`：B站播放设置面板里第一次出现「线路」行，两台 CDN
+（`d1--cn-gotcha.bilivideo.com` 选中 / `cn-hb-bj.bilivideo.com`）。其余 **37 张逐字节相同**
+——本轮只改了数据层。
+
+### 下一轮
+
+- 横屏设置抽屉的截图覆盖：加一个 `@Config(qualifiers = "w640dp-h360dp-land")` 的变体类，
+  把 `PlayerSettings` 在横屏下也拍一张。
+- `关联设备` 弹层的截断疑点（第二十一轮）：要求先在真机上量到，不能凭推测改；如果没有真机，
+  就把它写进 README 的已知限制并说明为什么测不到。
+- 墓碑 GC 的 per-peer 水位字段（第三十二轮只删掉了假实现）。
