@@ -99,12 +99,34 @@ class SyncDialogSpaceTest {
     )
   }
 
-  // There is no landscape case here on purpose. At 640x360 the dialog never settles: Robolectric
-  // reports `AppNotIdleException: Compose did not get idle after 107106 attempts in 60 SECONDS`.
-  // Narrowing the variables showed it needs a dialog *and* a wide, short window (600x800 with
-  // the dialog, 320x360 with the dialog, and 640x360 without it all idle), and rebuilding the
-  // dialog as a hand-written `Dialog` with an explicitly capped height did not remove the loop,
-  // so that rewrite was reverted rather than kept on a disproven theory. Whether a real device
-  // freezes at this size is **not** known: the emulator that runs the instrumented suite is
-  // portrait only. Recorded in docs/ITERATIONS.md 第三十六轮 and in the runbook.
+  /**
+   * The shortest window the app renders in: a 640×360 landscape phone.
+   *
+   * This is the case that exposed the defect. Bisecting the dialog one component at a time
+   * showed the trigger is a `fillMaxWidth()` text field inside the dialog: `Dialog` + text,
+   * + button, a weighted scroll column, a minimal `AlertDialog`, and even the same field
+   * *outside* a dialog all idle at this size; adding the filling field stops the composition
+   * from settling (`AppNotIdleException`, ~198k attempts in 60s). The dialog now bounds the
+   * field instead of filling, and this test is the regression guard.
+   */
+  @Test
+  @Config(qualifiers = "w640dp-h360dp-land")
+  fun `the dialog also fits a landscape phone`() {
+    openDialog()
+
+    val dialog = composeRule.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
+    val heightDp = with(composeRule.density) { dialog.height.toDp().value }
+    val lastRow = composeRule.onNodeWithText("重新生成本机匹配码").fetchSemanticsNode().boundsInRoot
+
+    assertTrue("the dialog is ${heightDp}dp tall, the screen only has 360dp", heightDp <= 360f)
+    assertTrue(
+      "the last row ends at ${lastRow.bottom} but the dialog stops at ${dialog.bottom}",
+      lastRow.bottom <= dialog.bottom,
+    )
+  }
+
+  // The finding above is recorded in docs/ITERATIONS.md 第三十七轮: the loop needs a dialog and
+  // a wide, short window, and it is a `fillMaxWidth()` text field inside the dialog that causes
+  // it. A real device was never observed freezing — the instrumented suite runs portrait only —
+  // so the fix is justified by the bounded-vs-filled comparison, not by device evidence.
 }

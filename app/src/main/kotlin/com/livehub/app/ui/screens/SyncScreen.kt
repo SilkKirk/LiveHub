@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -248,7 +249,18 @@ private fun MatchingCodeDialog(
     onDismissRequest = onDismiss,
     title = { Text("关联设备") },
     text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      // 280dp, not `fillMaxWidth`. `AlertDialog` measures this slot with
+      // `Modifier.width(IntrinsicSize.Max)`, and a `fillMaxWidth()` text field inside it makes
+      // the width depend on the intrinsic width of a field whose own intrinsic width depends on
+      // the width it was given: on a wide *and* short window (640×360dp, a landscape phone) the
+      // measure pass never settles — measured as `AppNotIdleException` after 60s and ~198k
+      // attempts, while the same field outside a dialog idles. Bounding the field instead of
+      // filling removes the circularity; 280dp is also Material's own text-field minimum, so
+      // the dialog looks the same as before and still fits a 320dp screen.
+      Column(
+        modifier = Modifier.widthIn(max = 280.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
         Text(
           text = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
           style = MaterialTheme.typography.bodySmall,
@@ -261,7 +273,6 @@ private fun MatchingCodeDialog(
           placeholder = { Text("123456") },
           singleLine = true,
           keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-          modifier = Modifier.fillMaxWidth(),
         )
         // This device's own code is shown for comparison, with its remaining life: the
         // common mistake is to type your own code into your own device, which looks like
