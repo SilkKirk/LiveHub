@@ -4106,3 +4106,79 @@ hls/flv map 是否为空判断；搜索框占位文案是「输入抖音房间�
 建议改法：适配器返回的 `Streamer.roomId` 一律保持调用方传入的 `web_rid`
 （`info.copy(roomId = roomId).toStreamer()`，`roomDetail` 与 `playback` 两处），
 `DouyinRoomInfo.roomId` 留给弹幕/播放内部用。本轮只修搜索，未动它。
+
+---
+
+## 第四十二轮迭代：播放页把抖音房间换成内部 id——从播放页关注的房间打不开
+
+### 缺陷是什么
+
+从搜索或分区点进一个抖音房间，在播放页点关注，关注列表里会出现这张卡，但这张卡：
+
+- 永远显示"未开播"（后台刷新拿不到状态）；
+- 点进去打不开，报"抖音直播间信息获取失败"。
+
+第四十一轮末尾查实后记进了待办，本轮修。
+
+### 为什么会这样
+
+`MainViewModel.openRoom` 在播放源解析成功后，会把 `state.room` 换成 `PlaybackSource.room`。
+抖音的 `PlaybackSource.room` 来自 `DouyinRoomInfo.toStreamer()`，而 `DouyinRoomInfo.roomId`
+取的是 `enter` 响应里的 `id_str`（内部 id，如 `7703900142109592362`），**不是** `web_rid`
+（房间链接里那串数字，`1002683794`）。播放页的关注按钮写的正是 `state.room`，于是关注记录里
+落的是内部 id；之后：
+
+- `FollowRefreshWorker` → `liveStatus(roomId = 内部 id)` → `enter?web_rid=<内部 id>`；
+- 点卡片 → `playback(内部 id)` → 同一个 `enter`。
+
+实测（2026-11-04，本机 python 直连）：`enter?web_rid=7703900142109592362` 回
+`status_code = 4001038`、0 个房间；`enter?web_rid=1002683794` 回 200、536 241 字节、标题
+「我的红眼看了不烧心！！」。所以这条记录既刷新不了状态，也打不开。
+
+### 两个 id 的分工（本轮写清）
+
+- **`web_rid`**：房间在应用里的身份。URL、搜索、分区列表、关注列表、`roomDetail` /
+  `playback` 的参数，全是它。
+- **`id_str`**：弹幕握手要的数字房间号。只在 `DouyinRoomInfo` 内部用——`danmaku` 先尝试从
+  房间页 HTML 解析 `room.id_str`，解析不到才回落到 `roomInfo().roomId`。
+
+把内部 id 默认当成"房间号"传出去，就是这一轮的 bug。
+
+### 怎么修的
+
+- `DouyinRoomInfo.toStreamer(roomId: String)`：参数**必填**（去掉默认值，让同一个坑不可能
+  再犯一次），文档写明两个 id 的分工。
+- `DouyinAdapter.roomDetail` / `playback` 传调用方用的 `roomId`；`DouyinApi.search` 传用户输入。
+- 顺带核了另外三个平台：斗鱼、虎牙、B 站的 `roomDetail` / `playback` 本来就把调用方的 id
+  传下去（虎牙 `parseRoomHtml(roomId, …)` 也是），**只有抖音漏了**。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ **567** 条（上一轮 564，本轮 +3），failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `c6ec369` 三个 job 全绿 |
+
+新增 `DouyinRoomIdentityTest` 3 条：`roomDetail` 保留 `web_rid`；播放页拿到的 `roomId` 能
+再被 `roomDetail` 打开（即"关注 → 刷新"那条链路，且断言每个请求都带
+`web_rid=1002683794`）；`enter` 的内部 id 仍留在 payload 上供弹幕使用。
+`DouyinPlaybackTest` 里 `assertEquals("7380123456789012345", source.room.roomId)` 那条断言
+当年钉住的正是这个 bug，改成断言"调用方传进来的 id"，并写明原因。
+
+### 没做到的
+
+- **旧记录不会自动修好**：用 v0.11.0/0.11.1 从播放页关注过的抖音房间，记录里是内部 id，
+  需要在关注列表里取消再重新关注一次。没有做自动迁移——把内部 id 换算回 `web_rid` 需要一次
+  额外请求，而且只在真机上才验证得了，属于"猜"的范围。
+- 真机回归仍要用户做：CI 只覆盖到适配器与解析层。
+
+### 下一轮（本轮量到的）
+
+**抖音关注列表的状态刷新太重。** `FollowRefreshWorker` 与进入关注页时的刷新，对每个抖音房间
+调用 `liveStatus` → `enter`，而那一个响应实测 **536 KB**（整份房间对象，含弹幕、商店、
+连麦等全部字段）。关注 20 个抖音房间，进一次关注页就要拉约 10 MB。可选方向：换更轻的状态
+接口（`webcast/room/web/enter` 之外有没有只回状态的端点需要实测）、限制并发并缓存结果、
+或把刷新做成可见的后台批处理。这属于性能改造，需要单独一轮并先量基线。
