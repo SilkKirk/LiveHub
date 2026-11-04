@@ -266,11 +266,12 @@ private fun MatchingCodeDialog(
     Surface(
       // `AlertDialog` used to carry this marker; a hand-built dialog has to set it itself or
       // accessibility services read the content as part of the screen behind it — and the
-      // tests would lose their `isDialog()` handle.
+      // tests would lose their `isDialog()` handle. The key is `SemanticsPropertyKey<Unit>` in
+      // this Compose version, so it takes `Unit` rather than `true`.
       modifier = Modifier
         .fillMaxWidth()
         .widthIn(max = 420.dp)
-        .semantics { this[SemanticsProperties.IsDialog] = true },
+        .semantics { this[SemanticsProperties.IsDialog] = Unit },
       shape = RoundedCornerShape(28.dp),
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 6.dp,
