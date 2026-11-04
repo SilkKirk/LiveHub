@@ -93,7 +93,7 @@ class SyncEngineTest {
     val result = engine.applyPayload(incoming, peer)
 
     assertTrue(result.accepted)
-    assertEquals(1, result.added)
+    assertEquals(1, result.applied)
     assertEquals(1, target.records.size)
     assertEquals("huya:9", target.records.first().key)
   }
@@ -173,14 +173,13 @@ class SyncEngineTest {
   }
 
   /**
-   * `buildAllPayloads` follows the *enabled* set, not merely the registered targets.
+   * The enabled set comes from the target registry, not from the scope enum.
    *
-   * Only the follow list is a scope now, so "several scopes, one enabled" can no longer be
-   * expressed with the enum — the same property is pinned by registering the target and
-   * enabling nothing.
+   * This used to be pinned through `buildAllPayloads`, a method only this test called; deleting
+   * it (dead production API) leaves the property to be asserted directly.
    */
   @Test
-  fun `buildAllPayloads only covers enabled scopes`() {
+  fun `enabledScopes follows the target registry`() {
     val follows = FakeTarget(SyncScope.FOLLOWS)
     fun engineFor(enabled: Set<SyncScope>) = SyncEngine(
       targets = MapSyncTargets(mapOf(SyncScope.FOLLOWS to follows), enabled = enabled),
@@ -191,11 +190,8 @@ class SyncEngineTest {
       clock = { now },
     )
 
-    assertTrue(engineFor(emptySet()).buildAllPayloads().isEmpty())
-
-    val payloads = engineFor(setOf(SyncScope.FOLLOWS)).buildAllPayloads()
-    assertEquals(1, payloads.size)
-    assertEquals("follows", payloads.first().scope)
+    assertTrue(engineFor(emptySet()).enabledScopes().isEmpty())
+    assertEquals(setOf(SyncScope.FOLLOWS), engineFor(setOf(SyncScope.FOLLOWS)).enabledScopes())
   }
 
   @Test

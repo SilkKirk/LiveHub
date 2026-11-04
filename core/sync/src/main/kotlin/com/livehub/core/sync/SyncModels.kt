@@ -129,15 +129,19 @@ data class TrustedPeer(
   }
 }
 
-/** Result of applying a remote payload. */
+/**
+ * Result of applying a remote payload.
+ *
+ * Two fields, because both were lies in the previous shape: `updated` was always 0 (nothing ever
+ * counted an update separately from an insert), `skipped` and `scope` were never read, and
+ * `total = added + updated` therefore just restated `added`. A record the peer won may replace a
+ * local one, so the count is [applied].
+ */
 data class SyncApplyResult(
-  val scope: SyncScope,
-  val added: Int,
-  val updated: Int,
-  val skipped: Int,
+  /** How many remote versions won the merge and reached the store. */
+  val applied: Int = 0,
   val rejectedReason: String? = null,
 ) {
-  val total: Int get() = added + updated
   val accepted: Boolean get() = rejectedReason == null
 }
 

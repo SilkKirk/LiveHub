@@ -63,7 +63,7 @@ class SyncCoordinator(
       var pulled = 0
       if (remote != null) {
         val applied = engine.applyPayload(remote, peer)
-        pulled = applied.added
+        pulled = applied.applied
         if (!applied.accepted) {
           outcomes += ScopeOutcome(scope, pulled = 0, pushed = 0, error = applied.rejectedReason)
           continue
@@ -103,7 +103,7 @@ class SyncCoordinator(
         }
         if (response != null) {
           val applied = engine.applyPayload(response, peer)
-          pulled += applied.added
+          pulled += applied.applied
         }
         pushed += payload.recordCount
       }

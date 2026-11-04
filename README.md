@@ -114,7 +114,7 @@
 
 | 平台 | 关键实现 | 测试覆盖 |
 | --- | --- | --- |
-| 斗鱼 | `ub98484234` 签名（原生 Kotlin 实现，无需 JS 引擎）、`@=value/` 弹幕协议、小端帧 | 签名公式、弹幕编解码、JSON 映射、清晰度选择 |
+| 斗鱼 | 播放签名优先**执行站点自己的 JS**（Rhino，`DouyuScriptSigner`），失败才回退到原生 Kotlin 公式（`DouyuSigner`）；`@=value/` 弹幕协议、小端帧 | 签名公式、弹幕编解码、JSON 映射、清晰度选择 |
 | 虎牙 | Tars/JCE 二进制编解码、`wsSecret` 防盗链签名、HTML 内嵌流信息解析 | Tars 读写往返、签名参数顺序、弹幕解码、GBK 回退 |
 | 抖音 | `X-Bogus`/`a_bogus` 签名、Protobuf 推送帧解码、gzip/zlib 解压 | Protobuf 编解码、弹幕字段提取、签名确定性 |
 | 哔哩哔哩 | WBI mixinKey 签名、`w_rid` 列表签名、16 字节大端弹幕帧与 zlib 递归解析 | 签名公式、mixinKey 置换表、帧编解码、Cookie 合并 |

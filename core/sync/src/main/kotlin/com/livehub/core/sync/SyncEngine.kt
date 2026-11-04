@@ -120,10 +120,6 @@ class SyncEngine(
     return payloads[chunkIndex.coerceIn(0, payloads.lastIndex)]
   }
 
-  /** Builds one payload per enabled scope. */
-  fun buildAllPayloads(): List<SyncPayload> =
-    targets.enabledScopes().mapNotNull { buildPayload(it) }
-
   /**
    * Local records the peer still needs.
    *
@@ -160,42 +156,18 @@ class SyncEngine(
    */
   fun applyPayload(payload: SyncPayload, peer: TrustedPeer?): SyncApplyResult {
     val scope = payload.parsedScope
-      ?: return SyncApplyResult(
-        scope = SyncScope.FOLLOWS,
-        added = 0,
-        updated = 0,
-        skipped = 0,
-        rejectedReason = "未知的同步范围: ${payload.scope}",
-      )
+      ?: return SyncApplyResult(rejectedReason = "未知的同步范围: ${payload.scope}")
 
     if (payload.schema > SyncPayload.SCHEMA) {
-      return SyncApplyResult(
-        scope = scope,
-        added = 0,
-        updated = 0,
-        skipped = 0,
-        rejectedReason = "对端版本过新 (schema=${payload.schema})",
-      )
+      return SyncApplyResult(rejectedReason = "对端版本过新 (schema=${payload.schema})")
     }
 
     if (peer != null && !peer.isNewer(scope.wireName, payload.sequence)) {
-      return SyncApplyResult(
-        scope = scope,
-        added = 0,
-        updated = 0,
-        skipped = 0,
-        rejectedReason = "该版本已应用 (sequence=${payload.sequence})",
-      )
+      return SyncApplyResult(rejectedReason = "该版本已应用 (sequence=${payload.sequence})")
     }
 
     val target = targets.targetFor(scope)
-      ?: return SyncApplyResult(
-        scope = scope,
-        added = 0,
-        updated = 0,
-        skipped = 0,
-        rejectedReason = "本机不支持该范围: ${scope.displayName}",
-      )
+      ?: return SyncApplyResult(rejectedReason = "本机不支持该范围: ${scope.displayName}")
 
     val incoming = SyncCodec.decodeRecords(payload.entries)
     val local = target.snapshot().map { record ->
@@ -235,12 +207,10 @@ class SyncEngine(
       ),
     )
 
-    return SyncApplyResult(
-      scope = scope,
-      added = outcome.remoteWins,
-      updated = 0,
-      skipped = outcome.identical + outcome.localWins,
-    )
+    // `remoteWins` is what actually reached the store: records the peer knew and we did not,
+    // plus records whose version beat ours (which replace a local record rather than adding
+    // one, hence `applied` rather than `added`).
+    return SyncApplyResult(applied = outcome.remoteWins)
   }
 
   /**
