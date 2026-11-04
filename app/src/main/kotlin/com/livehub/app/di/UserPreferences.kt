@@ -34,11 +34,18 @@ data class UserSettings(
   val autoRefreshFollows: Boolean = true,
   val lastPlatform: String = Platform.DOUYU.id,
   val syncScopes: List<String> = SyncScope.default.map { it.wireName },
+  /**
+   * Keywords the search screen shows, newest first.
+   *
+   * Projection of [historyRecords] — never written directly. See `HistoryStore`.
+   */
   val searchHistory: List<String> = emptyList(),
   /** Serialised follow records, including tombstones. */
   val followRecords: String = "",
   /** Serialised preference records used by the sync engine. */
   val preferenceRecords: String = "",
+  /** Serialised search-history records, including tombstones. */
+  val historyRecords: String = "",
   /**
    * Secret this device presents to paired peers.
    *
@@ -85,26 +92,7 @@ class UserPreferences(private val context: Context) {
   // Publish (not suspend) variants used from Compose callbacks.
   fun setThemeMode(mode: String) = update { it.copy(themeMode = mode) }
 
-  fun setDanmakuEnabled(enabled: Boolean) = update { it.copy(danmakuEnabled = enabled) }
-
-  fun setBlockedKeywords(keywords: List<String>) = update { it.copy(blockedKeywords = keywords) }
-
-  fun addSearchHistory(keyword: String) {
-    val trimmed = keyword.trim()
-    if (trimmed.isEmpty()) return
-    update { current ->
-      val next = (listOf(trimmed) + current.searchHistory.filterNot { it == trimmed }).take(20)
-      current.copy(searchHistory = next)
-    }
-  }
-
-  fun clearSearchHistory() = update { it.copy(searchHistory = emptyList()) }
-
   fun setLastPlatform(platform: Platform) = update { it.copy(lastPlatform = platform.id) }
-
-  fun setPreferredQuality(platform: Platform, quality: Int) = update {
-    it.copy(preferredQuality = it.preferredQuality + (platform.id to quality))
-  }
 
   fun setSyncScopes(scopes: Set<SyncScope>) =
     update { it.copy(syncScopes = scopes.map { scope -> scope.wireName }) }

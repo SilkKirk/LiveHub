@@ -10,7 +10,6 @@ import com.livehub.core.sync.SyncTarget
 import com.livehub.core.sync.SyncTargets
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -219,32 +218,49 @@ class FollowSyncTarget(private val store: FollowStore) : SyncTarget {
   }
 }
 
-/** [SyncTarget] implementation for scalar preferences. */
-class PreferencesSyncTarget(private val preferences: UserPreferences) : SyncTarget {
+/** [SyncTarget] implementation for the danmaku/playback settings. */
+class PreferencesSyncTarget(private val store: PreferencesStore) : SyncTarget {
   override val scope: SyncScope = SyncScope.PREFERENCES
 
-  override fun snapshot(): List<SyncRecord<out Any>> = runCatching {
-    SyncCodec.decodeRecords(preferences.settings.preferenceRecords)
-  }.getOrDefault(emptyList())
+  override fun snapshot(): List<SyncRecord<out Any>> = store.records()
 
   override fun apply(records: List<SyncRecord<out Any>>): Int {
     @Suppress("UNCHECKED_CAST")
     val typed = records as List<SyncRecord<JsonObject>>
-    val before = snapshot().associate { it.key to it.version }
-    val encoded = SyncCodec.encodeRecords(typed)
-    preferences.update { it.copy(preferenceRecords = encoded) }
-    return typed.count { before[it.key] != it.version }
+    return store.applyRemote(typed)
   }
 }
 
-/** Wires the available scopes for the app. */
+/** [SyncTarget] implementation for the search history. */
+class HistorySyncTarget(private val store: HistoryStore) : SyncTarget {
+  override val scope: SyncScope = SyncScope.HISTORY
+
+  override fun snapshot(): List<SyncRecord<out Any>> = store.records()
+
+  override fun apply(records: List<SyncRecord<out Any>>): Int {
+    @Suppress("UNCHECKED_CAST")
+    val typed = records as List<SyncRecord<JsonObject>>
+    return store.merge(typed)
+  }
+}
+
+/**
+ * Wires every scope the app can exchange.
+ *
+ * The set here has to cover all of [SyncScope]: the sync screen renders one chip per entry,
+ * so a scope with no target is a switch that silently does nothing on this device and answers
+ * the peer with an HTTP 404 it reports as a failure. `SyncScopeCoverageTest` pins that.
+ */
 class AppSyncTargets(
-  private val followStore: FollowStore,
   private val preferences: UserPreferences,
+  private val followStore: FollowStore,
+  private val preferencesStore: PreferencesStore,
+  private val historyStore: HistoryStore,
 ) : SyncTargets {
   private val targets = listOf(
     FollowSyncTarget(followStore),
-    PreferencesSyncTarget(preferences),
+    PreferencesSyncTarget(preferencesStore),
+    HistorySyncTarget(historyStore),
   ).associateBy { it.scope }
 
   override fun targetFor(scope: SyncScope): SyncTarget? = targets[scope]
