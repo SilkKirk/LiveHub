@@ -82,8 +82,9 @@ class BilibiliAuth(
     }
   }
 
-  fun logout() = cookieStore.clear()
-
+  // Logout is not here on purpose: clearing the cookie store is only half of it. The app
+  // records the logout as a synchronised tombstone (see CredentialStore), so that the paired
+  // device removes the login too instead of restoring it on the next exchange.
   fun isLoggedIn(): Boolean = cookieStore.isLoggedIn()
 
   /**
