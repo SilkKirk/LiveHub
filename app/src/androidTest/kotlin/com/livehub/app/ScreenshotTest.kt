@@ -109,9 +109,26 @@ class ScreenshotTest {
     streamer(Platform.DOUYU, "6", "呆妹儿小霸王", "深夜聊天，随机连麦", 32_400),
   )
 
+  /**
+   * 虎牙 rooms, enough of them to stay above `NO_MORE_HINT_THRESHOLD`.
+   *
+   * The list used to hold two, which is a shape the platform cannot produce: 虎牙 answers 120
+   * rooms per page on every gid, including 全部直播. Two rooms tripped the "已经到底了 · 虎牙
+   * 当前只提供这些直播" footer and made `20-huya-home` claim the site only had two live rooms.
+   */
   private val huyaRooms = listOf(
     streamer(Platform.HUYA, "10", "Uzi", "复出首播，感谢大家支持", 320_000),
     streamer(Platform.HUYA, "11", "骚男", "快乐游戏，快乐生活", 88_000),
+    streamer(Platform.HUYA, "12", "青蛙", "深夜上分，不鸽", 12_300),
+    streamer(Platform.HUYA, "13", "虎牙赛事", "TES vs iG 夏季赛", 1_204_517),
+    streamer(Platform.HUYA, "14", "董小飒", "老主播回归", 54_100),
+    streamer(Platform.HUYA, "15", "小霸王", "怀旧游戏专场", 31_700),
+    streamer(Platform.HUYA, "16", "楚河", "主机游戏马拉松", 210_400),
+    streamer(Platform.HUYA, "17", "神超", "云顶上分教学", 96_800),
+    streamer(Platform.HUYA, "18", "文森特", "德莱文专场", 143_200),
+    streamer(Platform.HUYA, "19", "冬瓜", "户外直播中", 27_900),
+    streamer(Platform.HUYA, "110", "小漠", "深夜杂谈", 18_600),
+    streamer(Platform.HUYA, "111", "阿冷", "唱歌聊天", 62_300),
   )
 
   private val douyuCategories = listOf(
@@ -424,23 +441,17 @@ class ScreenshotTest {
     ),
   )
 
-  /**
-   * The aggregate entry with nothing live, which is the only copy that can lie about it.
-   *
-   * `01-home` is the default state and already renders the aggregate selected, so a second
-   * render of the same thing would only duplicate it. What no render covered is the **empty
-   * state** under the aggregate: the old copy said "这个分区暂时没有直播 … 还没有人在播" for
-   * every category, and the aggregate is not a partition — there is no anchor to name.
-   */
-  @Test
-  fun homeAggregateEmpty() = capture(
-    "01c-home-all-live-empty",
-    baseState().copy(rooms = emptyList(), loading = false),
-  )
-
   @Test
   fun homeLoading() = capture("04-home-loading", baseState().copy(rooms = emptyList(), loading = true))
 
+  /**
+   * Nothing live under the selected category — which, since the baseline selects the aggregate,
+   * is the aggregate's empty state.
+   *
+   * That is the copy this render exists to check: it used to say "这个分区暂时没有直播 … 还没有
+   * 人在播" for every category, and the aggregate is not a partition — there is no anchor to
+   * name. `HomeScreen` now switches to "现在没有人在直播" when `isAggregate` is set.
+   */
   @Test
   fun homeEmpty() = capture("05-home-empty", baseState().copy(rooms = emptyList(), loading = false))
 
@@ -680,6 +691,16 @@ class ScreenshotTest {
       rooms = listOf(
         streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
         streamer(Platform.BILIBILI, "21", "老番茄", "新视频首发", 88_000),
+        streamer(Platform.BILIBILI, "22", "嘉然今天吃什么", "看比赛，顺便聊聊天", 320_000),
+        streamer(Platform.BILIBILI, "23", "小约翰可汗", "硬核历史，随便聊聊", 6_700),
+        streamer(Platform.BILIBILI, "24", "老坛胡说", "深夜杂谈", 12_400),
+        streamer(Platform.BILIBILI, "25", "绵羊料理", "厨房直播", 33_100),
+        streamer(Platform.BILIBILI, "26", "LexBurner", "聊聊新番", 71_500),
+        streamer(Platform.BILIBILI, "27", "影视飓风", "拍摄现场", 58_200),
+        streamer(Platform.BILIBILI, "28", "何同学", "新项目预告", 120_600),
+        streamer(Platform.BILIBILI, "29", "凉风Kaze", "阅片无数", 44_900),
+        streamer(Platform.BILIBILI, "210", "面筋哥", "唱歌时间", 9_800),
+        streamer(Platform.BILIBILI, "211", "手工耿", "发明时间", 26_300),
       ),
       categories = bilibiliCategoriesWithAggregate,
       selectedCategory = bilibiliCategoriesWithAggregate.first(),

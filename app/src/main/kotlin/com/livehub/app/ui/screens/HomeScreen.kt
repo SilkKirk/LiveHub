@@ -197,8 +197,11 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
                 InlineLoader()
               }
             } else if (!state.hasNextPage && state.rooms.size < NO_MORE_HINT_THRESHOLD) {
-              // Douyin's feed caps at six rooms and Douyu's directory serves one page;
-              // saying so beats an endless empty scroll.
+              // Only platforms that genuinely serve a short, single-page list land here —
+              // Bilibili's hot tab (110 rooms, but no second page) and Douyin's feed (six).
+              // Douyu and Huya now page properly, so a short list from them means the
+              // category really is quiet, which is still worth saying: an endless empty
+              // scroll looks like a failed load.
               item(span = { GridItemSpan(maxLineSpan) }) {
                 Text(
                   text = "已经到底了 · ${state.platform.displayName}当前只提供这些直播",
