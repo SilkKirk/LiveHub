@@ -71,19 +71,23 @@ private const val NO_MORE_HINT_THRESHOLD = 21
  *
  * @property groups the distinct group names the platform publishes ("网游" / "手游" / …), in
  *   the order the platform lists them.
- * @property activeGroup the group the selected category belongs to, null before a selection.
+ * @property activeGroup the group the selected category belongs to, null before a selection
+ *   and when the aggregate entry is selected — it belongs to no group.
  * @property visible the categories of [activeGroup] — or every category when the platform
  *   publishes a single group, because then the grouping carries no information and hiding the
- *   rest behind a picker would be pure cost.
+ *   rest behind a picker would be pure cost. The aggregate entry always leads it.
+ * @property aggregateLabel what the group chip says while [activeGroup] is null, so the chip
+ *   can tell "nothing chosen yet" from "the whole tree is showing".
  */
 private data class CategoryLevels(
   val groups: List<String>,
   val activeGroup: String?,
   val visible: List<Category>,
+  val aggregateLabel: String,
 )
 
 private fun categoryLevelsOf(state: UiState): CategoryLevels {
-  // The 全部/热门 entry belongs to no group, so it must be excluded from the group list and
+  // The aggregate entry belongs to no group, so it must be excluded from the group list and
   // kept in [visible] whatever group is active — otherwise picking any category would make
   // the only way back to "先随便看看" disappear.
   val aggregates = state.categories.filter { it.isAggregate }
@@ -95,7 +99,15 @@ private fun categoryLevelsOf(state: UiState): CategoryLevels {
   } else {
     grouped
   }
-  return CategoryLevels(groups = groups, activeGroup = active, visible = visible)
+  return CategoryLevels(
+    groups = groups,
+    activeGroup = active,
+    visible = visible,
+    // 全部分类 is Douyu's own name for the scope `/directory/all` browses (`$DATA` on that
+    // page carries `cate1Name: "全部分类"`), so the chip says where the row is rather than
+    // inventing a third wording.
+    aggregateLabel = if (state.selectedCategory?.isAggregate == true) "全部分类" else "选择分类",
+  )
 }
 
 /** Home screen: platform switcher, one category row and the room grid. */
@@ -312,7 +324,13 @@ private fun CategoryRow(
       if (levels.groups.size > 1) {
         AssistChip(
           onClick = onOpenPicker,
-          label = { Text(levels.activeGroup ?: "选择分类", maxLines = 1) },
+          // The chip names the scope the row is filtered to. With the aggregate selected
+          // there is no group, and the old `?: "选择分类"` fallback then claimed nothing had
+          // been chosen while a chip right beside it was highlighted — the first render of
+          // `01c-home-all-live` said 选择分类 next to a selected 全部直播. 全部分类 is what
+          // that state actually is: every group's categories, which is also what the row
+          // shows once [activeGroup] is null.
+          label = { Text(levels.activeGroup ?: levels.aggregateLabel, maxLines = 1) },
           trailingIcon = {
             Icon(
               imageVector = Icons.Filled.ArrowDropDown,

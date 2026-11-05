@@ -124,6 +124,32 @@ class AggregateCategoryChipTest {
     composeRule.onNodeWithText("全部直播").assertIsSelected()
   }
 
+  /**
+   * The group chip must not say 选择分类 while a chip beside it is highlighted.
+   *
+   * `01c-home-all-live` rendered exactly that: the aggregate selected, and the group chip
+   * reading 选择分类 — the placeholder for "nothing chosen yet". The aggregate belongs to no
+   * group, so `activeGroup` is null there, and the old `?: "选择分类"` fallback could not tell
+   * the two apart. 全部分类 is Douyu's own name for that scope (`/directory/all` carries
+   * `cate1Name: "全部分类"`).
+   */
+  @Test
+  fun `the group chip names the whole tree while the aggregate is selected`() {
+    composeHome(state = homeState(aggregate))
+
+    composeRule.onNodeWithText("全部分类").assertIsDisplayed()
+    composeRule.onNodeWithText("选择分类").assertDoesNotExist()
+  }
+
+  /** A real category still names its own group, so the label is not a blanket change. */
+  @Test
+  fun `the group chip still names the active group for a real category`() {
+    composeHome(state = homeState(categories[1]))
+
+    composeRule.onNodeWithText("网游").assertIsDisplayed()
+    composeRule.onNodeWithText("全部分类").assertDoesNotExist()
+  }
+
   @Test
   fun `selecting the aggregate chip asks for it by id`() {
     val actions = mutableListOf<UiAction>()
@@ -144,7 +170,7 @@ class AggregateCategoryChipTest {
 
     // The picker is open over 网游's categories; 全部直播 is already the row's first chip and has
     // no group to be filed under, so it must appear exactly once on screen — in the row.
-    composeRule.onNodeWithText("选择分类").assertIsDisplayed()
+    composeRule.onNodeWithText("选择分类").assertIsDisplayed()  // the panel title, not the chip
     composeRule.onAllNodesWithText("全部直播").assertCountEquals(1)
   }
 }
