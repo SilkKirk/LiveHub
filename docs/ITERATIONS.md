@@ -4490,3 +4490,123 @@ CSS media query 重新求值，二维码列就回来；整页仍由 `loadWithOve
   `WebViewAssetLoader` 或者干脆换成手机 UA 让站点给移动版登录页。届时不再靠猜，先在真机上
   用 `chrome://inspect` 看一次 DOM。
 - 原生二维码接口（`passport/web/get_qrcode/`）实测被反爬拦（`error_code 4031`），不做。
+
+---
+
+## 第四十八轮迭代：四个平台各补一个聚合入口（用户报告：没有推荐/全部页）
+
+### 缺陷是什么
+
+用户问："斗鱼虎牙斗鱼B站没有推荐或者全部的页面吗"。查下来是没有，而且不是"少了个按钮"，
+是**首页根本不存在"先随便看看"这个动作**。
+
+`MainViewModel.loadCategories` 用 `categories.firstOrNull()` 决定落点，于是：
+
+| 平台 | 冷启动落在 |
+| --- | --- |
+| 斗鱼 | 英雄联盟（`cate2Info` 的第一条） |
+| 虎牙 | 英雄联盟（`huya_categories.json` 的第一条） |
+| 哔哩哔哩 | 英雄联盟（`bilibili_categories.json` 的第一条） |
+| 抖音 | 和平精英 |
+
+用户必须先在 400+ 个分区里挑一个才能看到任何直播。
+
+### 为什么会这样
+
+不是漏做，是**入口不可达**，三处各有各的原因：
+
+1. **斗鱼**：`mixListV1` 的 level 前缀只有 `2_<cate2Id>` 和 `3_<cate3Id>` 两种，代码里
+   `prefix = if (level == 3) "3" else "2"` 把"聚合"这种可能整个排除了。而
+   `douyu.com/directory/all` 实际调的是 `0_0`。
+2. **虎牙**：`HuyaApi.rooms(gid, ...)` 直接把分类 id 当 `iGid` 发，`iGid=0` 是
+   `huya.com/l`「全部直播」的入口，但目录表里没有 0 这一项，所以从来没有被请求过。
+   另外 `hasMorePages` 有 `totalPages > 0 && total > 0` 的双重条件，而 `iGid=0` 报
+   `iTotal: 0` / `iTotalPage: 73` —— 即使接上，也只出 120 条就"到底"。
+3. **哔哩哔哩**：`BilibiliApi.hotRooms`、`BilibiliArea.HOT`、`BilibiliCategories.HOT_ID = "0:0"`
+   全都在，`BilibiliPaginationTest` 也在测它。但 `0:0` **不在打包的 456 个分区里**
+   （grep 资源文件 0 匹配），UI 永远产生不出这个 id —— 这段代码只有测试在调用，线上从未执行。
+4. **抖音**：`DouyinCategories` 整个对象是死代码，注释写着"退化成单个推荐 tab"，但
+   `DouyinAdapter.categories()` 走的是 `DouyinCategoryCatalog.load().ifEmpty { api.categories() }`，
+   而 `api.categories()` 返回 `emptyList()` —— 那个 `推荐 720` 从未被渲染过。
+
+### 实测依据（本轮逐个抓的，不是推测）
+
+| 平台 | 端点 | 实测 |
+| --- | --- | --- |
+| 斗鱼 | `mixListV1/0_0/<page>` | 40 条/页；1/2/3 页房间 id **零重叠**；第 50 页仍 40 条；第 200 页空 |
+| 虎牙 | `getLiveList?iGid=0` | 120 条/页；`iTotalPage=73`；第 73 页 90 条；第 74 页空且 `iTotalPage` 塌回 1；1/2 页零重叠 |
+| B站 | `index/getList?parent_area_id=0&area_id=0` | 110 条（11 模块）；`page`/`page_size` 被忽略 |
+| B站 | `second/getList?parent_area_id=0` | `code = -400` —— **没有跨大区全部** |
+| 抖音 | `webcast/feed` | 6 条；`offset` 忽略 |
+
+**斗鱼 `0_0` 不是完整枚举**：跨 190 页抽样，`cid1` 只出现过 8 个大区，
+`语音直播` / `赛车竞技` 一次都没有。所以它叫「全部直播」（站点自己 `/directory/all` 的叫法），
+不是"斗鱼所有房间"。
+
+**抖音保持分区**（用户明确选择）：推荐流只有 6 条，单独做一个 chip 会给"点了推荐只有一屏"
+的观感，比没有更差。
+
+### 怎么修的
+
+聚合项**就是 `Category`**，新增 `isAggregate` 标记与 `Category.ALL_ID = "all"`，因此它走与
+真实分区完全相同的选中 / 请求 / 渲染路径，没有第二套分支：
+
+- `DouyuAdapter.categories()` 前置 `Category.aggregate(platform, "全部直播")`，
+  `DouyuApi.rooms` 遇到 `ALL_CATEGORY_ID` 用 `0_0` 段；
+- `HuyaAdapter.categories()` 前置「全部直播」，`rooms` 把 `ALL_ID` 映射成 `ALL_GID = "0"`；
+- `BilibiliAdapter.categories()` 前置「热门」；`BilibiliArea.decode` 本来就把"没有冒号的 id"
+  兜底成 HOT，所以 `rooms` 无需特殊分支；
+- `MainViewModel` 落点改成 `firstOrNull { !it.isAggregate }`，只有"目录里除聚合项什么都没有"
+  （资源缺失）时才退到它。
+
+三个 UI 细节是**看了截图才发现要处理的**，不是设计时想到的：
+
+1. **`CategoryLevels` 必须把聚合项排除在分组之外并固定留在 `visible` 首项**。行是按当前分组
+   过滤的，聚合项不属于任何分组 —— 不特殊处理的话，选中任意真实分区后唯一回到"全部"的入口
+   就消失了。
+2. **「选择分类」面板不列它**：那里再出现一次就是同一件事的第二个控件，且它没有分组可归。
+3. **命名不能用「全部」**：三级分类行本来就以「全部」开头（清三级筛选），一屏两个「全部」
+   一个清筛选、一个跳出整棵分类树，分不清。用站点自己的「全部直播」/「热门」。
+
+### 踩了什么坑
+
+**第一次渲染就把 bug 打出来了。** `01c-home-all-live` 第一版截图里，行首分组 chip 写着
+**「选择分类」**——那是"还没选过任何分类"的占位文案——而它右边紧挨着高亮的「全部直播」。
+`activeGroup` 的 null 现在有两种含义（还没选 / 选的是聚合项），旧代码
+`activeGroup ?: "选择分类"` 分不开。加 `aggregateLabel`，聚合项选中时显示「全部分类」
+（`/directory/all` 的 `$DATA` 里 `cate1Name` 就是这个词）。
+
+这正是"必须有截图"的例子：`AggregateCategoryChipTest` 五条全绿，因为它断言的是 chip 的
+存在与位置，没有一条断言分组 chip 的文案。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ 含新增 26 条（逐文件数：5+6+4+3+7+1），failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `ae2b0ae` 与 `09de60a` 各三个 job 全绿 |
+| 截图 | 39 张；`ae2b0ae → 09de60a` 只有 `01c-home-all-live` 哈希变化，其余 38 张逐字节不变 |
+
+新增测试：
+
+| 文件 | 条数 | 钉住什么 |
+| --- | --- | --- |
+| `DouyuAllFeedTest` | 5 | 行首位置、`0_0` 段（且不是 `2_all`）、翻页、无三级、真实分区不受影响 |
+| `HuyaAllFeedTest` | 6 | 行首位置、`iGid=0`（且不是 `iGid=all`）、真实 gid、`iTotal:0` 仍按页数翻页、末页停、空页停 |
+| `BilibiliAllFeedTest` | 4 | 行首位置、走 `index/getList`、`ALL_ID` 解码成 HOT、真实分区仍走 `second/getList` |
+| `HuyaPaginationTest` | +1 | `iTotal: 0` + `iTotalPage: 73` 报"还有下一页" |
+| `AggregateLandingTest` | 3 | 冷启动不落聚合项且请求的是 `2_1`、点聚合项请求 `0_0`、聚合项没有三级行 |
+| `AggregateCategoryChipTest` | 7 | 行首位置、换组后仍在、选中态、点击 id、面板不重复、分组 chip 文案两个方向 |
+
+### 下一轮
+
+- 斗鱼 `0_0` 漏掉 5 个大区（颜值 / 科技文化 / 语音直播 / 正能量 / 赛车竞技）。是否要在聚合
+  页里混入这些大区的第一页，需要一个产品判断：那样列表就不再是"热度序"了。
+- `BilibiliCategories.HOT_ID = "0:0"` 现在仍然只有 `BilibiliArea.decode` 的兜底在用，
+  可以删掉这个常量，或让它等于 `Category.ALL_ID`。
+- `DouyinCategories` 整个对象仍是死代码（`KNOWN_PARTITIONS`、`all()`、`DEFAULT_ID` 零调用），
+  本轮没动它 —— 抖音按用户选择保持分区，这个对象是"资源缺失时给一个推荐 tab"的旧设计，
+  与现在的 `DouyinCategoryCatalog` 冲突，应该删掉或接上。
