@@ -83,12 +83,17 @@ private data class CategoryLevels(
 )
 
 private fun categoryLevelsOf(state: UiState): CategoryLevels {
-  val groups = state.categories.mapNotNull { it.parentName }.distinct()
+  // The 全部/热门 entry belongs to no group, so it must be excluded from the group list and
+  // kept in [visible] whatever group is active — otherwise picking any category would make
+  // the only way back to "先随便看看" disappear.
+  val aggregates = state.categories.filter { it.isAggregate }
+  val grouped = state.categories.filterNot { it.isAggregate }
+  val groups = grouped.mapNotNull { it.parentName }.distinct()
   val active = state.selectedCategory?.parentName
-  val visible = if (groups.size > 1 && active != null) {
-    state.categories.filter { it.parentName == active }
+  val visible = aggregates + if (groups.size > 1 && active != null) {
+    grouped.filter { it.parentName == active }
   } else {
-    state.categories
+    grouped
   }
   return CategoryLevels(groups = groups, activeGroup = active, visible = visible)
 }
@@ -146,9 +151,15 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
         } else if (state.rooms.isEmpty() && state.error != null) {
           ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
         } else if (state.rooms.isEmpty()) {
+          // The aggregate entry is not a partition, so the copy cannot call it one.
+          val aggregate = state.selectedCategory?.isAggregate == true
           EmptyState(
-            title = "这个分区暂时没有直播",
-            description = "${state.selectedCategory?.name ?: ""} 还没有人在播，换个分区看看？",
+            title = if (aggregate) "现在没有人在直播" else "这个分区暂时没有直播",
+            description = if (aggregate) {
+              "换一个分区看看？"
+            } else {
+              "${state.selectedCategory?.name ?: ""} 还没有人在播，换个分区看看？"
+            },
             actionLabel = "刷新",
             onAction = { onAction(UiAction.Refresh) },
           )
@@ -376,8 +387,12 @@ private fun CategoryPicker(
   onAction: (UiAction) -> Unit,
 ) {
   var group by remember { mutableStateOf(levels.activeGroup) }
-  val listed = remember(state.categories, group) {
-    if (group == null) state.categories else state.categories.filter { it.parentName == group }
+  // The aggregate entry is already the row's first chip, so listing it here as well would be
+  // a second control for the same job — and it belongs to no group, so it would sit at the
+  // top of every group's list.
+  val pickable = remember(state.categories) { state.categories.filterNot { it.isAggregate } }
+  val listed = remember(pickable, group) {
+    if (group == null) pickable else pickable.filter { it.parentName == group }
   }
 
   Box(modifier = Modifier.fillMaxSize()) {

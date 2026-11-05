@@ -44,13 +44,27 @@ class HuyaAdapter(
    * Huya publishes no usable catalogue endpoint, so the shipped table is the source.
    * It carries 4 groups and 424 sub-categories; falling back to the network only when
    * the asset is missing keeps old builds working.
+   *
+   * Led by a 全部直播 entry: `getLiveList?iGid=0` is what huya.com/l ("全部直播") calls, and
+   * it paginates properly — 120 rooms per page over `iTotalPage = 73` pages, page 1 vs 2
+   * sharing no room, page 74 empty. It is the one feed on the four platforms that really is
+   * the whole site. The name matches that page rather than 全部 so it cannot be mistaken for
+   * the 全部 that clears a third level on 斗鱼.
    */
   override suspend fun categories(): List<Category> =
-    HuyaCategories.load(assets).ifEmpty { api.categories() }
+    listOf(Category.aggregate(platform, "全部直播")) +
+      HuyaCategories.load(assets).ifEmpty { api.categories() }
 
+  /**
+   * One page of rooms.
+   *
+   * The aggregate id maps to `iGid=0`, which is the "全部直播" feed huya.com/l opens. Every
+   * other id is a real `iGid` from the shipped table.
+   */
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
-    val (rooms, hasMore) = api.rooms(gid = categoryId, page = page, pageSize = PAGE_SIZE)
+    val gid = if (categoryId == Category.ALL_ID) ALL_GID else categoryId
+    val (rooms, hasMore) = api.rooms(gid = gid, page = page, pageSize = PAGE_SIZE)
     return RoomPage(rooms = rooms, nextCursor = if (hasMore) (page + 1).toString() else null)
   }
 
@@ -244,6 +258,15 @@ class HuyaAdapter(
 
   companion object {
     const val PAGE_SIZE = 30
+
+    /**
+     * The `iGid` huya.com/l ("全部直播") asks for.
+     *
+     * `0` is not a real game id — the shipped table's ids start at 1 — which is exactly why
+     * `Category.ALL_ID` cannot be sent verbatim: `iGid=all` answers an empty `vList`, i.e. it
+     * looks like a site with nothing live.
+     */
+    const val ALL_GID = "0"
 
     private val AYYUID_PATTERNS = listOf(
       Regex("""var\s+TT_PROFILE_INFO\s*=\s*\{[\s\S]*?"lp"\s*:\s*"?(\d+)"""),

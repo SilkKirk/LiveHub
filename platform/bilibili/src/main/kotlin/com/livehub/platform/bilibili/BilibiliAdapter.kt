@@ -48,9 +48,21 @@ class BilibiliAdapter(
    * `"<parentAreaId>:<areaId>"`. It is generated from `room/v1/Area/getList`, but that
    * endpoint is only consulted when the asset is missing: the table changes a few times a
    * year while the app opens this on every launch.
+   *
+   * Led by a 热门 entry, which is `index/getList` (`parent_area_id=0&area_id=0`) — the same
+   * list live.bilibili.com/all opens on. `BilibiliArea.decode` already maps any id without a
+   * colon to [BilibiliArea.HOT], so the aggregate id needs no special case in [rooms]. Until
+   * now that path existed but was unreachable: `0:0` is not one of the 456 shipped
+   * partitions, so nothing in the UI could ever produce the id and only the tests called it.
+   *
+   * 热门 is a single page — `page` and `page_size` are ignored, page 2 repeats 97 of page
+   * 1's 110 rooms — so it is offered as 热门 rather than 全部, and it is not a substitute
+   * for a whole-site feed, which Bilibili does not expose (`second/getList` with
+   * `parent_area_id=0` answers `code = -400`).
    */
   override suspend fun categories(): List<Category> =
-    BilibiliCategories.load(assets).ifEmpty { api.categories() }
+    listOf(Category.aggregate(platform, "热门")) +
+      BilibiliCategories.load(assets).ifEmpty { api.categories() }
 
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1

@@ -134,6 +134,12 @@ class HuyaApi(private val http: HttpClient) {
    * Extracted so the rule is testable without a network round trip, and documented here
    * because getting it wrong is invisible: the previous implementation compared the row
    * count against the requested `pageSize`, which Huya ignores.
+   *
+   * `iTotalPage` alone is the page count, and it has to be trusted even when `iTotal` is 0:
+   * the whole-site feed (`iGid=0`, huya.com/l) reports `iTotal: 0` with `iTotalPage: 73` —
+   * measured, and page 73 really does answer ~90 rooms while page 74 answers none and
+   * collapses `iTotalPage` back to 1. Requiring `iTotal > 0` alongside it made that feed
+   * stop after the first 120 rooms.
    */
   internal fun hasMorePages(root: JsonObject, roomCount: Int, requestedPage: Int): Boolean {
     if (roomCount == 0) return false
@@ -141,9 +147,7 @@ class HuyaApi(private val http: HttpClient) {
     val totalPages = root.int("iTotalPage") ?: -1
     val reportedPage = root.int("iPageNo") ?: requestedPage
     return when {
-      // An exhausted category answers iTotal = 0 with iTotalPage = 1, so the page count is
-      // only meaningful when there is something in it.
-      totalPages > 0 && total > 0 -> reportedPage < totalPages
+      totalPages > 0 -> reportedPage < totalPages
       // Fall back to the total when the page count is missing; never to the row count,
       // which is a fixed 120 regardless of what was asked for.
       total > 0 -> reportedPage.toLong() * roomCount < total

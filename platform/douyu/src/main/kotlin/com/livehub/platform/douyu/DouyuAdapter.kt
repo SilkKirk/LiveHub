@@ -50,14 +50,28 @@ class DouyuAdapter(
 
   override val platform: Platform = Platform.DOUYU
 
-  override suspend fun categories(): List<Category> = api.categories()
+  /**
+   * The live tree, led by a 全部直播 entry.
+   *
+   * `mixListV1/0_0` is the feed douyu.com/directory/all uses for 全部分类, and it paginates
+   * like any other category — so "先随便看看" is a real list here rather than a relabelled
+   * partition. It is *not* a complete enumeration: sampled across 190 pages it never returned
+   * a room from 语音直播 or 赛车竞技, so the entry is named the way the site names that page
+   * (`/directory/all`, "全部游戏直播"), not "every room on Douyu".
+   *
+   * The name is **not** 全部 on purpose: the third chip row already leads with a 全部 that
+   * clears the third level, and two 全部 chips in one screen — one clearing a filter, one
+   * leaving the whole category tree — would be indistinguishable.
+   */
+  override suspend fun categories(): List<Category> =
+    listOf(Category.aggregate(platform, "全部直播")) + api.categories()
 
   /**
    * One page of rooms.
    *
-   * A category id prefixed with `c3:` is a level-3 sub-category ("三级分类"); anything
-   * else is a normal `cate2Id`. Both come from `mixListV1`, which paginates properly, so
-   * the cursor is simply the page number.
+   * A category id prefixed with `c3:` is a level-3 sub-category ("三级分类"); the aggregate
+   * id is the cross-group feed; anything else is a normal `cate2Id`. All of them come from
+   * `mixListV1`, which paginates properly, so the cursor is simply the page number.
    */
   override suspend fun rooms(categoryId: String, cursor: String?, slug: String?): RoomPage {
     val page = cursor?.toIntOrNull() ?: 1
@@ -83,6 +97,8 @@ class DouyuAdapter(
   /** Sub-categories for [categoryId], shown as a third row of chips on the home screen. */
   override suspend fun subCategories(categoryId: String): List<Category> {
     if (categoryId.startsWith(DouyuApi.SUB_CATEGORY_PREFIX)) return emptyList()
+    // The aggregate feed spans every 大区, so it has no meaningful third level.
+    if (categoryId == DouyuApi.ALL_CATEGORY_ID) return emptyList()
     return runCatching { api.subCategories(categoryId) }.getOrDefault(emptyList())
   }
 

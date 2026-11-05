@@ -123,6 +123,16 @@ class ScreenshotTest {
   )
 
   /**
+   * 斗鱼's row as the adapter really builds it: the aggregate entry first, then the tree.
+   *
+   * It is a separate fixture from [douyuCategories] because most renders are about a selected
+   * partition, and the aggregate has its own render ([homeAggregate]) — putting it in every
+   * home state would shift every chip and rewrite screenshots that are not about it.
+   */
+  private val douyuCategoriesWithAggregate =
+    listOf(Category.aggregate(Platform.DOUYU, "全部直播")) + douyuCategories
+
+  /**
    * The third level Douyu publishes under 英雄联盟.
    *
    * Ids carry the adapter's `c3:` prefix, which is what makes `DouyuAdapter.rooms` pick
@@ -377,6 +387,26 @@ class ScreenshotTest {
       subCategories = douyuSubCategories,
       selectedSubCategory = douyuSubCategories.first(),
       rooms = douyuRooms.take(4),
+    ),
+  )
+
+  /**
+   * The aggregate entry selected: a cross-group feed with no group chip and no third level.
+   *
+   * This is the state the row could not produce before — every category belonged to a group,
+   * so the group chip and the third-level row were always populated. The aggregate belongs to
+   * neither, which is the whole reason it must not be the landing category, and the render is
+   * the only way to see that the row still looks deliberate (a leading chip, then the tree)
+   * instead of broken (an empty group chip, a dangling row).
+   */
+  @Test
+  fun homeAggregate() = capture(
+    "01c-home-all-live",
+    baseState().copy(
+      categories = douyuCategoriesWithAggregate,
+      selectedCategory = douyuCategoriesWithAggregate.first(),
+      subCategories = emptyList(),
+      selectedSubCategory = null,
     ),
   )
 

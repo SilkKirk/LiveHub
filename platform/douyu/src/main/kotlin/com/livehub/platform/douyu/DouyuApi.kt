@@ -51,7 +51,7 @@ class DouyuApi(
   /**
    * One page of live rooms for a category.
    *
-   * Uses `gapi/rkc/directory/mixListV1/2_<cate2Id>/<page>`, the endpoint the web client
+   * Uses `gapi/rkc/directory/mixListV1/<level>_<id>/<page>`, the endpoint the web client
    * itself calls. It answers `{"code":0,"data":{"rl":[...]}}` with 40 rooms per page and
    * paginates properly: verified page 1 vs 2 vs 3 share zero room ids.
    *
@@ -60,8 +60,9 @@ class DouyuApi(
    * the scraped HTML ignored `?page=`. That whole detour is unnecessary — mixListV1 was
    * simply being called with wrong category ids (`2_86` instead of `2_1`).
    *
-   * @param categoryId `cate2Id` for a two level browse, or `cate3Id` when [level] is 3.
-   * @param level 2 for a category, 3 for a sub-category.
+   * @param categoryId `cate2Id` for a two level browse, `cate3Id` when [level] is 3, or
+   *   [ALL_CATEGORY_ID] for the cross-group feed.
+   * @param level 2 for a category, 3 for a sub-category. Ignored for [ALL_CATEGORY_ID].
    */
   suspend fun rooms(
     categoryId: String,
@@ -70,8 +71,15 @@ class DouyuApi(
     level: Int = 2,
   ): DouyuRoomPage {
     val currentPage = if (page <= 0) 1 else page
-    val prefix = if (level == 3) "3" else "2"
-    val url = "$URL_MIX_LIST/$prefix" + "_" + categoryId + "/" + currentPage + "?limit=" + limit
+    // `0_0` is what douyu.com/directory/all itself calls for 全部分类: one feed spanning
+    // every 大区, paginated exactly like a category (verified: pages 1..3 share no room id,
+    // page 50 still answers 40 rooms, page 200 is empty).
+    val segment = when {
+      categoryId == ALL_CATEGORY_ID -> "0_0"
+      level == 3 -> "3_$categoryId"
+      else -> "2_$categoryId"
+    }
+    val url = "$URL_MIX_LIST/$segment/$currentPage?limit=$limit"
 
     val response = http.get(
       url,
@@ -337,6 +345,8 @@ class DouyuApi(
     const val URL_HOME_H5_ENC = "https://www.douyu.com/swf_api/homeH5Enc"
     /** Prefix marking a category id as a level-3 sub-category rather than a cate2. */
     const val SUB_CATEGORY_PREFIX = "c3:"
+    /** Marker for the cross-group feed; see [rooms]. */
+    const val ALL_CATEGORY_ID = Category.ALL_ID
     const val URL_MIX_LIST = "https://www.douyu.com/gapi/rkc/directory/mixListV1"
     const val URL_THREE_CATE = "https://capi.douyucdn.cn/api/v1/getThreeCate"
     const val URL_SEARCH = "https://www.douyu.com/japi/search/api/searchUser"

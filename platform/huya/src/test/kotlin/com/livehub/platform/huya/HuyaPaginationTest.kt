@@ -61,6 +61,20 @@ class HuyaPaginationTest {
     assertFalse(api.hasMorePages(root, roomCount = 0, requestedPage = 6))
   }
 
+  /**
+   * A feed that reports pages without a total.
+   *
+   * The whole-site feed (`iGid=0`, huya.com/l) answers `iTotal: 0` with a real
+   * `iTotalPage: 73`. The rule used to require `total > 0` before it would trust the page
+   * count, which ended that feed after the first 120 rooms; [HuyaAllFeedTest] pins the same
+   * shape from the aggregate entry's side.
+   */
+  @Test
+  fun `a page count without a total still reports more`() {
+    val root = meta("""{"iPageNo":1,"iPageSize":120,"iTotal":0,"iTotalPage":73}""")
+    assertTrue(api.hasMorePages(root, roomCount = 120, requestedPage = 1))
+  }
+
   @Test
   fun `missing metadata ends the sequence instead of looping`() {
     assertFalse(api.hasMorePages(meta("""{}"""), roomCount = 120, requestedPage = 1))

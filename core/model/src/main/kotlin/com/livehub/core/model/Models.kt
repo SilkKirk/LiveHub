@@ -83,8 +83,38 @@ data class Category(
    * `shortName`, so it has to travel with the model instead of being guessed.
    */
   val slug: String? = null,
+  /**
+   * True for the "全部直播 / 热门" entry that leads the category row.
+   *
+   * It is a [Category] so it can travel the same path as a real one — selected by the row,
+   * carried in `UiState`, requested through the adapter's `rooms` — but it is not a
+   * partition: it belongs to no group (so the group picker must not list it), it publishes
+   * no third level, and it is not a valid default landing category.
+   */
+  val isAggregate: Boolean = false,
 ) {
   val key: String get() = "${platform.id}:$id"
+
+  companion object {
+    /**
+     * The id every adapter maps to its own aggregate feed.
+     *
+     * Real ids on all four platforms are numeric — Douyu `cate2Id`, Huya `iGid`, Bilibili
+     * `"parent:area"`, Douyin `"partitionType:partition"` — so a literal cannot collide with
+     * one. It is deliberately *not* Bilibili's `0:0`: that id already means "the hot tab" to
+     * the Bilibili adapter, and the shared marker has to stay platform-neutral.
+     */
+    const val ALL_ID = "all"
+
+    /** Builds the aggregate entry that leads the row for [platform]. */
+    fun aggregate(platform: Platform, name: String): Category = Category(
+      platform = platform,
+      id = ALL_ID,
+      name = name,
+      sortOrder = Int.MIN_VALUE,
+      isAggregate = true,
+    )
+  }
 }
 
 /** One page of a paginated room list. */

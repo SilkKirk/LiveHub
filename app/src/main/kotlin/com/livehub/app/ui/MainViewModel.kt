@@ -257,7 +257,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       _state.update { it.copy(loading = true, error = null) }
       try {
         val categories = container.platformRepository.categories(platform)
-        val first = categories.firstOrNull()
+        // The aggregate entry leads the row but is normally not the landing category: it has
+        // no group, so opening on it would leave the group chip unset and the third-level row
+        // empty — the two things the row is there to show. It stays one tap away as the row's
+        // first chip. It is used as the fallback only when it is all there is (a platform
+        // whose catalogue asset is missing), where the alternative is an empty screen.
+        val first = categories.firstOrNull { !it.isAggregate } ?: categories.firstOrNull()
         _state.update {
           it.copy(
             categories = categories,
