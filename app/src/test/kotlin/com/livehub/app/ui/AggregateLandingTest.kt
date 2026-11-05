@@ -13,7 +13,7 @@ import com.livehub.platform.douyu.DouyuAdapter
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -24,18 +24,22 @@ import org.robolectric.annotation.Config
 /**
  * Where the home screen lands, and how it leaves.
  *
- * Every platform's adapter now leads its category row with an aggregate entry
+ * Every platform's adapter leads its category row with an aggregate entry
  * (`Category.isAggregate`, id `Category.ALL_ID`) — 斗鱼's `mixListV1/0_0` cross-group feed,
- * 虎牙's `getLiveList?iGid=0`, 哔哩哔哩's hot tab. The landing rule has to hold in both
- * directions, and neither direction is visible from the adapter tests:
+ * 虎牙's `getLiveList?iGid=0`, 哔哩哔哩's hot tab — and the app **opens on it**.
  *
- *  * a cold start must **not** land on it — the aggregate belongs to no group, so the row
- *    would open with no group chip and no third level, which is the state the old
- *    `categories.firstOrNull()` produced on every launch;
- *  * tapping it must request the aggregate feed, which is only observable in the outgoing URL.
+ * That is the whole point of the entry: a cold start used to land on the first real partition
+ * (`categories.firstOrNull()`), so 斗鱼 / 虎牙 / 哔哩哔哩 all opened on 英雄联盟 and the user had
+ * to pick one of 400+ partitions before seeing any live room. The two directions are pinned
+ * separately because they fail differently:
  *
- * The third assertion is the one that keeps this honest: an aggregate that is merely *listed*
- * but that the view model refuses to open would pass a state-only test.
+ *  * the landing must request the **cross-group** feed (`0_0`), which is only observable in the
+ *    outgoing URL — a state-only assertion would pass for a selection that loads nothing;
+ *  * tapping a real partition must leave the aggregate behind and load that partition instead,
+ *    or "全部直播" would become a one-way door.
+ *
+ * The aggregate belongs to no group and publishes no third level, so the third chip row must
+ * stay empty while it is selected — see `the aggregate carries no third level row`.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34])
@@ -77,7 +81,7 @@ class AggregateLandingTest {
   private val lastRoomsUrl: String get() = http.urls.last { it.contains("mixListV1") }
 
   @Test
-  fun `a cold start lands on a real category, not the aggregate`() {
+  fun `a cold start lands on the aggregate`() {
     awaitCondition {
       val state = viewModel.state.value
       state.selectedCategory != null && !state.loading
@@ -86,25 +90,24 @@ class AggregateLandingTest {
     val state = viewModel.state.value
     assertEquals(Category.ALL_ID, state.categories.first().id)
     assertTrue(state.categories.first().isAggregate)
-    assertFalse(
-      "landing on the aggregate leaves the row with no group and no third level",
+    assertTrue(
+      "a cold start must open on 全部直播, got ${state.selectedCategory!!.name}",
       state.selectedCategory!!.isAggregate,
     )
-    assertEquals("英雄联盟", state.selectedCategory!!.name)
-    // The landing category's own feed, not the cross-group one.
-    assertTrue("got $lastRoomsUrl", lastRoomsUrl.contains("/mixListV1/2_1/"))
+    // The cross-group feed, not the first partition's.
+    assertTrue("got $lastRoomsUrl", lastRoomsUrl.contains("/mixListV1/0_0/"))
   }
 
   @Test
-  fun `opening the aggregate requests the cross group feed`() {
+  fun `opening a real partition leaves the aggregate behind`() {
     awaitCondition { viewModel.state.value.selectedCategory != null }
-    val aggregate = viewModel.state.value.categories.first { it.isAggregate }
+    val league = viewModel.state.value.categories.first { it.name == "英雄联盟" }
 
-    viewModel.onAction(UiAction.SelectCategory(aggregate))
-    awaitCondition { http.urls.any { it.contains("/mixListV1/0_0/") } }
+    viewModel.onAction(UiAction.SelectCategory(league))
+    awaitCondition { http.urls.any { it.contains("/mixListV1/2_1/") } }
 
-    assertTrue("got $lastRoomsUrl", lastRoomsUrl.contains("/mixListV1/0_0/"))
-    assertEquals(aggregate.key, viewModel.state.value.selectedCategory?.key)
+    assertTrue("got $lastRoomsUrl", lastRoomsUrl.contains("/mixListV1/2_1/"))
+    assertEquals(league.key, viewModel.state.value.selectedCategory?.key)
   }
 
   /**
@@ -119,17 +122,13 @@ class AggregateLandingTest {
     awaitCondition {
       viewModel.state.value.selectedCategory != null && !viewModel.state.value.loading
     }
-    awaitCondition { viewModel.state.value.subCategories.isNotEmpty() }
-
-    viewModel.onAction(
-      UiAction.SelectCategory(viewModel.state.value.categories.first { it.isAggregate }),
-    )
-    awaitCondition { http.urls.any { it.contains("/mixListV1/0_0/") } }
-
+    // The landing state itself: the aggregate is selected and the row must already be empty,
+    // without the user having to open and close a partition first.
     assertTrue(
       "the aggregate has no third level, got ${viewModel.state.value.subCategories.map { it.name }}",
       viewModel.state.value.subCategories.isEmpty(),
     )
+    assertNull(viewModel.state.value.selectedSubCategory)
   }
 
   /**

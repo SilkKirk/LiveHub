@@ -157,6 +157,10 @@ class ScreenshotTest {
     Category(Platform.HUYA, "3", "星秀", "娱乐", "娱乐", sortOrder = 2),
   )
 
+  /** 虎牙's row as the adapter builds it: 全部直播 first, then the tree. */
+  private val huyaCategoriesWithAggregate =
+    listOf(Category.aggregate(Platform.HUYA, "全部直播")) + huyaCategories
+
   /**
    * Two groups from Bilibili's shipped table.
    *
@@ -169,11 +173,24 @@ class ScreenshotTest {
     Category(Platform.BILIBILI, "1:21", "王者荣耀", "1", "手游", sortOrder = 2),
   )
 
+  /** 哔哩哔哩's row as the adapter builds it: 热门 first, then the tree. */
+  private val bilibiliCategoriesWithAggregate =
+    listOf(Category.aggregate(Platform.BILIBILI, "热门")) + bilibiliCategories
+
+  /**
+   * The state the app actually opens in.
+   *
+   * The aggregate entry leads the row **and** is selected on a cold start (see
+   * `MainViewModel.loadCategories`), so the baseline has to carry it — a baseline that opened
+   * on 英雄联盟 would render a state no user ever sees on launch. Screens that are about a
+   * partition override `selectedCategory` themselves ([homeOtherCategory],
+   * [homeSubCategory]).
+   */
   private fun baseState(): UiState = UiState(
     screen = Screen.Home,
     platform = Platform.DOUYU,
-    categories = douyuCategories,
-    selectedCategory = douyuCategories.first(),
+    categories = douyuCategoriesWithAggregate,
+    selectedCategory = douyuCategoriesWithAggregate.first(),
     rooms = douyuRooms,
     deviceName = "Pixel 7",
     localAddress = "192.168.1.23:47653",
@@ -219,8 +236,8 @@ class ScreenshotTest {
   private fun huyaPlayerState(): UiState = baseState().copy(
     screen = Screen.Player,
     platform = Platform.HUYA,
-    categories = huyaCategories,
-    selectedCategory = huyaCategories.first(),
+    categories = huyaCategoriesWithAggregate,
+    selectedCategory = huyaCategoriesWithAggregate.first(),
     room = huyaRooms[0],
     variants = listOf(
       StreamVariant(
@@ -252,8 +269,8 @@ class ScreenshotTest {
   private fun bilibiliPlayerState(): UiState = baseState().copy(
     screen = Screen.Player,
     platform = Platform.BILIBILI,
-    categories = bilibiliCategories,
-    selectedCategory = bilibiliCategories.first(),
+    categories = bilibiliCategoriesWithAggregate,
+    selectedCategory = bilibiliCategoriesWithAggregate.first(),
     room = streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
     variants = listOf(
       StreamVariant("原画", "https://d1--cn-gotcha.bilivideo.com/live/1.m3u8", "d1--cn-gotcha.bilivideo.com", isHls = true, qualityRank = 0, qualityCode = 10_000),
@@ -280,8 +297,8 @@ class ScreenshotTest {
   private fun huyaSearchState(): UiState = baseState().copy(
     screen = Screen.Search,
     platform = Platform.HUYA,
-    categories = huyaCategories,
-    selectedCategory = huyaCategories.first(),
+    categories = huyaCategoriesWithAggregate,
+    selectedCategory = huyaCategoriesWithAggregate.first(),
     searchQuery = "英雄联盟",
     lastSearchQuery = "英雄联盟",
     searchResults = listOf(
@@ -297,8 +314,8 @@ class ScreenshotTest {
   private fun bilibiliSearchState(): UiState = baseState().copy(
     screen = Screen.Search,
     platform = Platform.BILIBILI,
-    categories = bilibiliCategories,
-    selectedCategory = bilibiliCategories.first(),
+    categories = bilibiliCategoriesWithAggregate,
+    selectedCategory = bilibiliCategoriesWithAggregate.first(),
     searchQuery = "英雄联盟",
     lastSearchQuery = "英雄联盟",
     searchResults = listOf(
@@ -352,10 +369,18 @@ class ScreenshotTest {
    * precisely because it duplicated selecting a category. So the name described a state the
    * app cannot reach, and the file only ever proved that tapping a chip moves the highlight
    * and the grid.
+   *
+   * The partition is named explicitly rather than indexed out of the fixture: `baseState()`
+   * now carries the aggregate as its first entry, so an index would silently point at a
+   * different chip.
    */
   @Test
-  fun homeOtherCategory() =
-    capture("03-home-other-category", baseState().copy(selectedCategory = douyuCategories[2]))
+  fun homeOtherCategory() = capture(
+    "03-home-other-category",
+    baseState().copy(
+      selectedCategory = douyuCategories.first { it.name == "绝地求生" },
+    ),
+  )
 
   /**
    * The category picker, which is where every group but the active one now lives.
@@ -363,12 +388,17 @@ class ScreenshotTest {
    * The home screen used to stack one chip row per level. Collapsing that into a single row
    * moved the group list behind this panel, so the panel is the only thing that still shows
    * 手游 and 娱乐 — and it had no render at all, because it cannot be reached without a tap.
+   *
+   * The tap target is the **group chip**, which reads 全部分类 while the aggregate is selected
+   * (the baseline state). It used to be "网游", which is a *category* chip: with the aggregate
+   * selected there is no active group, so every group's categories are inline and 网游 is on
+   * the row — tapping it would have rendered a partition instead of the panel.
    */
   @Test
   fun homeCategoryPicker() = capture(
     "01b-home-category-picker",
     baseState(),
-    clickText = "网游",
+    clickText = "全部分类",
     expectText = "选择分类",
   )
 
@@ -379,11 +409,15 @@ class ScreenshotTest {
    * non-empty, and no state in this file ever set it. The row that the third-level pagination
    * bug lived in therefore had no visual coverage at all — a broken or invisible row would
    * have passed every screenshot review.
+   *
+   * The parent partition is set explicitly: the baseline selects the aggregate, which has no
+   * third level, so a third row over it would be a state the app cannot reach.
    */
   @Test
   fun homeSubCategory() = capture(
     "03b-home-subcategory",
     baseState().copy(
+      selectedCategory = douyuCategories.first { it.name == "英雄联盟" },
       subCategories = douyuSubCategories,
       selectedSubCategory = douyuSubCategories.first(),
       rooms = douyuRooms.take(4),
@@ -391,23 +425,17 @@ class ScreenshotTest {
   )
 
   /**
-   * The aggregate entry selected: a cross-group feed with no group chip and no third level.
+   * The aggregate entry with nothing live, which is the only copy that can lie about it.
    *
-   * This is the state the row could not produce before — every category belonged to a group,
-   * so the group chip and the third-level row were always populated. The aggregate belongs to
-   * neither, which is the whole reason it must not be the landing category, and the render is
-   * the only way to see that the row still looks deliberate (a leading chip, then the tree)
-   * instead of broken (an empty group chip, a dangling row).
+   * `01-home` is the default state and already renders the aggregate selected, so a second
+   * render of the same thing would only duplicate it. What no render covered is the **empty
+   * state** under the aggregate: the old copy said "这个分区暂时没有直播 … 还没有人在播" for
+   * every category, and the aggregate is not a partition — there is no anchor to name.
    */
   @Test
-  fun homeAggregate() = capture(
-    "01c-home-all-live",
-    baseState().copy(
-      categories = douyuCategoriesWithAggregate,
-      selectedCategory = douyuCategoriesWithAggregate.first(),
-      subCategories = emptyList(),
-      selectedSubCategory = null,
-    ),
+  fun homeAggregateEmpty() = capture(
+    "01c-home-all-live-empty",
+    baseState().copy(rooms = emptyList(), loading = false),
   )
 
   @Test
@@ -629,8 +657,9 @@ class ScreenshotTest {
    * Both of these used to swap `platform` and `categories` but leave `selectedCategory`
    * pointing at a 斗鱼 category, so the renders showed states the app cannot produce: 虎牙
    * with no chip selected at all, and 哔哩哔哩 with a group highlighted and no area inside it.
-   * `selectPlatform` clears the selection and `loadCategories` picks the new platform's first
-   * category, so the fixture has to do the same or the screenshot lies.
+   * `selectPlatform` clears the selection and `loadCategories` selects the new platform's
+   * **first** entry — which is its aggregate — so the fixture has to do the same or the
+   * screenshot lies about what a user sees after switching platform.
    */
   @Test
   fun huyaHome() = capture(
@@ -638,8 +667,8 @@ class ScreenshotTest {
     baseState().copy(
       platform = Platform.HUYA,
       rooms = huyaRooms,
-      categories = huyaCategories,
-      selectedCategory = huyaCategories.first(),
+      categories = huyaCategoriesWithAggregate,
+      selectedCategory = huyaCategoriesWithAggregate.first(),
     ),
   )
 
@@ -652,8 +681,8 @@ class ScreenshotTest {
         streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档，来聊聊", 45_000),
         streamer(Platform.BILIBILI, "21", "老番茄", "新视频首发", 88_000),
       ),
-      categories = bilibiliCategories,
-      selectedCategory = bilibiliCategories.first(),
+      categories = bilibiliCategoriesWithAggregate,
+      selectedCategory = bilibiliCategoriesWithAggregate.first(),
     ),
   )
 

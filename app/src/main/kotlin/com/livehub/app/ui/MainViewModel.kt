@@ -257,12 +257,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       _state.update { it.copy(loading = true, error = null) }
       try {
         val categories = container.platformRepository.categories(platform)
-        // The aggregate entry leads the row but is normally not the landing category: it has
-        // no group, so opening on it would leave the group chip unset and the third-level row
-        // empty — the two things the row is there to show. It stays one tap away as the row's
-        // first chip. It is used as the fallback only when it is all there is (a platform
-        // whose catalogue asset is missing), where the alternative is an empty screen.
-        val first = categories.firstOrNull { !it.isAggregate } ?: categories.firstOrNull()
+        // The aggregate entry leads the row *and* is where the app opens.
+        //
+        // Landing on the first real partition meant a cold start showed 英雄联盟 on all three
+        // platforms that ship a catalogue — the user had to pick one of 400+ partitions before
+        // seeing anything, which is the opposite of what a browse-first home screen is for.
+        // The aggregate is the "先随便看看" answer, so it is the default.
+        //
+        // It has no group and no third level, so the group chip reads 全部分类 (see
+        // `CategoryLevels.aggregateLabel`) and the third chip row does not render. That is the
+        // intended shape of this state, not a missing selection.
+        val first = categories.firstOrNull()
         _state.update {
           it.copy(
             categories = categories,
@@ -270,8 +275,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           )
         }
         if (first != null) {
-          // The third level has to arrive with the category, not after the user taps it:
-          // see [loadSubCategories].
+          // Still fetched for whatever ends up selected: a platform without an aggregate (or a
+          // build whose catalogue asset is missing) auto-selects a real partition, and the row
+          // has to arrive with it rather than after the user taps it. See [loadSubCategories].
           loadSubCategories(platform, first)
           loadRooms(platform, first, reset = true)
         } else {
