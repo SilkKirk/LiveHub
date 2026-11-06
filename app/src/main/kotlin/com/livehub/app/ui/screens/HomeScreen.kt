@@ -229,6 +229,16 @@ private fun PlatformPage(
   // otherwise be a dead end on the one screen that has no back destination.
   BackHandler(enabled = expanded) { expanded = false }
 
+  // Picking a partition or a third level is the end of the browse: collapse the tree so the result
+  // is visible. Without this the page stayed expanded over the grid it just loaded, and the user
+  // had to scroll past a screenful of chips to see the streams they had asked for.
+  //
+  // Keyed on the selection, not on the tap: a selection restored from a saved session must not
+  // collapse anything, and re-tapping the partition that is already selected must not either.
+  LaunchedEffect(state.selectedCategory?.key, state.selectedSubCategory?.key) {
+    expanded = false
+  }
+
   Column(modifier = Modifier.fillMaxSize()) {
     FavoritesRow(
       state = state,

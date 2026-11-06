@@ -12,7 +12,6 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
-import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -326,6 +325,46 @@ class HomeCategoryDensityTest {
     composeRule.onNodeWithText("英雄联盟").assertIsDisplayed()
     composeRule.onNodeWithText("绝地求生").assertIsDisplayed()
     composeRule.onNodeWithText("DNF").assertIsDisplayed()
+  }
+
+  /**
+   * Picking a partition collapses the tree.
+   *
+   * The expanded tree is a browse state, not a destination: once a partition is chosen the user
+   * wants to see its streams. Leaving it open kept a screenful of chips over the grid that had just
+   * loaded, which is the same complaint the collapsed-`FlowRow` bug produced from the other side.
+   */
+  @Test
+  fun `picking a partition collapses the tree`() {
+    val actions = mutableListOf<UiAction>()
+    composeHome(onAction = { actions += it })
+
+    composeRule.onNodeWithContentDescription("展开分类").performClick()
+    composeRule.onNodeWithText("绝地求生").performClick()
+
+    // The selection is reported…
+    assertEquals(
+      "绝地求生",
+      actions.filterIsInstance<UiAction.SelectCategory>().lastOrNull()?.category?.name,
+    )
+    // …and the tree is collapsed again, so the chevron is back to its "expand" state.
+    composeRule.onNodeWithContentDescription("展开分类").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("收起分类").assertDoesNotExist()
+  }
+
+  @Test
+  fun `picking a third level collapses the tree too`() {
+    val actions = mutableListOf<UiAction>()
+    composeHome(state = homeState(withSubCategories = true), onAction = { actions += it })
+
+    composeRule.onNodeWithContentDescription("展开分类").performClick()
+    composeRule.onNodeWithText("峡谷之巅").performClick()
+
+    assertEquals(
+      "峡谷之巅",
+      actions.filterIsInstance<UiAction.SelectSubCategory>().lastOrNull()?.category?.name,
+    )
+    composeRule.onNodeWithContentDescription("展开分类").assertIsDisplayed()
   }
 
   @Test
