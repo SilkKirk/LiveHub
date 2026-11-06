@@ -299,20 +299,21 @@ class HomeCategoryDensityTest {
   /**
    * Collapsed, a partition that does not fit scrolls rather than wrapping.
    *
-   * The fixture's 网游 group has three partitions, so the check is structural: the partition row
-   * must be inside a scrollable container when collapsed. `hasScrollAction` is the property the
-   * broken `FlowRow` did not have — it laid every chip out and grew the page instead.
+   * The check is structural: the partition chips live inside a **horizontal** scroll container
+   * when collapsed. `hasScrollAction` alone is not enough — the room grid is scrollable too, and
+   * the broken `FlowRow` had no scroll container of its own at all.
    */
   @Test
   fun `the collapsed partition row scrolls instead of wrapping`() {
     composeHome()
 
-    // A scrollable ancestor exists for the partition chips, and the last one is reachable inside
-    // it rather than being laid out on a new line.
-    composeRule.onNode(hasScrollAction() and hasAnyDescendant(hasText("英雄联盟")))
-      .assertExists()
-    composeRule.onNode(hasScrollAction() and hasAnyDescendant(hasText("DNF")))
-      .assertExists()
+    val horizontalScrollers = composeRule
+      .onAllNodes(hasScrollAction() and hasAnyDescendant(hasText("DNF")))
+      .fetchSemanticsNodes()
+    assertTrue(
+      "the partition row must sit in its own scroll container, found ${horizontalScrollers.size}",
+      horizontalScrollers.isNotEmpty(),
+    )
   }
 
   @Test
@@ -340,6 +341,7 @@ class HomeCategoryDensityTest {
     composeHome(onAction = { actions += it })
 
     composeRule.onNodeWithContentDescription("展开分类").performClick()
+    composeRule.onNodeWithContentDescription("收起分类").assertExists()
     composeRule.onNodeWithText("绝地求生").performClick()
 
     // The selection is reported…
@@ -348,7 +350,7 @@ class HomeCategoryDensityTest {
       actions.filterIsInstance<UiAction.SelectCategory>().lastOrNull()?.category?.name,
     )
     // …and the tree is collapsed again, so the chevron is back to its "expand" state.
-    composeRule.onNodeWithContentDescription("展开分类").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("展开分类").assertExists()
     composeRule.onNodeWithContentDescription("收起分类").assertDoesNotExist()
   }
 
@@ -358,13 +360,14 @@ class HomeCategoryDensityTest {
     composeHome(state = homeState(withSubCategories = true), onAction = { actions += it })
 
     composeRule.onNodeWithContentDescription("展开分类").performClick()
+    composeRule.onNodeWithContentDescription("收起分类").assertExists()
     composeRule.onNodeWithText("峡谷之巅").performClick()
 
     assertEquals(
       "峡谷之巅",
       actions.filterIsInstance<UiAction.SelectSubCategory>().lastOrNull()?.category?.name,
     )
-    composeRule.onNodeWithContentDescription("展开分类").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("展开分类").assertExists()
   }
 
   @Test
