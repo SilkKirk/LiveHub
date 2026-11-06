@@ -573,40 +573,65 @@ private fun CategoryTree(
       }
     }
 
-    // The partitions of the active group, with the aggregate entry leading. A single-group
-    // platform has nothing to wrap, so it keeps this as its only row.
-    FlowRow(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-      levels.visible.forEach { category ->
-        PartitionChip(
-          name = category.name,
-          selected = state.selectedCategory?.key == category.key,
-          onClick = { onAction(UiAction.SelectCategory(category)) },
-          // Long press pins/unpins instead of adding a second tap target: a star on every chip
-          // would eat the label width at 320dp. The aggregate chip is reachable here too, and it
-          // has no favourite to toggle — the ViewModel explains that rather than ignoring it.
-          modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
-        )
-      }
-    }
-
-    if (state.subCategories.isNotEmpty()) {
+    // The partitions of the active group, with the aggregate entry leading.
+    //
+    // Collapsed is **one scrolling line**; expanded wraps. This was the bug that shipped in
+    // v0.15.0: the partition row was a `FlowRow` unconditionally, so on Douyu the collapsed state
+    // still wrapped ~40 partitions into a screenful of chips and pushed the grid — the thing the
+    // user actually opened the app for — entirely below the fold.
+    if (expanded) {
       FlowRow(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
+        levels.visible.forEach { category ->
+          PartitionChip(
+            name = category.name,
+            selected = state.selectedCategory?.key == category.key,
+            onClick = { onAction(UiAction.SelectCategory(category)) },
+            // Long press pins/unpins instead of adding a second tap target: a star on every chip
+            // would eat the label width at 320dp. The aggregate chip is reachable here too, and it
+            // has no favourite to toggle — the ViewModel explains that rather than ignoring it.
+            modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
+          )
+        }
+      }
+    } else {
+      LazyRow(
+        contentPadding = PaddingValues(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+      ) {
+        items(levels.visible, key = { it.key }) { category ->
+          PartitionChip(
+            name = category.name,
+            selected = state.selectedCategory?.key == category.key,
+            onClick = { onAction(UiAction.SelectCategory(category)) },
+            modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
+          )
+        }
+      }
+    }
+
+    if (state.subCategories.isNotEmpty()) {
+      // The third level is a filter *inside* the selected partition, so it stays one line whatever
+      // the tree above it is doing: wrapping it too would double the height of an expanded page.
+      LazyRow(
+        contentPadding = PaddingValues(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+      ) {
         // 全部 leads the third level so it can be cleared without hunting for the parent chip —
         // without it the only exit was re-tapping the parent, which was not marked as selected.
-        PartitionChip(
-          name = "全部",
-          selected = state.selectedSubCategory == null,
-          onClick = { onAction(UiAction.SelectSubCategory(null)) },
-        )
-        state.subCategories.forEach { category ->
+        item(key = "sub-all") {
+          PartitionChip(
+            name = "全部",
+            selected = state.selectedSubCategory == null,
+            onClick = { onAction(UiAction.SelectSubCategory(null)) },
+          )
+        }
+        items(state.subCategories, key = { "sub-${it.key}" }) { category ->
           PartitionChip(
             name = category.name,
             selected = state.selectedSubCategory?.key == category.key,

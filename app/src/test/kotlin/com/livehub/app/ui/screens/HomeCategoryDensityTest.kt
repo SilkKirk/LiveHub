@@ -6,11 +6,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
+import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
@@ -269,6 +273,59 @@ class HomeCategoryDensityTest {
     val all = composeRule.onAllNodesWithText("全部")[0]
     val left = with(composeRule.density) { all.fetchSemanticsNode().boundsInRoot.left.toDp().value }
     assertTrue("全部 starts at ${left}dp, 网游 at ${topDp("网游")}", left < leftDp("网游"))
+  }
+
+  /**
+   * The collapsed tree is two lines: the group row and the partition row.
+   *
+   * This is the regression v0.15.0 shipped with. The partition row was a `FlowRow` regardless of
+   * the collapsed state, so Douyu's ~40 partitions in 网游竞技 wrapped into a screenful of chips and
+   * pushed the room grid entirely below the fold — the app opened to a wall of chips with no
+   * streams visible at all. The assertion measures the grid's top edge, because the chip count is
+   * exactly what was wrong and a node-existence check would have passed either way.
+   */
+  @Test
+  fun `the collapsed tree leaves room for the grid`() {
+    composeHome()
+
+    val gridTop = with(composeRule.density) {
+      composeRule.onNodeWithText("主播1").fetchSemanticsNode().boundsInRoot.top.toDp().value
+    }
+    assertTrue(
+      "the first card starts ${gridTop}dp down a 640dp screen; the tree must stay near the top",
+      gridTop < 260f,
+    )
+  }
+
+  /**
+   * Collapsed, a partition that does not fit scrolls rather than wrapping.
+   *
+   * The fixture's 网游 group has three partitions, so the check is structural: the partition row
+   * must be inside a scrollable container when collapsed. `hasScrollAction` is the property the
+   * broken `FlowRow` did not have — it laid every chip out and grew the page instead.
+   */
+  @Test
+  fun `the collapsed partition row scrolls instead of wrapping`() {
+    composeHome()
+
+    // A scrollable ancestor exists for the partition chips, and the last one is reachable inside
+    // it rather than being laid out on a new line.
+    composeRule.onNode(hasScrollAction() and hasAnyDescendant(hasText("英雄联盟")))
+      .assertExists()
+    composeRule.onNode(hasScrollAction() and hasAnyDescendant(hasText("DNF")))
+      .assertExists()
+  }
+
+  @Test
+  fun `expanding wraps the partitions instead of scrolling them`() {
+    composeHome()
+
+    composeRule.onNodeWithContentDescription("展开分类").performClick()
+
+    // Every partition of the active group is laid out at once, so all three are on screen.
+    composeRule.onNodeWithText("英雄联盟").assertIsDisplayed()
+    composeRule.onNodeWithText("绝地求生").assertIsDisplayed()
+    composeRule.onNodeWithText("DNF").assertIsDisplayed()
   }
 
   @Test
