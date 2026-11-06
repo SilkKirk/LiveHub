@@ -3,9 +3,10 @@ package com.livehub.app.ui.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -29,12 +30,16 @@ import org.robolectric.annotation.Config
  * The two things this feature adds to the follow screen.
  *
  * The follow list already had one filter row mixing two axes. This round splits it: a group row
- * (which group am I looking at) above a state/platform row (what am I filtering). The claims a JVM
- * test can hold are about *which* chips exist, what a tap emits, and that the group's own order is
- * what the group shows — the storage behaviour is `LibraryStoreTest`'s job.
+ * (which group am I looking at) above a state/platform row (what am I filtering). What a JVM test
+ * can hold is *which* chips exist, what a tap emits, and that the group's own order is what the
+ * group shows — storage behaviour is `LibraryStoreTest`'s job.
  *
- * Group names appear twice on this screen by design (once as a chip, once on every room filed
- * into that group), so chip assertions go through [chip] rather than a bare text match.
+ * Two things make the selectors here less obvious than they look:
+ *
+ *  * a group name appears **twice** by design — once as a chip, once on every room filed into it —
+ *    so chip assertions match on `Role.Checkbox`, which only the chip carries;
+ *  * `isLive` rows sort before offline ones regardless of stored order (a deliberate view rule),
+ *    so the ordering test has to use two rooms that are both live.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -43,6 +48,7 @@ class FollowGroupScreenTest {
   @get:Rule
   val composeRule = createComposeRule()
 
+  /** Rooms 1 and 3 are live, 2 and 4 are not — the live-first rule needs both kinds. */
   private val rooms = (1..4).map { index ->
     Streamer(
       platform = Platform.DOUYU,
@@ -78,8 +84,10 @@ class FollowGroupScreenTest {
   }
 
   /** The group chip, as opposed to the same name printed on a room row. */
-  private fun chip(label: String) =
-    composeRule.onNode(hasText(label) and hasClickAction())
+  private fun chip(label: String) = composeRule.onNode(
+    SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)
+      and androidx.compose.ui.test.hasText(label),
+  )
 
   @Test
   fun `the group row lists every group plus a way to manage them`() {
@@ -110,6 +118,9 @@ class FollowGroupScreenTest {
     val both = mapOf(rooms[0].key to setOf("g1", "g2"))
     compose(state(selected = "g1", roomGroups = both))
     composeRule.onNodeWithText("主播1").assertIsDisplayed()
+
+    compose(state(selected = "g2", roomGroups = both))
+    composeRule.onNodeWithText("主播1").assertIsDisplayed()
   }
 
   /**
@@ -119,7 +130,12 @@ class FollowGroupScreenTest {
    */
   @Test
   fun `a scoped group hides rooms that are not in it even with no group order`() {
-    compose(state(selected = "g2"))
+    compose(
+      state(
+        selected = "g2",
+        roomGroups = mapOf(rooms[0].key to setOf("g1"), rooms[1].key to setOf("g2")),
+      ),
+    )
 
     // 主播1 is filed into g1 only, so g2 must not show it.
     composeRule.onNodeWithText("主播1").assertDoesNotExist()
@@ -130,23 +146,24 @@ class FollowGroupScreenTest {
    * Both orders are stored separately (`member:` records carry the group position, `room:`
    * records the global one), so a group view that read `followed` would silently show the global
    * arrangement and make "arrange rooms inside 游戏" a no-op.
+   *
+   * Both rooms are live: the live-first rule outranks stored order, so mixing an offline room in
+   * would test that rule instead of this one.
    */
   @Test
   fun `a group shows its rooms in the group's own order`() {
-    val roomGroups = mapOf(
-      rooms[0].key to setOf("g1"),
-      rooms[1].key to setOf("g1"),
-    )
+    val live = listOf(rooms[0], rooms[2])
+    val roomGroups = live.associate { it.key to setOf("g1") }
     compose(
       state(
         selected = "g1",
         roomGroups = roomGroups,
-        // Global order says 主播1 first; the group order says 主播2 first.
-        groupRoomOrder = mapOf("g1" to listOf(rooms[1].key, rooms[0].key)),
+        // Global order says 主播1 first; the group order says 主播3 first.
+        groupRoomOrder = mapOf("g1" to listOf(rooms[2].key, rooms[0].key)),
       ),
     )
 
-    val first = composeRule.onAllNodesWithText("主播2")[0].fetchSemanticsNode().boundsInRoot.top
+    val first = composeRule.onAllNodesWithText("主播3")[0].fetchSemanticsNode().boundsInRoot.top
     val second = composeRule.onAllNodesWithText("主播1")[0].fetchSemanticsNode().boundsInRoot.top
     assertTrue("the group order must win inside the group", first < second)
   }
