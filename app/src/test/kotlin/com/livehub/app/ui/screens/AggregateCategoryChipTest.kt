@@ -125,28 +125,37 @@ class AggregateCategoryChipTest {
   }
 
   /**
-   * The group chip must not say 选择分类 while a chip beside it is highlighted.
+   * A group chip names the group it opens, and picking one changes which partitions are listed
+   * without changing what the grid shows.
    *
-   * `01c-home-all-live` rendered exactly that: the aggregate selected, and the group chip
-   * reading 选择分类 — the placeholder for "nothing chosen yet". The aggregate belongs to no
-   * group, so `activeGroup` is null there, and the old `?: "选择分类"` fallback could not tell
-   * the two apart. 全部分类 is Douyu's own name for that scope (`/directory/all` carries
-   * `cate1Name: "全部分类"`).
+   * This used to be a single chip that opened a half-screen "选择分类" panel, and a whole test
+   * existed to check it did not read 选择分类 while a chip beside it was highlighted. The row now
+   * carries every group inline, so that placeholder is gone entirely rather than fixed.
    */
   @Test
-  fun `the group chip names the whole tree while the aggregate is selected`() {
-    composeHome(state = homeState(aggregate))
+  fun `a group chip opens that group's partitions without touching the selection`() {
+    val actions = mutableListOf<UiAction>()
+    composeHome(onAction = { actions += it })
 
-    composeRule.onNodeWithText("全部分类").assertIsDisplayed()
-    composeRule.onNodeWithText("选择分类").assertDoesNotExist()
+    // 王者荣耀 belongs to 手游, which is not the active group, so it is not listed yet.
+    composeRule.onNodeWithText("王者荣耀").assertDoesNotExist()
+
+    composeRule.onNodeWithText("手游").performClick()
+
+    composeRule.onNodeWithText("王者荣耀").assertIsDisplayed()
+    composeRule.onNodeWithText("英雄联盟").assertDoesNotExist()
+    assertTrue(
+      "browsing a group must not select a partition",
+      actions.none { it is UiAction.SelectCategory },
+    )
   }
 
-  /** A real category still names its own group, so the label is not a blanket change. */
   @Test
-  fun `the group chip still names the active group for a real category`() {
-    composeHome(state = homeState(categories[1]))
+  fun `no placeholder chip is ever rendered`() {
+    composeHome(state = homeState(aggregate))
 
-    composeRule.onNodeWithText("网游").assertIsDisplayed()
+    // The wording the panel used; the inline tree has no equivalent state.
+    composeRule.onNodeWithText("选择分类").assertDoesNotExist()
     composeRule.onNodeWithText("全部分类").assertDoesNotExist()
   }
 
@@ -162,15 +171,14 @@ class AggregateCategoryChipTest {
     assertTrue(picked.category.isAggregate)
   }
 
+  /**
+   * Every group is a chip in the row, so the aggregate has nowhere to be listed twice — the
+   * panel that used to duplicate it is gone.
+   */
   @Test
-  fun `the group picker does not list the aggregate`() {
+  fun `the aggregate appears exactly once`() {
     composeHome()
 
-    composeRule.onNodeWithText("网游").performClick()
-
-    // The picker is open over 网游's categories; 全部直播 is already the row's first chip and has
-    // no group to be filed under, so it must appear exactly once on screen — in the row.
-    composeRule.onNodeWithText("选择分类").assertIsDisplayed()  // the panel title, not the chip
     composeRule.onAllNodesWithText("全部直播").assertCountEquals(1)
   }
 }

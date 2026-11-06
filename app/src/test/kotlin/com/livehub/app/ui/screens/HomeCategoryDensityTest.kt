@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
@@ -24,19 +25,14 @@ import org.robolectric.annotation.Config
 /**
  * The home screen's chrome has to stay small enough that cards are what you see.
  *
- * At 320x640 the old layout stacked up to three chip rows under a platform bar that had itself
- * wrapped onto two lines: chips ran from y=8 to y=268, 41% of the screen, and the grid showed
- * less than two rows of cards (`03b-home-subcategory.png` in r21). Every assertion here is a
- * property that layout did not have:
+ * At 320x640 the layout this replaced stacked up to three chip rows under a platform bar that had
+ * itself wrapped onto two lines: chips ran from y=8 to y=268, 41% of the screen, and the grid
+ * showed less than two rows of cards. The inline category tree keeps that budget: one group row,
+ * one partition row, and a third row only when the platform publishes a third level.
  *
- *  * the four platform tabs share one baseline — the old `FlowRow` put 哔哩哔哩 on its own line;
- *  * the group chip and the categories share one row — they used to be two rows;
- *  * with all three Douyu levels present, the deepest chip row still starts in the top fifth
- *    of a 640dp screen — it used to start at 222dp;
- *  * the group that is no longer a row of its own is still reachable, through the picker.
- *
- * Measuring positions rather than counting nodes is deliberate: every one of these nodes exists
- * in the broken layout too, so `assertExists` would have been green throughout.
+ * The assertions are about the properties the broken layout lacked — shared baselines, a bounded
+ * depth, and a collapsed default — rather than node counts, because every one of these nodes
+ * exists in a bad layout too.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -49,7 +45,7 @@ class HomeCategoryDensityTest {
     Category(Platform.DOUYU, id, name, id, group, sortOrder = order)
 
   /**
-   * Douyu's real shape: three groups, several categories each, and a third level under one.
+   * Douyu's real shape: three groups, several partitions each, and a third level under one.
    *
    * The group row only exists when a platform publishes more than one group, so a single-group
    * fixture would test the easy branch and miss the layout that was actually too tall.
@@ -116,34 +112,39 @@ class HomeCategoryDensityTest {
     assertEquals("哔哩哔哩 is on its own line under 虎牙: $bilibili vs $huya", huya, bilibili, 1f)
   }
 
+  /**
+   * The group row and the partition row are two lines, not three.
+   *
+   * They used to share a single line (a group chip beside the partition chips), which is what
+   * made room for the panel. The inline tree gives the groups their own row, so the check is that
+   * the partition row starts below the group row rather than level with it.
+   */
   @Test
-  fun `the group and its categories share one row`() {
+  fun `the partition row sits below the group row`() {
     composeHome()
 
-    assertEquals(
-      "网游 is on a row of its own above the categories",
-      topDp("英雄联盟"),
-      topDp("网游"),
-      1f,
+    assertTrue(
+      "英雄联盟 (${topDp("英雄联盟")}dp) must be below 网游 (${topDp("网游")}dp)",
+      topDp("英雄联盟") > topDp("网游"),
     )
   }
 
   /**
    * The density claim itself, with all three Douyu levels on screen.
    *
-   * 130dp is far above the one-row layout (~80dp) and far below the three-row one (222dp), so
-   * neither font metrics nor chip padding can move the result across the line.
+   * 150dp is above the two-row layout (~110dp) and far below the three-row one (222dp) this
+   * screen used to be, so neither font metrics nor chip padding can move the result across.
    */
   @Test
-  fun `the deepest chip row starts in the top fifth of the screen`() {
+  fun `the deepest chip row starts in the top quarter of the screen`() {
     composeHome(state = homeState(withSubCategories = true))
 
     val deepest = topDp("全部")
-    assertTrue("the third level starts ${deepest}dp down a 640dp screen", deepest < 130f)
+    assertTrue("the third level starts ${deepest}dp down a 640dp screen", deepest < 150f)
   }
 
   @Test
-  fun `the third level stays inline under the category row`() {
+  fun `the third level stays inline under the partition row`() {
     composeHome(state = homeState(withSubCategories = true))
 
     composeRule.onNodeWithText("峡谷之巅").assertIsDisplayed()
@@ -151,35 +152,31 @@ class HomeCategoryDensityTest {
   }
 
   /**
-   * The group that lost its own row is still one tap away.
+   * A category from another group is one tap away, and it does not require opening anything.
    *
-   * 王者荣耀 belongs to 手游, which is not the active group, so it is not on screen until the
-   * picker is opened and the group switched — the whole path the collapsed row has to keep.
+   * 王者荣耀 belongs to 手游, which is not the active group, so it is not listed until that group
+   * chip is tapped — the whole path the inline row has to keep.
    */
   @Test
-  fun `the picker still reaches a category from another group`() {
+  fun `another group's partition is one tap away`() {
     val actions = mutableListOf<UiAction>()
     composeHome(onAction = { actions += it })
-
-    composeRule.onNodeWithText("网游").performClick()
-    composeRule.onNodeWithText("选择分类").assertIsDisplayed()
 
     composeRule.onNodeWithText("手游").performClick()
     composeRule.onNodeWithText("王者荣耀").performClick()
 
     val picked = actions.filterIsInstance<UiAction.SelectCategory>().single()
     assertEquals("王者荣耀", picked.category.name)
-    composeRule.onNodeWithText("选择分类").assertDoesNotExist()
   }
 
   /**
-   * A platform with a single group hides nothing, so it gets no picker chip.
+   * A platform with a single group hides nothing, so it gets no group row at all.
    *
-   * The chip is the escape hatch for categories that are *not* inline; showing it where every
-   * category already is would be a second control for the same job.
+   * Showing one would put every partition behind a redundant chip and cost a line of height for
+   * no information.
    */
   @Test
-  fun `a single-group platform shows no picker chip`() {
+  fun `a single-group platform shows no group row`() {
     val single = listOf(
       category("1", "英雄联盟", "网游", 0),
       category("2", "王者荣耀", "网游", 1),
@@ -191,5 +188,62 @@ class HomeCategoryDensityTest {
     composeRule.onNodeWithText("英雄联盟").assertIsDisplayed()
     composeRule.onNodeWithText("王者荣耀").assertIsDisplayed()
     composeRule.onNodeWithText("网游").assertDoesNotExist()
+  }
+
+  // --------------------------------------------------------------- expandable
+
+  @Test
+  fun `the tree starts collapsed`() {
+    composeHome()
+
+    // Only the active group's partitions are listed.
+    composeRule.onNodeWithText("英雄联盟").assertIsDisplayed()
+    composeRule.onNodeWithText("户外").assertDoesNotExist()
+  }
+
+  /**
+   * Expanding wraps the groups instead of scrolling one line, so a group that was off the right
+   * edge becomes visible — which is the whole point of the chevron.
+   */
+  @Test
+  fun `expanding shows every group`() {
+    composeHome()
+
+    composeRule.onNodeWithText("户外").assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("展开分类").performClick()
+
+    composeRule.onNodeWithText("网游").assertIsDisplayed()
+    composeRule.onNodeWithText("手游").assertIsDisplayed()
+    composeRule.onNodeWithText("娱乐").assertIsDisplayed()
+  }
+
+  @Test
+  fun `the chevron flips when expanded`() {
+    composeHome()
+
+    composeRule.onNodeWithContentDescription("展开分类").performClick()
+    composeRule.onNodeWithContentDescription("收起分类").assertIsDisplayed()
+  }
+
+  @Test
+  fun `a single-group platform has no chevron`() {
+    val single = listOf(category("1", "英雄联盟", "网游", 0))
+    composeHome(state = homeState().copy(categories = single, selectedCategory = single.first()))
+
+    composeRule.onNodeWithContentDescription("展开分类").assertDoesNotExist()
+  }
+
+  /**
+   * Expanding must not push the grid off screen: the wrapped group block is bounded by the number
+   * of *groups* (three here), not by the number of partitions.
+   */
+  @Test
+  fun `expanding keeps the partition row on screen`() {
+    composeHome()
+
+    composeRule.onNodeWithContentDescription("展开分类").performClick()
+
+    val partitions = topDp("英雄联盟")
+    assertTrue("partitions start ${partitions}dp down after expanding", partitions < 220f)
   }
 }

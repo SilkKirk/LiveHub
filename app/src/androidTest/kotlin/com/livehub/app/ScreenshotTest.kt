@@ -18,6 +18,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -401,23 +402,19 @@ class ScreenshotTest {
   )
 
   /**
-   * The category picker, which is where every group but the active one now lives.
+   * The expanded category tree.
    *
-   * The home screen used to stack one chip row per level. Collapsing that into a single row
-   * moved the group list behind this panel, so the panel is the only thing that still shows
-   * 手游 and 娱乐 — and it had no render at all, because it cannot be reached without a tap.
-   *
-   * The tap target is the **group chip**, which reads 全部分类 while the aggregate is selected
-   * (the baseline state). It used to be "网游", which is a *category* chip: with the aggregate
-   * selected there is no active group, so every group's categories are inline and 网游 is on
-   * the row — tapping it would have rendered a partition instead of the panel.
+   * The collapsed row shows one line of groups and the active group's partitions; the chevron
+   * wraps every group into a FlowRow. That second state is the whole point of the control and it
+   * cannot be reached without a tap, so it needs its own render — a collapsed baseline proves
+   * nothing about the layout that appears after the tap.
    */
   @Test
-  fun homeCategoryPicker() = capture(
-    "01b-home-category-picker",
+  fun homeCategoryExpanded() = capture(
+    "01b-home-category-expanded",
     baseState(),
-    clickText = "全部分类",
-    expectText = "选择分类",
+    clickDescription = "展开分类",
+    expectDescription = "收起分类",
   )
 
   /**
@@ -955,7 +952,11 @@ class ScreenshotTest {
     onScreenText: String? = null,
     scrollToText: String? = null,
     clickText: String? = null,
+    /** Clicks an icon-only control by its content description, where [clickText] cannot match. */
+    clickDescription: String? = null,
     expectText: String? = null,
+    /** Asserts an icon-only control is present, for the same reason as [clickDescription]. */
+    expectDescription: String? = null,
     content: (@Composable () -> Unit)? = null,
   ) {
     composeRule.mainClock.autoAdvance = false
@@ -997,6 +998,17 @@ class ScreenshotTest {
       composeRule.onNodeWithText(clickText).performClick()
       composeRule.mainClock.advanceTimeByFrame()
       composeRule.waitForIdle()
+    }
+
+    if (clickDescription != null) {
+      // Icon-only controls have no text to match; the chevron is one of them.
+      composeRule.onNodeWithContentDescription(clickDescription).performClick()
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.waitForIdle()
+    }
+
+    expectDescription?.let { description ->
+      composeRule.onNodeWithContentDescription(description).assertIsDisplayed()
     }
 
     expectText?.let { text ->

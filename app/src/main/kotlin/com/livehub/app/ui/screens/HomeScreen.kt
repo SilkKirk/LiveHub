@@ -3,11 +3,11 @@ package com.livehub.app.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,13 +22,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -38,7 +37,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -71,47 +69,34 @@ import com.livehub.core.model.Platform
 private const val NO_MORE_HINT_THRESHOLD = 21
 
 /**
- * The category tree, resolved once and shared by the inline row and the picker.
+ * The category tree, resolved once and shared by the two inline rows.
  *
  * @property groups the distinct group names the platform publishes ("网游" / "手游" / …), in
  *   the order the platform lists them.
- * @property activeGroup the group the selected category belongs to, null before a selection
- *   and when the aggregate entry is selected — it belongs to no group.
- * @property visible the categories of [activeGroup] — or every category when the platform
- *   publishes a single group, because then the grouping carries no information and hiding the
- *   rest behind a picker would be pure cost. The aggregate entry always leads it.
- * @property aggregateLabel what the group chip says while [activeGroup] is null, so the chip
- *   can tell "nothing chosen yet" from "the whole tree is showing".
+ * @property activeGroup the group whose partitions [visible] holds. It is a **browse location**,
+ *   not the selection: it survives picking a partition, exactly like the reference client keeps
+ *   网游 highlighted while 英雄联盟 is the partition being watched.
+ * @property visible the aggregate entry plus the partitions of [activeGroup].
  */
 private data class CategoryLevels(
   val groups: List<String>,
   val activeGroup: String?,
   val visible: List<Category>,
-  val aggregateLabel: String,
 )
 
-private fun categoryLevelsOf(state: UiState): CategoryLevels {
-  // The aggregate entry belongs to no group, so it must be excluded from the group list and
-  // kept in [visible] whatever group is active — otherwise picking any category would make
-  // the only way back to "先随便看看" disappear.
+private fun categoryLevelsOf(state: UiState, requestedGroup: String?): CategoryLevels {
+  // The aggregate entry belongs to no group, so it must be excluded from the group list and kept
+  // in [visible] whatever group is active — otherwise picking any partition would make the only
+  // way back to "先随便看看" disappear.
   val aggregates = state.categories.filter { it.isAggregate }
   val grouped = state.categories.filterNot { it.isAggregate }
   val groups = grouped.mapNotNull { it.parentName }.distinct()
-  val active = state.selectedCategory?.parentName
-  val visible = aggregates + if (groups.size > 1 && active != null) {
-    grouped.filter { it.parentName == active }
-  } else {
-    grouped
-  }
-  return CategoryLevels(
-    groups = groups,
-    activeGroup = active,
-    visible = visible,
-    // 全部分类 is Douyu's own name for the scope `/directory/all` browses (`$DATA` on that
-    // page carries `cate1Name: "全部分类"`), so the chip says where the row is rather than
-    // inventing a third wording.
-    aggregateLabel = if (state.selectedCategory?.isAggregate == true) "全部分类" else "选择分类",
-  )
+  // A remembered group that no longer exists (a platform switch, a catalogue that changed) falls
+  // back to the first one rather than to "no filter", which would put every partition of every
+  // group in one FlowRow — 400+ chips on Douyu.
+  val active = requestedGroup?.takeIf { it in groups } ?: groups.firstOrNull()
+  val visible = aggregates + if (active == null) grouped else grouped.filter { it.parentName == active }
+  return CategoryLevels(groups = groups, activeGroup = active, visible = visible)
 }
 
 /** Home screen: platform switcher, one category row and the room grid. */
@@ -133,31 +118,35 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
         state.rooms.isNotEmpty()
     }
   }
-  val levels = remember(state.categories, state.selectedCategory) { categoryLevelsOf(state) }
-  // Keyed on the platform: the panel lists the tree of the platform that was showing, and a
-  // switch must not leave it open over a tree that no longer exists.
-  var pickerOpen by remember(state.platform) { mutableStateOf(false) }
+  // Which group the partition row is showing. Kept per platform so a switch back restores the
+  // tree the user was in rather than dropping them on 网游 again.
+  var browseGroup by remember(state.platform) { mutableStateOf<String?>(null) }
+  // Collapsed shows one scrolling chip row; expanded wraps every group into a FlowRow.
+  var expanded by remember(state.platform) { mutableStateOf(false) }
+  val levels = remember(state.categories, browseGroup) { categoryLevelsOf(state, browseGroup) }
 
   LaunchedEffect(shouldLoadMore, state.rooms.size) {
     if (shouldLoadMore) onAction(UiAction.LoadMore)
   }
 
-  // Back closes the panel rather than the app. `LiveHubRoot` only claims back for other
-  // destinations, so without this the panel would be a trap on the one screen that has none.
-  BackHandler(enabled = pickerOpen) { pickerOpen = false }
+  // Back collapses the tree before it leaves the page: an expanded row of 400 partitions would
+  // otherwise be a dead end on the one screen that has no back destination.
+  BackHandler(enabled = expanded) { expanded = false }
 
   Box(modifier = Modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize()) {
       PlatformTabs(state = state, onAction = onAction)
       FavoritesRow(
         state = state,
-        onOpenPicker = { pickerOpen = true },
+        onOpenPicker = { expanded = true },
         onAction = onAction,
       )
-      CategoryRow(
+      CategoryTree(
         state = state,
         levels = levels,
-        onOpenPicker = { pickerOpen = true },
+        expanded = expanded,
+        onToggleExpanded = { expanded = !expanded },
+        onSelectGroup = { browseGroup = it },
         onAction = onAction,
       )
 
@@ -224,15 +213,6 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
           }
         }
       }
-    }
-
-    if (pickerOpen) {
-      CategoryPicker(
-        state = state,
-        levels = levels,
-        onDismiss = { pickerOpen = false },
-        onAction = onAction,
-      )
     }
   }
 }
@@ -368,6 +348,8 @@ private fun FavoritesRow(
       }
     }
     item(key = "fav-add") {
+      // Expanding the tree is how a partition gets pinned now (long press a chip), so the "+"
+      // opens the tree rather than a separate picker.
       IconButton(onClick = onOpenPicker, modifier = Modifier.size(32.dp)) {
         Icon(Icons.Filled.Add, contentDescription = "收藏分区", modifier = Modifier.size(18.dp))
       }
@@ -375,236 +357,181 @@ private fun FavoritesRow(
   }
 }
 
+
 /**
- * The category selector: one row.
+ * The category tree: two inline rows, expanded or collapsed.
  *
- * It used to be up to three stacked chip rows — group, category, third level — which at 320dp
- * cost 112dp of chips under a two-line platform row and left less than two rows of cards
- * visible. The reference client keeps exactly one chip row above its grid
- * (`screenshots/douyu.jpeg`) and puts the rest of the tree behind a "选择分类" sheet
- * (`DouyuHomeScreen.kt`), so the group is now a single chip that opens [CategoryPicker]
- * instead of a row of its own.
+ * Shaped after the Bilibili client's live tab (`screenshots/b.jpeg`): a row of groups with a
+ * chevron at the right end, and — once a group is picked — a second row of that group's
+ * partitions. Tapping the chevron wraps every group into a `FlowRow` instead of scrolling one
+ * line, and the partition row follows it, which is what makes 400+ Douyu partitions reachable
+ * without a separate sheet.
  *
- * The third level stays inline. It is a filter *inside* the selected category rather than a
- * sibling of it, and the reference keeps its `Cate3Chips` row inline for the same reason.
- * 全部 leads it so the level can be cleared without hunting for the parent chip — without it
- * the only exit was re-tapping the parent, which was not marked as selected.
+ * This replaces a "选择分类" chip that opened a half-screen panel. The panel worked but cost two
+ * things the reference does not pay: the tree was invisible until opened, and picking a
+ * partition closed it, so comparing two partitions meant reopening it each time. Both rows are
+ * cheap because they are only as tall as the group actually selected — the collapsed state is
+ * one line, the expanded state is bounded by the number of *groups* (12 on Douyu), not by the
+ * number of partitions.
+ *
+ * Selection vs browse is the distinction that makes it work: [CategoryLevels.activeGroup] is
+ * where you are looking, [UiState.selectedCategory] is what the grid shows. Picking 网游 does
+ * not change the grid; picking 英雄联盟 does, and 网游 stays highlighted underneath.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CategoryRow(
+private fun CategoryTree(
   state: UiState,
   levels: CategoryLevels,
-  onOpenPicker: () -> Unit,
+  expanded: Boolean,
+  onToggleExpanded: () -> Unit,
+  onSelectGroup: (String) -> Unit,
   onAction: (UiAction) -> Unit,
 ) {
   if (state.categories.isEmpty()) return
+  val multiGroup = levels.groups.size > 1
 
   Column(modifier = Modifier.fillMaxWidth()) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      // Only when there is something to hide: a platform with a single group shows every
-      // category inline, so a picker would be a second way to do what the row already does.
-      if (levels.groups.size > 1) {
-        AssistChip(
-          onClick = onOpenPicker,
-          // The chip names the scope the row is filtered to. With the aggregate selected
-          // there is no group, and the old `?: "选择分类"` fallback then claimed nothing had
-          // been chosen while a chip right beside it was highlighted — the first render of
-          // `01c-home-all-live` said 选择分类 next to a selected 全部直播. 全部分类 is what
-          // that state actually is: every group's categories, which is also what the row
-          // shows once [activeGroup] is null.
-          label = { Text(levels.activeGroup ?: levels.aggregateLabel, maxLines = 1) },
-          trailingIcon = {
-            Icon(
-              imageVector = Icons.Filled.ArrowDropDown,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp),
-            )
-          },
-          modifier = Modifier.padding(start = 12.dp, end = 4.dp),
-        )
-      }
-      LazyRow(
-        contentPadding = PaddingValues(horizontal = 12.dp),
+    if (expanded && multiGroup) {
+      FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        state = rememberLazyListState(),
-        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        items(levels.visible, key = { it.key }) { category ->
-          FilterChip(
-            // The parent stays highlighted while a third level is open, so the row still says
-            // which category the list is inside. It used to require
-            // `selectedSubCategory == null`, which left both rows looking unselected and made
-            // "go back to the whole category" look like a no-op.
-            selected = state.selectedCategory?.key == category.key,
-            onClick = { onAction(UiAction.SelectCategory(category)) },
-            label = { Text(category.name, maxLines = 1) },
-            // Long press pins/unpins instead of adding a second tap target: a star on every chip
-            // would eat the label width at 320dp. The aggregate chip is reachable here too, and
-            // it has no favourite to toggle — the ViewModel explains that rather than ignoring
-            // the gesture.
-            modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
+        levels.groups.forEach { name ->
+          GroupChip(
+            name = name,
+            selected = name == levels.activeGroup,
+            onClick = { onSelectGroup(name) },
           )
         }
+        // The collapse control rides at the end of the wrapped flow, where the reference puts it:
+        // one chevron, always in the last row, so it never disappears while the list grows.
+        ChevronButton(expanded = true, onClick = onToggleExpanded)
       }
-    }
-
-    if (state.subCategories.isNotEmpty()) {
-      LazyRow(
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    } else {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        item(key = "sub-all") {
-          FilterChip(
-            selected = state.selectedSubCategory == null,
-            onClick = { onAction(UiAction.SelectSubCategory(null)) },
-            label = { Text("全部") },
-          )
-        }
-        items(state.subCategories, key = { "sub-${it.key}" }) { category ->
-          FilterChip(
-            selected = state.selectedSubCategory?.key == category.key,
-            onClick = { onAction(UiAction.SelectSubCategory(category)) },
-            label = { Text(category.name, maxLines = 1) },
-          )
-        }
-      }
-    }
-  }
-}
-
-/**
- * The rest of the category tree: groups on top, the chosen group's categories below.
- *
- * A sheet is what the reference client does for the same job, but this is drawn in the
- * activity window rather than as a `ModalBottomSheet`, for two reasons. A dialog-hosted sheet
- * is a separate window, and the screenshot harness captures `onRoot()` of the activity — a
- * render is the only visual proof this page has, so the panel has to be in it. And the panel
- * needs no animation, so a frozen-clock capture shows it fully open instead of mid-slide.
- *
- * Switching the group here is a browse step, not a selection: it only changes the list below.
- * Picking a category is what changes the page, and it closes the panel.
- */
-@Composable
-private fun CategoryPicker(
-  state: UiState,
-  levels: CategoryLevels,
-  onDismiss: () -> Unit,
-  onAction: (UiAction) -> Unit,
-) {
-  var group by remember { mutableStateOf(levels.activeGroup) }
-  // The aggregate entry is already the row's first chip, so listing it here as well would be
-  // a second control for the same job — and it belongs to no group, so it would sit at the
-  // top of every group's list.
-  val pickable = remember(state.categories) { state.categories.filterNot { it.isAggregate } }
-  val listed = remember(pickable, group) {
-    if (group == null) pickable else pickable.filter { it.parentName == group }
-  }
-
-  Box(modifier = Modifier.fillMaxSize()) {
-    // Scrim: tapping outside closes the panel, as the reference sheet's scrim does.
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .background(Color.Black.copy(alpha = 0.45f))
-        .pointerInput(Unit) { detectTapGestures { onDismiss() } },
-    )
-    Surface(
-      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.62f).align(Alignment.BottomCenter),
-      shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 3.dp,
-      shadowElevation = 8.dp,
-    ) {
-      Column(modifier = Modifier.fillMaxSize().padding(top = 16.dp)) {
-        Text(
-          text = "选择分类",
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.SemiBold,
-          modifier = Modifier.padding(horizontal = 16.dp),
-        )
-        if (levels.groups.size > 1) {
-          LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-          ) {
+        LazyRow(
+          contentPadding = PaddingValues(horizontal = 12.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.weight(1f),
+        ) {
+          if (multiGroup) {
             items(levels.groups, key = { it }) { name ->
-              FilterChip(
-                selected = name == group,
-                onClick = { group = name },
-                label = { Text(name) },
+              GroupChip(
+                name = name,
+                selected = name == levels.activeGroup,
+                onClick = { onSelectGroup(name) },
               )
             }
           }
         }
-        LazyColumn(
-          contentPadding = PaddingValues(vertical = 8.dp),
-          modifier = Modifier.fillMaxWidth().weight(1f),
-        ) {
-          items(listed, key = { it.key }) { category ->
-            CategoryPickerRow(
-              name = category.name,
-              selected = category.key == state.selectedCategory?.key,
-              // The aggregate entry is not listed here at all (`pickable` drops it), so this star
-              // is never offered for something that cannot be pinned.
-              favorite = state.favorites.any {
-                it.platform == category.platform && it.id == category.id
-              },
-              onToggleFavorite = { onAction(UiAction.ToggleFavorite(category)) },
-              onClick = {
-                onAction(UiAction.SelectCategory(category))
-                onDismiss()
-              },
-            )
-          }
+        if (multiGroup) {
+          ChevronButton(expanded = false, onClick = onToggleExpanded)
+        }
+      }
+    }
+
+    // The partitions of the active group, with the aggregate entry leading. A single-group
+    // platform has nothing to wrap, so it keeps this as its only row.
+    FlowRow(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      levels.visible.forEach { category ->
+        PartitionChip(
+          name = category.name,
+          selected = state.selectedCategory?.key == category.key,
+          onClick = { onAction(UiAction.SelectCategory(category)) },
+          // Long press pins/unpins instead of adding a second tap target: a star on every chip
+          // would eat the label width at 320dp. The aggregate chip is reachable here too, and it
+          // has no favourite to toggle — the ViewModel explains that rather than ignoring it.
+          modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
+        )
+      }
+    }
+
+    if (state.subCategories.isNotEmpty()) {
+      FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        // 全部 leads the third level so it can be cleared without hunting for the parent chip —
+        // without it the only exit was re-tapping the parent, which was not marked as selected.
+        PartitionChip(
+          name = "全部",
+          selected = state.selectedSubCategory == null,
+          onClick = { onAction(UiAction.SelectSubCategory(null)) },
+        )
+        state.subCategories.forEach { category ->
+          PartitionChip(
+            name = category.name,
+            selected = state.selectedSubCategory?.key == category.key,
+            onClick = { onAction(UiAction.SelectSubCategory(category)) },
+          )
         }
       }
     }
   }
 }
 
+/** A group chip: 网游 / 手游 / …. Highlighted while that group's partitions are showing. */
 @Composable
-private fun CategoryPickerRow(
+private fun GroupChip(name: String, selected: Boolean, onClick: () -> Unit) {
+  FilterChip(
+    selected = selected,
+    onClick = onClick,
+    label = { Text(name, maxLines = 1) },
+  )
+}
+
+/**
+ * A partition chip, with the checkmark the reference puts in front of the selected one.
+ *
+ * The tick is not decoration: the aggregate chip (全部直播) and the first real partition can both
+ * be highlighted-looking once a third level is open, and a filled background alone was ambiguous
+ * at chip size. The reference marks the current partition with ✓ for the same reason.
+ */
+@Composable
+private fun PartitionChip(
   name: String,
   selected: Boolean,
-  favorite: Boolean,
-  onToggleFavorite: () -> Unit,
   onClick: () -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-  Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .clickable(onClick = onClick)
-      .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    Text(
-      text = name,
-      style = MaterialTheme.typography.bodyLarge,
-      fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-      color =
-        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-      modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+  FilterChip(
+    selected = selected,
+    onClick = onClick,
+    label = { Text(name, maxLines = 1) },
+    leadingIcon = if (selected) {
+      {
+        Icon(
+          imageVector = Icons.Filled.Check,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+        )
+      }
+    } else {
+      null
+    },
+    modifier = modifier,
+  )
+}
+
+/** The chevron that swaps between the one-line row and the wrapped tree. */
+@Composable
+private fun ChevronButton(expanded: Boolean, onClick: () -> Unit) {
+  IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+    Icon(
+      imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+      contentDescription = if (expanded) "收起分类" else "展开分类",
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.size(22.dp),
     )
-    if (selected) {
-      Icon(
-        imageVector = Icons.Filled.Check,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.size(18.dp),
-      )
-    }
-    // The one place that can show the whole tree, so it is the main way to pin a partition.
-    IconButton(onClick = onToggleFavorite, modifier = Modifier.size(40.dp)) {
-      Icon(
-        imageVector = if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
-        contentDescription = if (favorite) "取消收藏 $name" else "收藏 $name",
-        tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.size(20.dp),
-      )
-    }
   }
 }
