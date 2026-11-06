@@ -33,10 +33,20 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.livehub.core.common.ViewerCountFormatter
 import com.livehub.core.designsystem.LiveBadgeColor
 import com.livehub.core.model.Streamer
+
+/** Card corner radius. 16dp reads as "tile" rather than "button" at 2-column widths. */
+private val CardShape = RoundedCornerShape(16.dp)
+
+/** The cover is inset inside the card, so its radius is the card's minus the inset. */
+private val CoverShape = RoundedCornerShape(12.dp)
+
+/** Badges are fully rounded rather than 4dp rectangles: they read as labels, not as chips. */
+private val PillShape = RoundedCornerShape(percent = 50)
 
 /**
  * A room card used by the home, category, search and follow grids.
@@ -57,59 +67,82 @@ fun StreamerCard(
   Surface(
     modifier = modifier
       .fillMaxWidth()
-      .clip(RoundedCornerShape(12.dp))
+      .clip(CardShape)
       .clickable(onClick = onClick),
-    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+    // A card is a *layer* now, not a tinted copy of the page: a real surface colour plus a soft
+    // shadow. Before this the tile was `surfaceVariant` at 35% over a background of the same
+    // family, so the only thing separating it from the page was its cover image.
+    color = MaterialTheme.colorScheme.surface,
+    shape = CardShape,
+    shadowElevation = 1.dp,
+    tonalElevation = 0.dp,
   ) {
     Column {
-      Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(6.dp)
+          .clip(CoverShape)
+          .aspectRatio(16f / 9f),
+      ) {
         CoverImage(streamer = streamer)
 
         if (streamer.isLive) {
           Surface(
             color = LiveBadgeColor,
-            shape = RoundedCornerShape(4.dp),
+            shape = PillShape,
             modifier = Modifier.padding(6.dp).align(Alignment.TopStart),
-          ) {
-            Text(
-              text = "LIVE",
-              style = MaterialTheme.typography.labelSmall,
-              color = Color.White,
-              fontWeight = FontWeight.Bold,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-          }
-        } else {
-          Surface(
-            color = Color.Black.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(4.dp),
-            modifier = Modifier.padding(6.dp).align(Alignment.TopStart),
-          ) {
-            Text(
-              text = "未开播",
-              style = MaterialTheme.typography.labelSmall,
-              color = Color.White,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-          }
-        }
-
-        if (streamer.viewerCount > 0) {
-          Surface(
-            color = Color.Black.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(4.dp),
-            modifier = Modifier.padding(6.dp).align(Alignment.BottomStart),
           ) {
             Row(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(3.dp),
               modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
+              Box(
+                modifier = Modifier
+                  .size(4.dp)
+                  .clip(CircleShape)
+                  .background(Color.White),
+              )
+              Text(
+                text = "LIVE",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+              )
+            }
+          }
+        } else {
+          Surface(
+            color = Color.Black.copy(alpha = 0.5f),
+            shape = PillShape,
+            modifier = Modifier.padding(6.dp).align(Alignment.TopStart),
+          ) {
+            Text(
+              text = "未开播",
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White.copy(alpha = 0.9f),
+              modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            )
+          }
+        }
+
+        if (streamer.viewerCount > 0) {
+          Surface(
+            color = Color.Black.copy(alpha = 0.5f),
+            shape = PillShape,
+            modifier = Modifier.padding(6.dp).align(Alignment.BottomStart),
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(3.dp),
+              modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            ) {
               Icon(
                 imageVector = Icons.Outlined.Visibility,
                 contentDescription = null,
                 modifier = Modifier.size(11.dp),
-                tint = Color.White,
+                tint = Color.White.copy(alpha = 0.9f),
               )
               Text(
                 text = ViewerCountFormatter.format(streamer.viewerCount),
@@ -131,48 +164,58 @@ fun StreamerCard(
         val partition = streamer.categoryName
         if (!partition.isNullOrBlank()) {
           Surface(
-            color = Color.Black.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(4.dp),
+            color = Color.Black.copy(alpha = 0.5f),
+            shape = PillShape,
             modifier = Modifier.padding(6.dp).align(Alignment.BottomEnd),
           ) {
             Text(
               text = partition,
               style = MaterialTheme.typography.labelSmall,
-              color = Color.White,
+              color = Color.White.copy(alpha = 0.95f),
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+              modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
             )
           }
         }
 
         IconButton(
           onClick = onToggleFollow,
-          modifier = Modifier.align(Alignment.TopEnd).padding(2.dp),
+          modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).size(32.dp),
         ) {
           Icon(
             imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
             contentDescription = if (followed) "取消关注" else "关注",
+            // A filled star sits on a solid disc so it reads over any cover; the hollow one only
+            // needs the scrim, which keeps the card calm when nothing is followed.
             tint = if (followed) MaterialTheme.colorScheme.primary else Color.White,
             modifier = Modifier
-              .size(20.dp)
-              .background(Color.Black.copy(alpha = 0.35f), CircleShape),
+              .size(19.dp)
+              .background(
+                if (followed) Color.White.copy(alpha = 0.92f) else Color.Black.copy(alpha = 0.3f),
+                CircleShape,
+              )
+              .padding(3.dp),
           )
         }
       }
 
-      Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+      Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
         Text(
           text = streamer.title.ifBlank { streamer.streamerName },
           style = MaterialTheme.typography.bodyMedium,
-          fontWeight = FontWeight.Medium,
-          maxLines = 1,
+          fontWeight = FontWeight.SemiBold,
+          // Two lines, not one. The cover lost a few pixels of height to the inset, and a title
+          // is the one piece of text on the card that actually says what the stream is about —
+          // ellipsizing "【预告】7日6点 T1 vs KC" to "【预告】7日6点 T1…" told the user nothing.
+          maxLines = 2,
           overflow = TextOverflow.Ellipsis,
+          lineHeight = 18.sp,
         )
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-          modifier = Modifier.padding(top = 4.dp),
+          horizontalArrangement = Arrangement.spacedBy(5.dp),
+          modifier = Modifier.padding(top = 6.dp),
         ) {
           Avatar(streamer = streamer)
           Text(

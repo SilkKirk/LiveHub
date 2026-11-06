@@ -1,21 +1,29 @@
 package com.livehub.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -27,10 +35,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.screens.FollowScreen
 import com.livehub.app.ui.screens.HomeScreen
@@ -173,17 +185,76 @@ internal fun BackSwipeContainer(
   }
 }
 
+/**
+ * The bottom bar.
+ *
+ * Restyled rather than replaced: the five destinations and their icons are unchanged, but the bar
+ * now sits on its own surface with a hairline above it, the selected item gets a tinted pill
+ * behind its icon instead of only a colour change, and the labels stay a step quieter than the
+ * icons. The default `NavigationBar` colours every label at full strength, which made the bar the
+ * busiest thing on a screen whose content is video thumbnails.
+ */
 @Composable
 private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
-  NavigationBar {
-    Dock.entries.forEach { dock ->
-      NavigationBarItem(
-        selected = state.screen == dock.screen ||
-          (dock == Dock.HOME && state.screen == Screen.Category),
-        onClick = { onAction(UiAction.Navigate(dock.screen)) },
-        icon = { Icon(dock.icon, contentDescription = dock.label) },
-        label = { Text(dock.label) },
+  Surface(
+    color = MaterialTheme.colorScheme.surface,
+    contentColor = MaterialTheme.colorScheme.onSurface,
+  ) {
+    Column {
+      HorizontalDivider(
+        thickness = 1.dp,
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
       )
+      NavigationBar(
+        containerColor = Color.Transparent,
+        tonalElevation = 0.dp,
+        windowInsets = NavigationBarDefaults.windowInsets,
+        modifier = Modifier.height(64.dp),
+      ) {
+        Dock.entries.forEach { dock ->
+          val selected = state.screen == dock.screen ||
+            (dock == Dock.HOME && state.screen == Screen.Category)
+          NavigationBarItem(
+            selected = selected,
+            onClick = { onAction(UiAction.Navigate(dock.screen)) },
+            icon = {
+              Box(
+                modifier = Modifier
+                  .clip(RoundedCornerShape(percent = 50))
+                  .background(
+                    if (selected) {
+                      MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                      Color.Transparent
+                    },
+                  )
+                  .padding(horizontal = 14.dp, vertical = 3.dp),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = dock.icon,
+                  contentDescription = dock.label,
+                  modifier = Modifier.size(21.dp),
+                )
+              }
+            },
+            label = {
+              Text(
+                text = dock.label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+              )
+            },
+            colors = NavigationBarItemDefaults.colors(
+              selectedIconColor = MaterialTheme.colorScheme.primary,
+              selectedTextColor = MaterialTheme.colorScheme.primary,
+              unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+              unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+              indicatorColor = Color.Transparent,
+            ),
+          )
+        }
+      }
     }
   }
 }

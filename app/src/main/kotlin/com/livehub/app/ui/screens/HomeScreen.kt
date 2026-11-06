@@ -18,11 +18,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -64,6 +69,7 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
+import kotlin.math.abs
 
 /** Below this count a single-page result gets an explicit end-of-list hint. */
 private const val NO_MORE_HINT_THRESHOLD = 21
@@ -127,17 +133,77 @@ private fun categoryLevelsOf(state: UiState, requestedGroup: String?): CategoryL
  */
 private const val ALL_GROUPS = "\u0000all-groups"
 
-/** Home screen: platform switcher, one category row and the room grid. */
+/** Home screen: platform switcher, the category tree and the room grid. */
 @Composable
 fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
+  // The pager is the source of truth for "which platform is on screen"; the ViewModel's
+  // `state.platform` follows it. Keeping the two in sync in this direction means a swipe updates
+  // the tabs and a tab tap animates the pager, without either fighting the other.
+  val pagerState = rememberPagerState(
+    initialPage = Platform.entries.indexOf(state.platform).coerceAtLeast(0),
+  ) { Platform.entries.size }
+
+  // A tab tap changes `state.platform`; the pager has to follow it. Guarded on the settled page so
+  // this does not re-trigger while a swipe is already animating to that same page.
+  LaunchedEffect(state.platform) {
+    val target = Platform.entries.indexOf(state.platform)
+    if (target >= 0 && target != pagerState.currentPage) pagerState.animateScrollToPage(target)
+  }
+
+  // A swipe settles on a page; tell the ViewModel. `settledPage` rather than `currentPage` so the
+  // request for a platform's rooms only fires once, when the gesture ends — not on every pixel.
+  LaunchedEffect(pagerState.settledPage) {
+    val platform = Platform.entries.getOrNull(pagerState.settledPage) ?: return@LaunchedEffect
+    if (platform != state.platform) onAction(UiAction.SelectPlatform(platform))
+  }
+
+  Column(modifier = Modifier.fillMaxSize()) {
+    PlatformTabs(
+      state = state,
+      pagerState = pagerState,
+      onAction = onAction,
+    )
+    HorizontalPager(
+      state = pagerState,
+      modifier = Modifier.fillMaxSize(),
+      // Beyond the neighbouring page there is nothing to pre-compose: each platform's grid is a
+      // network-backed list, and prefetching two of them on every swipe is pure cost.
+      beyondViewportPageCount = 0,
+      key = { index -> Platform.entries[index].name },
+    ) { page ->
+      // Only the settled page renders real content. A page mid-swipe shows its skeleton, because
+      // its rooms belong to the platform that is about to become current and the ViewModel has
+      // not fetched them yet.
+      val isCurrent = Platform.entries[page] == state.platform
+      PlatformPage(
+        state = state,
+        isCurrent = isCurrent,
+        onAction = onAction,
+      )
+    }
+  }
+}
+
+/**
+ * One platform's page: pinned partitions, the category tree and the grid.
+ *
+ * Extracted from the old single-platform body so the pager can compose two of them at once during
+ * a swipe. Everything it reads that is *per platform* — the tree, the group being browsed, the
+ * grid — is either passed in through [state] (which the ViewModel swaps when the platform changes)
+ * or remembered locally, keyed on the platform so a swipe back restores it.
+ */
+@Composable
+private fun PlatformPage(
+  state: UiState,
+  isCurrent: Boolean,
+  onAction: (UiAction) -> Unit,
+) {
   val gridState = rememberLazyGridState()
   val followedKeys = remember(state.followed) { state.followed.map { it.key }.toSet() }
-  // `refreshing` is view-model driven: a pull sets `loading` for the reset fetch, and the
-  // indicator stays up until that request finishes.
   val refreshing = state.refreshing
-  // Only ask for another page when the platform actually reports one. Douyin's feed and
-  // Douyu's directory both serve a single page, and without this guard the grid kept
-  // requesting "more" on every scroll to the bottom.
+  // Only ask for another page when the platform actually reports one. Douyin's feed and Douyu's
+  // directory both serve a single page, and without this guard the grid kept requesting "more" on
+  // every scroll to the bottom.
   val shouldLoadMore by remember {
     derivedStateOf {
       val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -146,49 +212,47 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
         state.rooms.isNotEmpty()
     }
   }
-  // Which group the partition row is showing. Kept per platform so a switch back restores the
-  // tree the user was in rather than dropping them on 网游 again.
+  // Which group the partition row is showing. Kept per platform so a switch back restores the tree
+  // the user was in rather than dropping them on 网游 again.
   var browseGroup by remember(state.platform) { mutableStateOf<String?>(null) }
   // Collapsed shows one scrolling chip row; expanded wraps every group into a FlowRow.
   var expanded by remember(state.platform) { mutableStateOf(false) }
   val levels = remember(state.categories, browseGroup) { categoryLevelsOf(state, browseGroup) }
 
-  LaunchedEffect(shouldLoadMore, state.rooms.size) {
-    if (shouldLoadMore) onAction(UiAction.LoadMore)
+  LaunchedEffect(shouldLoadMore, state.rooms.size, isCurrent) {
+    if (shouldLoadMore && isCurrent) onAction(UiAction.LoadMore)
   }
 
   // Back collapses the tree before it leaves the page: an expanded row of 400 partitions would
   // otherwise be a dead end on the one screen that has no back destination.
   BackHandler(enabled = expanded) { expanded = false }
 
-  Box(modifier = Modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize()) {
-      PlatformTabs(state = state, onAction = onAction)
-      FavoritesRow(
-        state = state,
-        onOpenPicker = { expanded = true },
-        onAction = onAction,
-      )
-      CategoryTree(
-        state = state,
-        levels = levels,
-        expanded = expanded,
-        onToggleExpanded = { expanded = !expanded },
-        onSelectGroup = { browseGroup = it },
-        onAction = onAction,
-      )
+  Column(modifier = Modifier.fillMaxSize()) {
+    FavoritesRow(
+      state = state,
+      onOpenPicker = { expanded = true },
+      onAction = onAction,
+    )
+    CategoryTree(
+      state = state,
+      levels = levels,
+      expanded = expanded,
+      onToggleExpanded = { expanded = !expanded },
+      onSelectGroup = { browseGroup = it },
+      onAction = onAction,
+    )
 
-      RefreshableBox(
-        refreshing = refreshing,
-        enabled = !state.loading,
-        onRefresh = { onAction(UiAction.Refresh) },
-        modifier = Modifier.fillMaxSize(),
-      ) {
-        if (state.rooms.isEmpty() && state.loading) {
-          StreamerGridSkeleton()
-        } else if (state.rooms.isEmpty() && state.error != null) {
+    RefreshableBox(
+      refreshing = refreshing,
+      enabled = !state.loading && isCurrent,
+      onRefresh = { onAction(UiAction.Refresh) },
+      modifier = Modifier.fillMaxSize(),
+    ) {
+      when {
+        state.rooms.isEmpty() && state.loading -> StreamerGridSkeleton()
+        state.rooms.isEmpty() && state.error != null ->
           ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
-        } else if (state.rooms.isEmpty()) {
+        state.rooms.isEmpty() -> {
           // The aggregate entry is not a partition, so the copy cannot call it one.
           val aggregate = state.selectedCategory?.isAggregate == true
           EmptyState(
@@ -201,45 +265,53 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
             actionLabel = "刷新",
             onAction = { onAction(UiAction.Refresh) },
           )
-        } else {
-          LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            state = gridState,
-            contentPadding = PaddingValues(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxSize(),
-          ) {
-            items(items = state.rooms, key = { it.key }) { streamer ->
-              StreamerCard(
-                streamer = streamer,
-                followed = followedKeys.contains(streamer.key),
-                onClick = { onAction(UiAction.OpenRoom(streamer)) },
-                onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
-              )
-            }
-            if (state.loadingMore) {
-              item(span = { GridItemSpan(maxLineSpan) }) {
-                InlineLoader()
-              }
-            } else if (!state.hasNextPage && state.rooms.size < NO_MORE_HINT_THRESHOLD) {
-              // Only platforms that genuinely serve a short, single-page list land here —
-              // Bilibili's hot tab (110 rooms, but no second page) and Douyin's feed (six).
-              // Douyu and Huya now page properly, so a short list from them means the
-              // category really is quiet, which is still worth saying: an endless empty
-              // scroll looks like a failed load.
-              item(span = { GridItemSpan(maxLineSpan) }) {
-                Text(
-                  text = "已经到底了 · ${state.platform.displayName}当前只提供这些直播",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  textAlign = TextAlign.Center,
-                  modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                )
-              }
-            }
-          }
         }
+        else -> RoomGrid(
+          state = state,
+          gridState = gridState,
+          followedKeys = followedKeys,
+          onAction = onAction,
+        )
+      }
+    }
+  }
+}
+
+/** The waterfall of room cards, with its end-of-list hint. */
+@Composable
+private fun RoomGrid(
+  state: UiState,
+  gridState: LazyGridState,
+  followedKeys: Set<String>,
+  onAction: (UiAction) -> Unit,
+) {
+  LazyVerticalGrid(
+    columns = GridCells.Fixed(2),
+    state = gridState,
+    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+    horizontalArrangement = Arrangement.spacedBy(10.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+    modifier = Modifier.fillMaxSize(),
+  ) {
+    items(items = state.rooms, key = { it.key }) { streamer ->
+      StreamerCard(
+        streamer = streamer,
+        followed = followedKeys.contains(streamer.key),
+        onClick = { onAction(UiAction.OpenRoom(streamer)) },
+        onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
+      )
+    }
+    if (state.loadingMore) {
+      item(span = { GridItemSpan(maxLineSpan) }) {
+        InlineLoader()
+      }
+    } else if (!state.hasNextPage && state.rooms.size < NO_MORE_HINT_THRESHOLD) {
+      // Only platforms that genuinely serve a short, single-page list land here — Bilibili's hot
+      // tab (110 rooms, but no second page) and Douyin's feed (six). Douyu and Huya page properly,
+      // so a short list from them means the category really is quiet, which is still worth saying:
+      // an endless empty scroll looks like a failed load.
+      item(span = { GridItemSpan(maxLineSpan) }) {
+        EndOfListHint(platform = state.platform)
       }
     }
   }
@@ -256,56 +328,110 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
  * rather than a filter, which is the shape a tab already means.
  */
 @Composable
-private fun PlatformTabs(state: UiState, onAction: (UiAction) -> Unit) {
+private fun PlatformTabs(
+  state: UiState,
+  pagerState: PagerState,
+  onAction: (UiAction) -> Unit,
+) {
   Row(
-    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 2.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     LazyRow(
-      horizontalArrangement = Arrangement.spacedBy(2.dp),
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
       modifier = Modifier.weight(1f),
     ) {
-      items(Platform.entries, key = { it.name }) { platform ->
+      itemsIndexed(Platform.entries, key = { _, platform -> platform.name }) { index, platform ->
         PlatformTab(
           label = platform.displayName,
-          selected = state.platform == platform,
+          // The tab follows the *pager*, not the ViewModel: during a swipe the label should lead
+          // the finger rather than snap once the request for the new platform has been issued.
+          selected = pagerState.currentPage == index,
+          // Distance from this tab to the pager's position, in pages: 0 when this tab is exactly
+          // current, 1 when it is a full page away. Offset fraction is negative when the pager sits
+          // to the left of `currentPage`, hence the addition rather than a subtraction.
+          selectionFraction = (1f - abs(index - pagerState.currentPage - pagerState.currentPageOffsetFraction))
+            .coerceIn(0f, 1f),
           onClick = { onAction(UiAction.SelectPlatform(platform)) },
         )
       }
     }
     IconButton(onClick = { onAction(UiAction.Refresh) }) {
-      Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+      Icon(Icons.Filled.Refresh, contentDescription = "刷新", modifier = Modifier.size(20.dp))
     }
   }
 }
 
+/**
+ * A platform tab: the label, and an underline that follows the pager.
+ *
+ * [selectionFraction] is 1 when this tab is exactly the current page and 0 when it is a full page
+ * away, which is what makes the underline slide with a swipe rather than blink between tabs.
+ */
 @Composable
-private fun PlatformTab(label: String, selected: Boolean, onClick: () -> Unit) {
-  val color =
-    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+private fun PlatformTab(
+  label: String,
+  selected: Boolean,
+  selectionFraction: Float,
+  onClick: () -> Unit,
+) {
+  val color = if (selected) {
+    MaterialTheme.colorScheme.primary
+  } else {
+    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+  }
   Column(
     modifier = Modifier
       .clip(RoundedCornerShape(10.dp))
       .clickable(onClick = onClick)
-      .padding(horizontal = 10.dp, vertical = 4.dp),
+      .padding(horizontal = 10.dp, vertical = 5.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(2.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     Text(
       text = label,
-      style = MaterialTheme.typography.labelLarge,
+      style = MaterialTheme.typography.titleMedium,
       fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
       color = color,
       maxLines = 1,
     )
-    // The marker is a fixed-width underline rather than a filled pill: a tab whose background
-    // grows with the label would shift every neighbour as the selection moves.
+    // A fixed-width underline rather than a filled pill: a tab whose background grows with the
+    // label would shift every neighbour as the selection moves. Its width and alpha both track the
+    // swipe, so the marker is already half-way to the next tab when the finger is half-way there.
     Box(
       modifier = Modifier
-        .width(16.dp)
+        .width(18.dp)
+        .height(3.dp)
+        .clip(RoundedCornerShape(2.dp))
+        .background(
+          MaterialTheme.colorScheme.primary.copy(alpha = selectionFraction),
+        ),
+    )
+  }
+}
+
+/** The muted "that is all of them" line at the end of a short grid. */
+@Composable
+private fun EndOfListHint(platform: Platform) {
+  Column(
+    modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Box(
+      modifier = Modifier
+        .width(28.dp)
         .height(2.dp)
         .clip(RoundedCornerShape(1.dp))
-        .background(if (selected) color else Color.Transparent),
+        .background(MaterialTheme.colorScheme.outlineVariant),
+    )
+    Text(
+      text = "已经到底了 · ${platform.displayName}当前只提供这些直播",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      textAlign = TextAlign.Center,
+      modifier = Modifier.padding(top = 10.dp),
     )
   }
 }
