@@ -109,6 +109,9 @@ class CardInformationDensityTest {
    *
    * `Streamer.categoryName` has been carried since the Douyu and Huya parsers were written and was
    * simply never rendered — the same class of gap as the audience figure above.
+   *
+   * The partitions here are deliberately **not** the ones in the category row: 英雄联盟 is both a
+   * row chip and a plausible badge, and a text query cannot tell the two apart.
    */
   @Test
   fun `a room card labels its partition`() {
@@ -118,15 +121,15 @@ class CardInformationDensityTest {
       categories = categories,
       selectedCategory = categories.first(),
       rooms = listOf(
-        streamer("主播甲", 129_000, category = "英雄联盟"),
-        streamer("主播乙", 96_000, category = "户外"),
+        streamer("主播甲", 129_000, category = "户外"),
+        streamer("主播乙", 96_000, category = "颜值"),
       ),
     )
 
     composeInSmallWindow { HomeScreen(state = state, onAction = {}) }
 
-    composeRule.onNodeWithText("英雄联盟").assertExists()
     composeRule.onNodeWithText("户外").assertExists()
+    composeRule.onNodeWithText("颜值").assertExists()
   }
 
   /**
