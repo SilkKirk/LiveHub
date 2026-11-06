@@ -104,17 +104,18 @@ class AggregateCategoryChipTest {
   }
 
   /**
-   * The regression this exists for: the row filters to the active group, and the aggregate
-   * belongs to none. Picking 王者荣耀 (group 手游) must not take 全部直播 off the screen.
+   * The regression this exists for: the partition row filters to the active group, and the
+   * aggregate belongs to none. Picking 王者荣耀 (group 手游) must not take 全部直播 off the screen.
    */
   @Test
   fun `the aggregate chip survives a category from another group`() {
     composeHome(state = homeState(categories[3]))
 
     composeRule.onNodeWithText("全部直播").assertIsDisplayed()
-    // 手游 is the active group now, so 英雄联盟 (网游) is correctly gone — the aggregate is
-    // the one exception to that filter.
+    // 手游 is the active group now (the selection decides it), so 英雄联盟 (网游) is correctly
+    // gone — the aggregate is the one exception to that filter.
     composeRule.onNodeWithText("英雄联盟").assertDoesNotExist()
+    composeRule.onNodeWithText("王者荣耀").assertIsDisplayed()
   }
 
   @Test

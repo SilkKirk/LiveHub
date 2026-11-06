@@ -73,15 +73,18 @@ private const val NO_MORE_HINT_THRESHOLD = 21
  *
  * @property groups the distinct group names the platform publishes ("网游" / "手游" / …), in
  *   the order the platform lists them.
- * @property activeGroup the group whose partitions [visible] holds. It is a **browse location**,
- *   not the selection: it survives picking a partition, exactly like the reference client keeps
- *   网游 highlighted while 英雄联盟 is the partition being watched.
- * @property visible the aggregate entry plus the partitions of [activeGroup].
+ * @property activeGroup the group whose partitions [visible] holds, or null when every group's
+ *   partitions are listed (the group row's 全部 chip, or a platform with a single group).
+ * @property visible the aggregate entry plus the partitions in scope.
+ * @property browsingAll true when the group row's 全部 chip is the active one, so the row can
+ *   mark it selected. [activeGroup] being null is not enough: a single-group platform also has
+ *   no active group, and there the 全部 chip is not even drawn.
  */
 private data class CategoryLevels(
   val groups: List<String>,
   val activeGroup: String?,
   val visible: List<Category>,
+  val browsingAll: Boolean,
 )
 
 private fun categoryLevelsOf(state: UiState, requestedGroup: String?): CategoryLevels {
@@ -91,13 +94,38 @@ private fun categoryLevelsOf(state: UiState, requestedGroup: String?): CategoryL
   val aggregates = state.categories.filter { it.isAggregate }
   val grouped = state.categories.filterNot { it.isAggregate }
   val groups = grouped.mapNotNull { it.parentName }.distinct()
-  // A remembered group that no longer exists (a platform switch, a catalogue that changed) falls
-  // back to the first one rather than to "no filter", which would put every partition of every
-  // group in one FlowRow — 400+ chips on Douyu.
-  val active = requestedGroup?.takeIf { it in groups } ?: groups.firstOrNull()
+
+  // Which group to show, in order of preference:
+  //  1. the one the user last picked in the group row — including the explicit 全部;
+  //  2. the one the *selected* partition belongs to — otherwise a partition reached from a
+  //     favourite chip or a restored session would be highlighted while the row above it showed
+  //     a different group's partitions, and the selection would look lost;
+  //  3. the first group, which is what a cold start on the aggregate entry lands on.
+  // A remembered group that no longer exists (platform switch, changed catalogue) falls through
+  // to the same chain rather than to "no filter".
+  val active = when {
+    requestedGroup == ALL_GROUPS -> null
+    requestedGroup != null && requestedGroup in groups -> requestedGroup
+    state.selectedCategory?.parentName in groups -> state.selectedCategory?.parentName
+    else -> groups.firstOrNull()
+  }
   val visible = aggregates + if (active == null) grouped else grouped.filter { it.parentName == active }
-  return CategoryLevels(groups = groups, activeGroup = active, visible = visible)
+  return CategoryLevels(
+    groups = groups,
+    activeGroup = active,
+    visible = visible,
+    browsingAll = requestedGroup == ALL_GROUPS,
+  )
 }
+
+/**
+ * Sentinel for the group row's 全部 chip: "every group's partitions".
+ *
+ * A sentinel rather than `null` because `null` already means "nothing picked yet" for the state
+ * variable, and the two have to be distinguishable — the first falls through to the selected
+ * partition's group, the second is an explicit choice that overrides it.
+ */
+private const val ALL_GROUPS = "\u0000all-groups"
 
 /** Home screen: platform switcher, one category row and the room grid. */
 @Composable
@@ -398,6 +426,13 @@ private fun CategoryTree(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
+        // 全部 leads the group row, as it does in the reference client: "show every group's
+        // partitions" is a real choice, and without it the widest scope is the biggest group.
+        GroupChip(
+          name = "全部",
+          selected = levels.browsingAll,
+          onClick = { onSelectGroup(ALL_GROUPS) },
+        )
         levels.groups.forEach { name ->
           GroupChip(
             name = name,
@@ -420,6 +455,13 @@ private fun CategoryTree(
           modifier = Modifier.weight(1f),
         ) {
           if (multiGroup) {
+            item(key = "group-all") {
+              GroupChip(
+                name = "全部",
+                selected = levels.browsingAll,
+                onClick = { onSelectGroup(ALL_GROUPS) },
+              )
+            }
             items(levels.groups, key = { it }) { name ->
               GroupChip(
                 name = name,

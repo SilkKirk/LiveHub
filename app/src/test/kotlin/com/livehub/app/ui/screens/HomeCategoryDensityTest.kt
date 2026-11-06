@@ -4,7 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -132,15 +135,16 @@ class HomeCategoryDensityTest {
   /**
    * The density claim itself, with all three Douyu levels on screen.
    *
-   * 150dp is above the two-row layout (~110dp) and far below the three-row one (222dp) this
-   * screen used to be, so neither font metrics nor chip padding can move the result across.
+   * Two chip rows plus the third level measured 156dp on the CI font metrics; the layout this
+   * replaced started its deepest row at 222dp, so 190dp still separates the two by a wide margin
+   * while leaving room for font variation across devices.
    */
   @Test
-  fun `the deepest chip row starts in the top quarter of the screen`() {
+  fun `the deepest chip row starts in the top third of the screen`() {
     composeHome(state = homeState(withSubCategories = true))
 
     val deepest = topDp("全部")
-    assertTrue("the third level starts ${deepest}dp down a 640dp screen", deepest < 150f)
+    assertTrue("the third level starts ${deepest}dp down a 640dp screen", deepest < 190f)
   }
 
   @Test
@@ -245,5 +249,48 @@ class HomeCategoryDensityTest {
 
     val partitions = topDp("英雄联盟")
     assertTrue("partitions start ${partitions}dp down after expanding", partitions < 220f)
+  }
+
+  /**
+   * The group row leads with 全部, as the reference client does: "every group's partitions" is a
+   * real scope, and without it the widest one available is the biggest group.
+   */
+  @Test
+  fun `the group row leads with an all chip`() {
+    composeHome()
+
+    // 全部 is the first chip and 网游 the second, so anything left of 网游 can only be 全部.
+    val all = composeRule.onAllNodesWithText("全部")[0]
+    val left = with(composeRule.density) { all.fetchSemanticsNode().boundsInRoot.left.toDp().value }
+    assertTrue("全部 starts at ${left}dp, 网游 at ${topDp("网游")}", left < leftDp("网游"))
+  }
+
+  @Test
+  fun `the all group chip lists every group's partitions`() {
+    composeHome()
+
+    composeRule.onNodeWithText("户外").assertDoesNotExist()
+    composeRule.onNodeWithText("全部").performClick()
+
+    // 户外 is in 娱乐, 王者荣耀 in 手游: both now listed beside 网游's.
+    composeRule.onNodeWithText("英雄联盟").assertIsDisplayed()
+    composeRule.onNodeWithText("王者荣耀").assertIsDisplayed()
+    composeRule.onNodeWithText("户外").assertIsDisplayed()
+  }
+
+  @Test
+  fun `the all group chip is marked selected only when it is the active one`() {
+    composeHome()
+
+    // The baseline browses 网游 (the selected partition's group), so 全部 is not selected.
+    composeRule.onAllNodesWithText("全部")[0].assertIsNotSelected()
+
+    composeRule.onAllNodesWithText("全部")[0].performClick()
+
+    composeRule.onAllNodesWithText("全部")[0].assertIsSelected()
+  }
+
+  private fun leftDp(text: String): Float = with(composeRule.density) {
+    composeRule.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.left.toDp().value
   }
 }
