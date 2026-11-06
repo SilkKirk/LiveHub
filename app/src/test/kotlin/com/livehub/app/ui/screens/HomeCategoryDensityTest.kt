@@ -238,12 +238,20 @@ class HomeCategoryDensityTest {
     composeRule.onNodeWithContentDescription("收起分类").assertIsDisplayed()
   }
 
+  /**
+   * A single-group platform still gets a chevron.
+   *
+   * This used to assert the opposite, on the theory that a platform with nothing to hide needs no
+   * expander. That was wrong for a reason only visible once the tree collapsed on selection: the
+   * chevron is also how the *partitions* get wrapped into a readable grid, so gating it on the
+   * group count left such a platform unable to return to the expanded state at all.
+   */
   @Test
-  fun `a single-group platform has no chevron`() {
+  fun `a single-group platform still has a chevron`() {
     val single = listOf(category("1", "英雄联盟", "网游", 0))
     composeHome(state = homeState().copy(categories = single, selectedCategory = single.first()))
 
-    composeRule.onNodeWithContentDescription("展开分类").assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("展开分类").assertExists()
   }
 
   /**
@@ -334,6 +342,11 @@ class HomeCategoryDensityTest {
    * The expanded tree is a browse state, not a destination: once a partition is chosen the user
    * wants to see its streams. Leaving it open kept a screenful of chips over the grid that had just
    * loaded, which is the same complaint the collapsed-`FlowRow` bug produced from the other side.
+   *
+   * "Collapsed" is observed through the *collapse* chevron disappearing rather than through the
+   * expand chevron appearing: the collapsed row only draws a chevron when the platform publishes
+   * more than one group, and asserting on the positive case would make this test depend on the
+   * fixture's group count instead of on the behaviour.
    */
   @Test
   fun `picking a partition collapses the tree`() {
@@ -349,8 +362,7 @@ class HomeCategoryDensityTest {
       "绝地求生",
       actions.filterIsInstance<UiAction.SelectCategory>().lastOrNull()?.category?.name,
     )
-    // …and the tree is collapsed again, so the chevron is back to its "expand" state.
-    composeRule.onNodeWithContentDescription("展开分类").assertExists()
+    // …and the expanded row is gone, which is what "collapsed" means here.
     composeRule.onNodeWithContentDescription("收起分类").assertDoesNotExist()
   }
 
@@ -367,7 +379,7 @@ class HomeCategoryDensityTest {
       "峡谷之巅",
       actions.filterIsInstance<UiAction.SelectSubCategory>().lastOrNull()?.category?.name,
     )
-    composeRule.onNodeWithContentDescription("展开分类").assertExists()
+    composeRule.onNodeWithContentDescription("收起分类").assertDoesNotExist()
   }
 
   @Test

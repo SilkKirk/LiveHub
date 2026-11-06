@@ -577,9 +577,11 @@ private fun CategoryTree(
             }
           }
         }
-        if (multiGroup) {
-          ChevronButton(expanded = false, onClick = onToggleExpanded)
-        }
+        // Drawn for a single-group platform too. The tree is still expandable there — it is how
+        // the *partitions* get wrapped into a readable grid instead of a scroll — and gating this
+        // on `multiGroup` left such a platform with no way back into the expanded state once the
+        // tree collapsed.
+        ChevronButton(expanded = false, onClick = onToggleExpanded)
       }
     }
 
