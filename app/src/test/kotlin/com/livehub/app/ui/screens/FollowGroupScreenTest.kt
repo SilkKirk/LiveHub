@@ -4,14 +4,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
-import com.livehub.core.model.Category
 import com.livehub.core.model.FollowGroup
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
@@ -28,8 +30,11 @@ import org.robolectric.annotation.Config
  *
  * The follow list already had one filter row mixing two axes. This round splits it: a group row
  * (which group am I looking at) above a state/platform row (what am I filtering). The claims a JVM
- * test can hold are about *which* chips exist and what a tap emits — the storage behaviour is
- * `LibraryStoreTest`'s job.
+ * test can hold are about *which* chips exist, what a tap emits, and that the group's own order is
+ * what the group shows — the storage behaviour is `LibraryStoreTest`'s job.
+ *
+ * Group names appear twice on this screen by design (once as a chip, once on every room filed
+ * into that group), so chip assertions go through [chip] rather than a bare text match.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -72,13 +77,17 @@ class FollowGroupScreenTest {
     composeRule.waitForIdle()
   }
 
+  /** The group chip, as opposed to the same name printed on a room row. */
+  private fun chip(label: String) =
+    composeRule.onNode(hasText(label) and hasClickAction())
+
   @Test
   fun `the group row lists every group plus a way to manage them`() {
     compose(state())
 
-    composeRule.onNodeWithText("全部").assertIsDisplayed()
-    composeRule.onNodeWithText("游戏").assertIsDisplayed()
-    composeRule.onNodeWithText("音乐").assertIsDisplayed()
+    chip("全部").assertIsDisplayed()
+    chip("游戏").assertIsDisplayed()
+    chip("音乐").assertIsDisplayed()
     composeRule.onNodeWithText("管理").assertIsDisplayed()
   }
 
@@ -87,7 +96,7 @@ class FollowGroupScreenTest {
     val actions = mutableListOf<UiAction>()
     compose(state(), actions)
 
-    composeRule.onNodeWithText("游戏").performClick()
+    chip("游戏").performClick()
 
     assertEquals(UiAction.SelectFollowGroup("g1"), actions.first { it is UiAction.SelectFollowGroup })
   }
@@ -104,8 +113,20 @@ class FollowGroupScreenTest {
   }
 
   /**
-   * The group's own order, not the global one.
-   *
+   * The defect this test was written after: membership comes from `roomGroups` and only the
+   * *order* from `groupRoomOrder`. Reading the order map as the membership list made a group with
+   * no populated order fall back to every followed room — the group filter silently did nothing.
+   */
+  @Test
+  fun `a scoped group hides rooms that are not in it even with no group order`() {
+    compose(state(selected = "g2"))
+
+    // 主播1 is filed into g1 only, so g2 must not show it.
+    composeRule.onNodeWithText("主播1").assertDoesNotExist()
+    composeRule.onNodeWithText("主播2").assertIsDisplayed()
+  }
+
+  /**
    * Both orders are stored separately (`member:` records carry the group position, `room:`
    * records the global one), so a group view that read `followed` would silently show the global
    * arrangement and make "arrange rooms inside 游戏" a no-op.
@@ -131,21 +152,20 @@ class FollowGroupScreenTest {
   }
 
   @Test
-  fun `a scoped group hides rooms that are not in it`() {
-    compose(state(selected = "g2"))
-
-    // 主播1 is filed into g1 only, so g2 must not show it.
-    composeRule.onNodeWithText("主播1").assertDoesNotExist()
-    composeRule.onNodeWithText("主播2").assertIsDisplayed()
-  }
-
-  @Test
   fun `the room row names the groups it is filed into`() {
     compose(state())
 
-    // 主播1 sits in 游戏, and the row says so without opening anything. The group name appears
-    // twice — once as the chip, once in the row — which is the point.
+    // 主播1 sits in 游戏, and the row says so without opening anything. The name appears twice —
+    // once as the chip, once on the row — which is the point.
     assertEquals(2, composeRule.onAllNodesWithText("游戏").fetchSemanticsNodes().size)
+  }
+
+  @Test
+  fun `a room in no group shows no group label`() {
+    compose(state(roomGroups = emptyMap()))
+
+    // Only the chip carries the name now.
+    assertEquals(1, composeRule.onAllNodesWithText("游戏").fetchSemanticsNodes().size)
   }
 
   @Test
@@ -159,11 +179,25 @@ class FollowGroupScreenTest {
   }
 
   @Test
-  fun `the sheet refuses to draw an empty group list as a blank panel`() {
+  fun `an empty group list still explains how to create one`() {
     compose(state().copy(followGroups = emptyList()))
 
     composeRule.onNodeWithText("管理").performClick()
 
     composeRule.onNodeWithText("还没有分组。在下面输入一个名字就能建。").assertIsDisplayed()
+  }
+
+  /**
+   * The sheet's filing mode lists every group as a switch, and 未分类 is one of them: it is the
+   * *absence* of memberships, so picking it clears the room's groups rather than adding one.
+   */
+  @Test
+  fun `filing a room lists the groups and an unfiled entry`() {
+    compose(state())
+
+    composeRule.onNodeWithContentDescription("把 主播1 放进分组").performClick()
+
+    composeRule.onNodeWithText("把「主播1」放进分组").assertIsDisplayed()
+    composeRule.onNodeWithText("未分类").assertIsDisplayed()
   }
 }

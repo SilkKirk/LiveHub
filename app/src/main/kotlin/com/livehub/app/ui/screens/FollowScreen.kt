@@ -70,17 +70,21 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   /**
    * The rooms in scope, in the order that scope uses.
    *
-   * Outside a group that is the stored follow order. Inside one it is the group's **own** order,
-   * which lives in the `member:` records and is independent of the global arrangement — reading
-   * the global order here would make "arrange rooms inside 游戏" a no-op.
+   * Outside a group that is the stored follow order. Inside one, **membership comes from
+   * [UiState.roomGroups]** and only the *order* comes from [UiState.groupRoomOrder]: the two are
+   * separate facts, and reading the order map as the membership list made a group whose order was
+   * not populated fall back to "every followed room" — the group filter silently did nothing.
    */
-  val scoped: List<Streamer> = remember(state.followed, state.groupRoomOrder, selectedGroup) {
-    val groupOrder = selectedGroup?.let { state.groupRoomOrder[it] }
-    if (groupOrder == null) {
+  val scoped: List<Streamer> = remember(state.followed, state.roomGroups, state.groupRoomOrder, selectedGroup) {
+    if (selectedGroup == null) {
       state.followed
     } else {
-      val byKey = state.followed.associateBy { it.key }
-      groupOrder.mapNotNull { byKey[it] }
+      val positions = state.groupRoomOrder[selectedGroup].orEmpty()
+        .withIndex()
+        .associate { it.value to it.index }
+      state.followed
+        .filter { selectedGroup in state.roomGroups[it.key].orEmpty() }
+        .sortedBy { positions[it.key] ?: Int.MAX_VALUE }
     }
   }
 
