@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import com.livehub.app.ui.FollowLiveFilter
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.FollowGroup
@@ -351,5 +352,44 @@ class FollowGroupScreenTest {
     composeRule.onNodeWithText("放入分组").performClick()
 
     composeRule.onNodeWithText("还没有分组。先用「管理」建一个，再回来批量放入。").assertIsDisplayed()
+  }
+
+  // ------------------------------------------------------------ state filters
+
+  /**
+   * The live/platform row reads its selection from `UiState`, not from a local `remember`.
+   *
+   * Both are set here through the state, which is the only way the screen can show a filter it did
+   * not itself set — the case that matters is coming back from a room.
+   */
+  @Test
+  fun `the live filter comes from the state`() {
+    compose(state().copy(followLiveFilter = FollowLiveFilter.LIVE))
+
+    // Rooms 2 and 4 are offline; only the live ones survive the filter.
+    composeRule.onNodeWithText("主播1").assertIsDisplayed()
+    composeRule.onNodeWithText("主播2").assertDoesNotExist()
+  }
+
+  @Test
+  fun `the platform filter comes from the state`() {
+    compose(state().copy(followPlatformFilter = Platform.HUYA))
+
+    // Every fixture room is 斗鱼, so a 虎牙 filter leaves nothing and the empty state explains it.
+    composeRule.onNodeWithText("主播1").assertDoesNotExist()
+    composeRule.onNodeWithText("当前只显示 虎牙 的主播").assertIsDisplayed()
+  }
+
+  @Test
+  fun `tapping a filter chip emits the action instead of changing a local`() {
+    val actions = mutableListOf<UiAction>()
+    compose(state(), actions)
+
+    composeRule.onNodeWithText("直播中").performClick()
+
+    assertEquals(
+      UiAction.SetFollowLiveFilter(FollowLiveFilter.LIVE),
+      actions.first { it is UiAction.SetFollowLiveFilter },
+    )
   }
 }

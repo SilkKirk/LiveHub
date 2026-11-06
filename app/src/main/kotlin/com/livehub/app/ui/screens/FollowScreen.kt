@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.livehub.app.di.FollowOrdering
+import com.livehub.app.ui.FollowLiveFilter
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.EmptyState
@@ -37,13 +38,6 @@ import com.livehub.app.ui.components.ReorderableFollowList
 import com.livehub.core.model.FollowGroup
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
-
-/** Which slice of the follow list is visible. */
-private enum class FollowFilter(val label: String) {
-  ALL("全部"),
-  LIVE("直播中"),
-  OFFLINE("未开播"),
-}
 
 /**
  * Follow list.
@@ -59,8 +53,8 @@ private enum class FollowFilter(val label: String) {
  */
 @Composable
 fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
-  var filter by remember { mutableStateOf(FollowFilter.ALL) }
-  var platformFilter by remember { mutableStateOf<Platform?>(null) }
+  // Local UI state only: which panel is open. The three *filters* live in `UiState` because they
+  // are selections the user expects to survive opening a room and coming back.
   var sheetOpen by remember { mutableStateOf(false) }
   var filing by remember { mutableStateOf<Streamer?>(null) }
   // Bulk filing: a selection set plus a target-group picker. Null means "not selecting".
@@ -69,6 +63,8 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
   val selectedGroup = state.selectedFollowGroupId
   val groups = state.followGroups
+  val filter = state.followLiveFilter
+  val platformFilter = state.followPlatformFilter
 
   /**
    * The rooms in scope, in the order that scope uses.
@@ -96,13 +92,7 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val visible = remember(scoped, filter, platformFilter) {
     scoped
       .filter { platformFilter == null || it.platform == platformFilter }
-      .filter {
-        when (filter) {
-          FollowFilter.ALL -> true
-          FollowFilter.LIVE -> it.isLive
-          FollowFilter.OFFLINE -> !it.isLive
-        }
-      }
+      .filter(filter::matches)
       // Live rooms first. The stored order is the user's manual arrangement, but burying whoever
       // is actually streaming under offline names defeated the point of the list. `sortedBy` is
       // stable, so manual order still breaks ties.
@@ -126,10 +116,10 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
           total = scopeSize,
           liveCount = liveCount,
           filter = filter,
-          onFilterChange = { filter = it },
+          onFilterChange = { onAction(UiAction.SetFollowLiveFilter(it)) },
           platforms = platforms,
           platformFilter = platformFilter,
-          onPlatformChange = { platformFilter = it },
+          onPlatformChange = { onAction(UiAction.SetFollowPlatformFilter(it)) },
           groups = groups,
           selectedGroupId = selectedGroup,
           onSelectGroup = { onAction(UiAction.SelectFollowGroup(it)) },
@@ -145,19 +135,21 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
         if (visible.isEmpty()) {
           EmptyState(
             title = when (filter) {
-              FollowFilter.LIVE -> "关注的主播都没有在播"
-              FollowFilter.OFFLINE -> "所有关注的主播都在直播"
-              FollowFilter.ALL -> if (selectedGroup != null) "这个分组还没有主播" else "没有符合条件的关注"
+              FollowLiveFilter.LIVE -> "关注的主播都没有在播"
+              FollowLiveFilter.OFFLINE -> "所有关注的主播都在直播"
+              FollowLiveFilter.ALL -> if (selectedGroup != null) "这个分组还没有主播" else "没有符合条件的关注"
             },
             description = when {
               selectedGroup != null -> "点行尾的 ⋮ 可以把主播放进这个分组"
-              platformFilter != null -> "当前只显示 ${platformFilter!!.displayName} 的主播"
+              platformFilter != null -> "当前只显示 ${platformFilter.displayName} 的主播"
               else -> null
             },
             actionLabel = "显示全部",
             onAction = {
-              filter = FollowFilter.ALL
-              platformFilter = null
+              // Clears every filter in one action, which is what "显示全部" promises. It used to
+              // reset only the two locals and leave the group scope behind.
+              onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.ALL))
+              onAction(UiAction.SetFollowPlatformFilter(null))
               onAction(UiAction.SelectFollowGroup(null))
             },
           )
@@ -239,8 +231,8 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
 private fun FollowHeader(
   total: Int,
   liveCount: Int,
-  filter: FollowFilter,
-  onFilterChange: (FollowFilter) -> Unit,
+  filter: FollowLiveFilter,
+  onFilterChange: (FollowLiveFilter) -> Unit,
   platforms: List<Platform>,
   platformFilter: Platform?,
   onPlatformChange: (Platform?) -> Unit,
@@ -320,12 +312,12 @@ private fun FollowHeader(
     }
 
     // The state/platform row only earns its space when it can actually narrow something.
-    if (filter != FollowFilter.ALL || platforms.size > 1) {
+    if (filter != FollowLiveFilter.ALL || platforms.size > 1) {
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        items(FollowFilter.entries.toList()) { option ->
+        items(FollowLiveFilter.entries.toList()) { option ->
           FilterChip(
             selected = filter == option,
             onClick = { onFilterChange(option) },

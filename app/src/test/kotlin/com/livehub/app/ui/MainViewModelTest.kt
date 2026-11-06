@@ -309,8 +309,65 @@ class MainViewModelTest {
     assertEquals(expected, container.libraryStore.followed().map { it.key })
   }
 
-  // ---------------------------------------------------------------- preferences ---
+  /**
+   * The three follow-screen filters survive opening a room and coming back.
+   *
+   * They used to be `remember` inside the screen, so closing the player rebuilt it from scratch
+   * and handed the user the unfiltered list again — the same defect `selectedFollowGroupId` was
+   * moved into `UiState` for, fixed for only one of the three.
+   */
+  @Test
+  fun `the follow filters survive a round trip through the player`() {
+    val room = streamer("42", "测试主播")
+    viewModel.onAction(UiAction.ToggleFollow(room))
+    idle()
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    idle()
 
+    viewModel.onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.LIVE))
+    viewModel.onAction(UiAction.SetFollowPlatformFilter(Platform.DOUYU))
+    idle()
+
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+    viewModel.onAction(UiAction.ClosePlayer)
+    idle()
+
+    assertEquals(Screen.Follow, state.screen)
+    assertEquals(FollowLiveFilter.LIVE, state.followLiveFilter)
+    assertEquals(Platform.DOUYU, state.followPlatformFilter)
+  }
+
+  /** "显示全部" in the empty state has to clear the group scope too, not just the two filters. */
+  @Test
+  fun `clearing the filters also leaves the group scope`() {
+    val room = streamer("42", "测试主播")
+    viewModel.onAction(UiAction.ToggleFollow(room))
+    idle()
+
+    val group = container.libraryStore.createGroup(
+      name = "游戏",
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )!!
+    viewModel.onAction(UiAction.SelectFollowGroup(group.id))
+    viewModel.onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.LIVE))
+    viewModel.onAction(UiAction.SetFollowPlatformFilter(Platform.HUYA))
+    idle()
+
+    // What the empty state's button emits.
+    viewModel.onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.ALL))
+    viewModel.onAction(UiAction.SetFollowPlatformFilter(null))
+    viewModel.onAction(UiAction.SelectFollowGroup(null))
+    idle()
+
+    assertEquals(null, state.selectedFollowGroupId)
+    assertEquals(null, state.followPlatformFilter)
+    assertEquals(FollowLiveFilter.ALL, state.followLiveFilter)
+  }
+
+  // ---------------------------------------------------------------- preferences ---
   @Test
   fun `toggling danmaku persists across a restart`() {
     viewModel.onAction(UiAction.ToggleDanmaku(false))

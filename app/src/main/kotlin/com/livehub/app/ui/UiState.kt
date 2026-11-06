@@ -11,6 +11,26 @@ import com.livehub.core.sync.TrustedPeer
 /** Top level destinations of the single-activity app. */
 enum class Screen { Home, Category, Search, Follow, Sync, Settings, Player }
 
+/**
+ * The live-state filter on the follow screen.
+ *
+ * Lives here rather than as a private enum inside `FollowScreen` because the selection is now part
+ * of [UiState]: the screen is recomposed from scratch when the player closes, and a filter that
+ * only existed in a `remember` was reset every time.
+ */
+enum class FollowLiveFilter(val label: String) {
+  ALL("全部"),
+  LIVE("直播中"),
+  OFFLINE("未开播"),
+  ;
+
+  fun matches(streamer: Streamer): Boolean = when (this) {
+    ALL -> true
+    LIVE -> streamer.isLive
+    OFFLINE -> !streamer.isLive
+  }
+}
+
 /** Everything the UI renders; produced by [MainViewModel]. */
 data class UiState(
   val screen: Screen = Screen.Home,
@@ -50,6 +70,16 @@ data class UiState(
    * drop the user back to the unfiltered list.
    */
   val selectedFollowGroupId: String? = null,
+  /**
+   * The live-state filter on the follow screen.
+   *
+   * In the state for the same reason as [selectedFollowGroupId]: opening a room and coming back
+   * used to reset it, so a user who had narrowed the list to 直播中 was handed the full list again
+   * every time they watched something.
+   */
+  val followLiveFilter: FollowLiveFilter = FollowLiveFilter.ALL,
+  /** The platform filter on the follow screen; null means every platform. */
+  val followPlatformFilter: Platform? = null,
   /** Categories pinned under the platform tab, for the platform of [platform] only. */
   val favorites: List<Category> = emptyList(),
   val searchQuery: String = "",
@@ -176,6 +206,12 @@ sealed interface UiAction {
 
   /** Scopes the follow screen to a group, or to everything when null. */
   data class SelectFollowGroup(val groupId: String?) : UiAction
+
+  /** Narrows the follow screen to live / offline rooms. */
+  data class SetFollowLiveFilter(val filter: FollowLiveFilter) : UiAction
+
+  /** Narrows the follow screen to one platform, or clears the filter when null. */
+  data class SetFollowPlatformFilter(val platform: Platform?) : UiAction
 
   data class CreateFollowGroup(val name: String) : UiAction
 

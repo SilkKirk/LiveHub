@@ -87,6 +87,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SetFollowOrder -> setFollowOrder(action.keys)
       is UiAction.SetGroupOrder -> setGroupOrder(action.groupId, action.keys)
       is UiAction.SelectFollowGroup -> _state.update { it.copy(selectedFollowGroupId = action.groupId) }
+      is UiAction.SetFollowLiveFilter -> _state.update { it.copy(followLiveFilter = action.filter) }
+      is UiAction.SetFollowPlatformFilter -> _state.update { it.copy(followPlatformFilter = action.platform) }
       is UiAction.CreateFollowGroup -> createFollowGroup(action.name)
       is UiAction.RenameFollowGroup -> renameFollowGroup(action.groupId, action.name)
       is UiAction.DeleteFollowGroup -> deleteFollowGroup(action.groupId)
