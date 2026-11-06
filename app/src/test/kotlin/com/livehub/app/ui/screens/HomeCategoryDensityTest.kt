@@ -10,6 +10,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
@@ -138,12 +139,17 @@ class HomeCategoryDensityTest {
    * Two chip rows plus the third level measured 156dp on the CI font metrics; the layout this
    * replaced started its deepest row at 222dp, so 190dp still separates the two by a wide margin
    * while leaving room for font variation across devices.
+   *
+   * `onLast()` because 全部 is now also the group row's first chip — the third level's 全部 is the
+   * one drawn last.
    */
   @Test
   fun `the deepest chip row starts in the top third of the screen`() {
     composeHome(state = homeState(withSubCategories = true))
 
-    val deepest = topDp("全部")
+    val deepest = with(composeRule.density) {
+      composeRule.onAllNodesWithText("全部").onLast().fetchSemanticsNode().boundsInRoot.top.toDp().value
+    }
     assertTrue("the third level starts ${deepest}dp down a 640dp screen", deepest < 190f)
   }
 
