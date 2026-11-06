@@ -2,6 +2,7 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
@@ -98,6 +99,39 @@ class HomeCategoryDensityTest {
     composeRule.setContent {
       Box(modifier = Modifier.size(320.dp, 640.dp)) {
         HomeScreen(state = state, onAction = onAction)
+      }
+    }
+    composeRule.waitForIdle()
+  }
+
+  /**
+   * Composes a home screen whose state actually *changes* when a partition is picked.
+   *
+   * The plain [composeHome] hands in a fixed `UiState` and only records the emitted actions, which
+   * is enough for layout assertions but not for anything driven by a state transition — the
+   * collapse-on-select effect keys on `selectedCategory.key`, and with a frozen state that key
+   * never changes, so the effect never runs and the test would be checking a screen that cannot
+   * react at all. This variant keeps the state in a `mutableStateOf` and applies the two selection
+   * actions to it, which is the minimum needed to exercise the transition.
+   */
+  private fun composeReactiveHome(
+    initial: UiState = homeState(),
+    actions: MutableList<UiAction> = mutableListOf(),
+  ) {
+    val state = mutableStateOf(initial)
+    composeRule.setContent {
+      Box(modifier = Modifier.size(320.dp, 640.dp)) {
+        HomeScreen(
+          state = state.value,
+          onAction = { action ->
+            actions += action
+            state.value = when (action) {
+              is UiAction.SelectCategory -> state.value.copy(selectedCategory = action.category)
+              is UiAction.SelectSubCategory -> state.value.copy(selectedSubCategory = action.category)
+              else -> state.value
+            }
+          },
+        )
       }
     }
     composeRule.waitForIdle()
@@ -351,7 +385,7 @@ class HomeCategoryDensityTest {
   @Test
   fun `picking a partition collapses the tree`() {
     val actions = mutableListOf<UiAction>()
-    composeHome(onAction = { actions += it })
+    composeReactiveHome(actions = actions)
 
     composeRule.onNodeWithContentDescription("展开分类").performClick()
     composeRule.onNodeWithContentDescription("收起分类").assertExists()
@@ -369,7 +403,7 @@ class HomeCategoryDensityTest {
   @Test
   fun `picking a third level collapses the tree too`() {
     val actions = mutableListOf<UiAction>()
-    composeHome(state = homeState(withSubCategories = true), onAction = { actions += it })
+    composeReactiveHome(initial = homeState(withSubCategories = true), actions = actions)
 
     composeRule.onNodeWithContentDescription("展开分类").performClick()
     composeRule.onNodeWithContentDescription("收起分类").assertExists()
