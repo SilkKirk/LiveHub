@@ -371,6 +371,51 @@ class LibraryStore(private val preferences: UserPreferences) {
     persist(next)
   }
 
+  /**
+   * Files several rooms into [groupIds] at once, adding to whatever they already belong to.
+   *
+   * One clock tick for the whole batch, so a peer never observes half of a bulk move. Rooms that
+   * are already in a target group are left alone rather than re-stamped: re-writing them would
+   * push them to the end of that group's order for no reason.
+   *
+   * Returns how many memberships were actually created.
+   */
+  fun addRoomsToGroups(
+    streamers: List<Streamer>,
+    groupIds: Set<String>,
+    hlc: Hlc,
+    deviceId: Long,
+    now: Long,
+  ): Int {
+    if (streamers.isEmpty() || groupIds.isEmpty()) return 0
+    val liveGroups = groups().mapTo(HashSet()) { it.id }
+    val wanted = groupIds.filterTo(LinkedHashSet()) { it in liveGroups }
+    if (wanted.isEmpty()) return 0
+
+    val next = records().toMutableList()
+    var added = 0
+    streamers.forEach { streamer ->
+      if (liveValue(LibraryKey.Room(streamer.platform, streamer.roomId).encode()) == null) return@forEach
+      val current = memberRecordsOf(streamer.key)
+        .mapNotNullTo(HashSet()) { (LibraryKey.decode(it.key) as? LibraryKey.Member)?.groupId }
+      (wanted - current).forEach { groupId ->
+        val key = LibraryKey.Member(groupId, streamer.platform, streamer.roomId).encode()
+        next.removeAll { it.key == key }
+        next += SyncRecord(
+          key = key,
+          value = buildJsonObject { put("order", nextOrderInGroup(groupId)) },
+          deleted = false,
+          hlc = hlc,
+          deviceId = deviceId,
+          updatedAt = now,
+        )
+        added++
+      }
+    }
+    if (added > 0) persist(next)
+    return added
+  }
+
   /** Persists the order of rooms inside one group, leaving the global order untouched. */
   fun reorderWithinGroup(groupId: String, roomKeys: List<String>, hlc: Hlc, deviceId: Long, now: Long) {
     if (roomKeys.isEmpty()) return

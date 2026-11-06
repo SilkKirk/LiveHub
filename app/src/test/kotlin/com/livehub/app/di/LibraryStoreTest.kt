@@ -371,6 +371,111 @@ class LibraryStoreTest {
     assertEquals(listOf("游戏", "音乐"), store.groups().map { it.name })
   }
 
+  // ---------------------------------------------------------------- bulk filing
+
+  @Test
+  fun `several rooms are filed in one call`() {
+    val a = streamer("1")
+    val b = streamer("2")
+    val c = streamer("3")
+    listOf(a, b, c).forEach { follow(it) }
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+
+    val added = store.addRoomsToGroups(listOf(a, b, c), setOf(game.id), hlc(), 1L, clock)
+
+    assertEquals(3, added)
+    assertEquals(setOf(game.id), store.groupsOf(a.key))
+    assertEquals(setOf(game.id), store.groupsOf(b.key))
+    assertEquals(setOf(game.id), store.groupsOf(c.key))
+  }
+
+  /**
+   * Adding, not replacing. The selected rooms rarely share a starting set, so "make them all
+   * exactly this" would silently drop memberships the user never looked at.
+   */
+  @Test
+  fun `a bulk add never removes an existing membership`() {
+    val room = streamer("1")
+    follow(room)
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+    val music = store.createGroup("音乐", hlc(), 1L, clock)!!
+    store.setMembership(room, setOf(game.id), hlc(), 1L, clock)
+
+    store.addRoomsToGroups(listOf(room), setOf(music.id), hlc(), 1L, clock)
+
+    assertEquals(setOf(game.id, music.id), store.groupsOf(room.key))
+  }
+
+  /** Re-selecting a room already in the group must not re-stamp it and push it to the end. */
+  @Test
+  fun `a bulk add skips rooms that are already in the group`() {
+    val room = streamer("1")
+    follow(room)
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+    store.setMembership(room, setOf(game.id), hlc(), 1L, clock)
+    val versionBefore = store.records().first { it.key.startsWith("member:") }.version
+
+    val added = store.addRoomsToGroups(listOf(room), setOf(game.id), hlc(), 1L, clock)
+
+    assertEquals(0, added)
+    assertEquals(
+      "the membership must not be re-stamped",
+      versionBefore,
+      store.records().first { it.key.startsWith("member:") }.version,
+    )
+  }
+
+  @Test
+  fun `a bulk add ignores rooms that are not followed`() {
+    val followed = streamer("1")
+    val stranger = streamer("2")
+    follow(followed)
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+
+    val added = store.addRoomsToGroups(listOf(followed, stranger), setOf(game.id), hlc(), 1L, clock)
+
+    assertEquals(1, added)
+    assertTrue(store.groupsOf(stranger.key).isEmpty())
+  }
+
+  @Test
+  fun `a bulk add into a deleted group is a no-op`() {
+    val room = streamer("1")
+    follow(room)
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+    store.deleteGroup(game.id, hlc(), 1L, clock)
+
+    val added = store.addRoomsToGroups(listOf(room), setOf(game.id), hlc(), 1L, clock)
+
+    assertEquals(0, added)
+    assertTrue(store.groupsOf(room.key).isEmpty())
+  }
+
+  @Test
+  fun `a bulk add can target several groups at once`() {
+    val room = streamer("1")
+    follow(room)
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+    val music = store.createGroup("音乐", hlc(), 1L, clock)!!
+
+    store.addRoomsToGroups(listOf(room), setOf(game.id, music.id), hlc(), 1L, clock)
+
+    assertEquals(setOf(game.id, music.id), store.groupsOf(room.key))
+  }
+
+  @Test
+  fun `a bulk add appends in selection order`() {
+    val a = streamer("1")
+    val b = streamer("2")
+    follow(a)
+    follow(b)
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+
+    store.addRoomsToGroups(listOf(b, a), setOf(game.id), hlc(), 1L, clock)
+
+    assertEquals(listOf(b.key, a.key), store.roomsInGroup(game.id))
+  }
+
   // ---------------------------------------------------------------- favourites
 
   @Test

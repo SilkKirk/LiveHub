@@ -92,6 +92,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.DeleteFollowGroup -> deleteFollowGroup(action.groupId)
       is UiAction.ReorderFollowGroups -> reorderFollowGroups(action.keys)
       is UiAction.SetRoomGroups -> setRoomGroups(action.streamer, action.groupIds)
+      is UiAction.AddRoomsToGroups -> addRoomsToGroups(action.rooms, action.groupIds)
       is UiAction.ToggleFavorite -> toggleFavorite(action.category)
       is UiAction.SetFavoriteOrder -> setFavoriteOrder(action.keys)
       is UiAction.ShowMessage -> _state.update { it.copy(message = action.text) }
@@ -853,6 +854,35 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       now = System.currentTimeMillis(),
     )
     refreshLibrary()
+  }
+
+  /**
+   * Files several rooms into [groupIds] at once.
+   *
+   * Adds rather than replaces — see [UiAction.AddRoomsToGroups]. The count in the message is what
+   * the store reports, not how many rooms were selected: selecting five rooms for a group three of
+   * them were already in should say "3" not "5".
+   */
+  private fun addRoomsToGroups(rooms: List<Streamer>, groupIds: Set<String>) {
+    if (rooms.isEmpty() || groupIds.isEmpty()) return
+    val added = container.libraryStore.addRoomsToGroups(
+      streamers = rooms,
+      groupIds = groupIds,
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )
+    refreshLibrary()
+    val names = _state.value.followGroups.filter { it.id in groupIds }.joinToString("、") { it.name }
+    _state.update {
+      it.copy(
+        message = if (added == 0) {
+          "这些主播已经在「$names」里了"
+        } else {
+          "已把 $added 位主播放进「$names」"
+        },
+      )
+    }
   }
 
   /**

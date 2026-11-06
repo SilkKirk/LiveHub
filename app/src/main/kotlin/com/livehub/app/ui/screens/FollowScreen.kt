@@ -63,6 +63,9 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   var platformFilter by remember { mutableStateOf<Platform?>(null) }
   var sheetOpen by remember { mutableStateOf(false) }
   var filing by remember { mutableStateOf<Streamer?>(null) }
+  // Bulk filing: a selection set plus a target-group picker. Null means "not selecting".
+  var selectedKeys by remember { mutableStateOf<Set<String>?>(null) }
+  var bulkTargets by remember { mutableStateOf(false) }
 
   val selectedGroup = state.selectedFollowGroupId
   val groups = state.followGroups
@@ -131,6 +134,12 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
           selectedGroupId = selectedGroup,
           onSelectGroup = { onAction(UiAction.SelectFollowGroup(it)) },
           onManageGroups = { sheetOpen = true },
+          selection = selectedKeys,
+          onToggleSelection = {
+            selectedKeys = if (selectedKeys == null) emptySet() else null
+          },
+          onSelectAllVisible = { selectedKeys = visible.map { it.key }.toSet() },
+          onFileSelected = { bulkTargets = true },
         )
 
         if (visible.isEmpty()) {
@@ -182,6 +191,13 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
                 val ids = state.roomGroups[streamer.key].orEmpty()
                 groups.filter { it.id in ids }.map { it.name }
               },
+              selectedKeys = selectedKeys,
+              onToggleSelected = { streamer ->
+                val current = selectedKeys
+                if (current != null) {
+                  selectedKeys = if (streamer.key in current) current - streamer.key else current + streamer.key
+                }
+              },
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -201,6 +217,21 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
         onAction = onAction,
       )
     }
+
+    val keys = selectedKeys
+    if (bulkTargets && keys != null) {
+      BulkFileSheet(
+        groups = groups,
+        count = keys.size,
+        onDismiss = { bulkTargets = false },
+        onPick = { groupIds ->
+          val rooms = state.followed.filter { it.key in keys }
+          onAction(UiAction.AddRoomsToGroups(rooms, groupIds))
+          bulkTargets = false
+          selectedKeys = null
+        },
+      )
+    }
   }
 }
 
@@ -217,7 +248,33 @@ private fun FollowHeader(
   selectedGroupId: String?,
   onSelectGroup: (String?) -> Unit,
   onManageGroups: () -> Unit,
+  /** Non-null while the list is in bulk-selection mode. */
+  selection: Set<String>?,
+  onToggleSelection: () -> Unit,
+  onSelectAllVisible: () -> Unit,
+  onFileSelected: () -> Unit,
 ) {
+  if (selection != null) {
+    // Selection mode replaces the whole header. Leaving the group chips and the filters on screen
+    // would invite the user to change the scope mid-selection, which silently drops the rooms that
+    // just left the view from the pending bulk move.
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "已选 ${selection.size} 位",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Box(modifier = Modifier.weight(1f))
+      TextButton(onClick = onSelectAllVisible) { Text("全选") }
+      TextButton(onClick = onToggleSelection) { Text("取消") }
+      TextButton(onClick = onFileSelected, enabled = selection.isNotEmpty()) { Text("放入分组") }
+    }
+    return
+  }
+
   Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -230,6 +287,7 @@ private fun FollowHeader(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
       Box(modifier = Modifier.weight(1f))
+      TextButton(onClick = onToggleSelection) { Text("多选") }
       TextButton(onClick = onManageGroups) { Text("管理") }
     }
 

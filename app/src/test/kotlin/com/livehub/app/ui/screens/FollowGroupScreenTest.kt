@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -242,5 +243,106 @@ class FollowGroupScreenTest {
 
     composeRule.onNodeWithText("把「主播1」放进分组").assertIsDisplayed()
     composeRule.onNodeWithText("未分类").assertIsDisplayed()
+  }
+
+  // ------------------------------------------------------------ bulk selection
+
+  @Test
+  fun `the header offers a bulk selection mode`() {
+    compose(state())
+
+    composeRule.onNodeWithText("多选").assertIsDisplayed()
+  }
+
+  /**
+   * Selection mode replaces the header. Leaving the group chips and the filters on screen would
+   * invite a scope change mid-selection, which silently drops the rooms that just left the view
+   * from the pending move.
+   */
+  @Test
+  fun `entering selection mode swaps the header for a counter`() {
+    compose(state())
+
+    composeRule.onNodeWithText("多选").performClick()
+
+    composeRule.onNodeWithText("已选 0 位").assertIsDisplayed()
+    composeRule.onNodeWithText("全选").assertIsDisplayed()
+    composeRule.onNodeWithText("放入分组").assertIsDisplayed()
+    // The group chips are gone, so a tap can only mean "select".
+    composeRule.onNodeWithText("管理").assertDoesNotExist()
+  }
+
+  @Test
+  fun `tapping a row in selection mode selects it instead of opening it`() {
+    val actions = mutableListOf<UiAction>()
+    compose(state(), actions)
+
+    composeRule.onNodeWithText("多选").performClick()
+    composeRule.onNodeWithText("主播1").performClick()
+
+    composeRule.onNodeWithText("已选 1 位").assertIsDisplayed()
+    assertTrue("opening a room must not happen while selecting", actions.none { it is UiAction.OpenRoom })
+  }
+
+  @Test
+  fun `select all picks every visible room`() {
+    compose(state())
+
+    composeRule.onNodeWithText("多选").performClick()
+    composeRule.onNodeWithText("全选").performClick()
+
+    composeRule.onNodeWithText("已选 4 位").assertIsDisplayed()
+  }
+
+  @Test
+  fun `the bulk sheet lists the groups and explains that it only adds`() {
+    compose(state())
+
+    composeRule.onNodeWithText("多选").performClick()
+    composeRule.onNodeWithText("全选").performClick()
+    composeRule.onNodeWithText("放入分组").performClick()
+
+    composeRule.onNodeWithText("把 4 位主播放进分组").assertIsDisplayed()
+    composeRule.onNodeWithText("只添加，不会把主播从其他分组移出。").assertIsDisplayed()
+    composeRule.onNodeWithText("取消").assertIsDisplayed()
+  }
+
+  @Test
+  fun `the bulk sheet cannot confirm with nothing chosen`() {
+    compose(state())
+
+    composeRule.onNodeWithText("多选").performClick()
+    composeRule.onNodeWithText("全选").performClick()
+    composeRule.onNodeWithText("放入分组").performClick()
+
+    composeRule.onNodeWithText("放入").assertIsNotEnabled()
+  }
+
+  @Test
+  fun `confirming a bulk file emits one action carrying every selected room`() {
+    val actions = mutableListOf<UiAction>()
+    compose(state(), actions)
+
+    composeRule.onNodeWithText("多选").performClick()
+    composeRule.onNodeWithText("全选").performClick()
+    composeRule.onNodeWithText("放入分组").performClick()
+    // The bulk sheet lists groups as plain rows, not chips, so select by text here.
+    composeRule.onNodeWithText("游戏").performClick()
+    composeRule.onNodeWithText("放入").performClick()
+
+    val bulk = actions.filterIsInstance<UiAction.AddRoomsToGroups>().single()
+    assertEquals(4, bulk.rooms.size)
+    assertEquals(setOf("g1"), bulk.groupIds)
+  }
+
+  @Test
+  fun `a bulk sheet with no groups says to create one first`() {
+    compose(state().copy(followGroups = emptyList()))
+
+    composeRule.onNodeWithText("多选").performClick()
+    composeRule.onNodeWithText("全选").performClick()
+    composeRule.onNodeWithText("放入分组").performClick()
+
+    composeRule.onNodeWithText("还没有分组。先用「管理」建一个，再回来批量放入。").assertIsDisplayed()
   }
 }

@@ -189,6 +189,15 @@ sealed interface UiAction {
   /** Makes [groupIds] the exact set of groups [streamer] is filed into. */
   data class SetRoomGroups(val streamer: Streamer, val groupIds: Set<String>) : UiAction
 
+  /**
+   * Files several rooms at once, **adding** [groupIds] to each (never removing).
+   *
+   * Adding rather than replacing is the only sane bulk semantic: the selected rooms almost never
+   * share a starting set, so "make them all exactly this" would silently drop memberships the user
+   * never looked at. Removing from a group is still a per-room action in the ⋮ sheet.
+   */
+  data class AddRoomsToGroups(val rooms: List<Streamer>, val groupIds: Set<String>) : UiAction
+
   /** Pins or unpins [category] under the platform tab. Aggregate entries are refused. */
   data class ToggleFavorite(val category: Category) : UiAction
 
