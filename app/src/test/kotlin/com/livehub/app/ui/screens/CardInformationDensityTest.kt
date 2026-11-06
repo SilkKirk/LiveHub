@@ -50,6 +50,7 @@ class CardInformationDensityTest {
     viewers: Long,
     live: Boolean = true,
     platform: Platform = Platform.DOUYU,
+    category: String? = null,
   ) = Streamer(
     platform = platform,
     roomId = name,
@@ -57,6 +58,7 @@ class CardInformationDensityTest {
     title = "直播标题 $name",
     viewerCount = viewers,
     isLive = live,
+    categoryName = category,
   )
 
   private fun composeInSmallWindow(content: @Composable () -> Unit) {
@@ -100,5 +102,55 @@ class CardInformationDensityTest {
     // The formatter's own output, not a hand-written string: 12.9万 and 32万.
     composeRule.onNodeWithText("12.9万").assertExists()
     composeRule.onNodeWithText("32万").assertExists()
+  }
+
+  /**
+   * The partition badge the reference prints on the bottom-right of every tile.
+   *
+   * `Streamer.categoryName` has been carried since the Douyu and Huya parsers were written and was
+   * simply never rendered — the same class of gap as the audience figure above.
+   */
+  @Test
+  fun `a room card labels its partition`() {
+    val state = UiState(
+      screen = Screen.Home,
+      platform = Platform.DOUYU,
+      categories = categories,
+      selectedCategory = categories.first(),
+      rooms = listOf(
+        streamer("主播甲", 129_000, category = "英雄联盟"),
+        streamer("主播乙", 96_000, category = "户外"),
+      ),
+    )
+
+    composeInSmallWindow { HomeScreen(state = state, onAction = {}) }
+
+    composeRule.onNodeWithText("英雄联盟").assertExists()
+    composeRule.onNodeWithText("户外").assertExists()
+  }
+
+  /**
+   * Bilibili's room endpoint publishes no area name and Douyin's has no partition at all, so the
+   * badge has to disappear rather than render as an empty pill.
+   */
+  @Test
+  fun `a card without a partition shows no empty badge`() {
+    val state = UiState(
+      screen = Screen.Home,
+      platform = Platform.DOUYU,
+      categories = categories,
+      selectedCategory = categories.first(),
+      rooms = listOf(streamer("主播甲", 129_000)),
+    )
+
+    composeInSmallWindow { HomeScreen(state = state, onAction = {}) }
+
+    // Nothing on this card can be mistaken for a partition label: the only texts are the title
+    // and the streamer name, both of which are asserted present.
+    composeRule.onNodeWithText("直播标题 主播甲").assertExists()
+    composeRule.onNodeWithText("主播甲").assertExists()
+    // 英雄联盟 belongs to the *category row* here, not to a badge — exactly one occurrence means
+    // no card drew it as well.
+    assertEquals(1, composeRule.onAllNodesWithText("英雄联盟").fetchSemanticsNodes().size)
   }
 }

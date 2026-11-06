@@ -120,6 +120,28 @@ fun StreamerCard(
           }
         }
 
+        // The partition, bottom-right, the way the reference client labels every card. It is
+        // rendered only when the platform actually reports one: Douyu (`cate2_name`) and Huya
+        // (the page's game tag) do, while Bilibili's room endpoint carries no area name and
+        // Douyin has no partition on the room at all. An empty badge on those two platforms
+        // would be worse than no badge.
+        if (!streamer.categoryName.isNullOrBlank()) {
+          Surface(
+            color = Color.Black.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(4.dp),
+            modifier = Modifier.padding(6.dp).align(Alignment.BottomEnd),
+          ) {
+            Text(
+              text = streamer.categoryName,
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+          }
+        }
+
         IconButton(
           onClick = onToggleFollow,
           modifier = Modifier.align(Alignment.TopEnd).padding(2.dp),
