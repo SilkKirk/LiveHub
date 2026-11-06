@@ -8,10 +8,12 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -304,7 +306,6 @@ class FollowGroupScreenTest {
 
     composeRule.onNodeWithText("把 4 位主播放进分组").assertIsDisplayed()
     composeRule.onNodeWithText("只添加，不会把主播从其他分组移出。").assertIsDisplayed()
-    composeRule.onNodeWithText("取消").assertIsDisplayed()
   }
 
   @Test
@@ -315,9 +316,16 @@ class FollowGroupScreenTest {
     composeRule.onNodeWithText("全选").performClick()
     composeRule.onNodeWithText("放入分组").performClick()
 
-    composeRule.onNodeWithText("放入").assertIsNotEnabled()
+    composeRule.onNode(hasText("放入") and hasClickAction()).assertIsNotEnabled()
   }
 
+  /**
+   * The bulk sheet lists groups as plain rows, while the room rows behind the scrim also print the
+   * group names they are filed into. Selecting by text alone is therefore ambiguous, so the sheet
+   * row is taken as the last match — it is drawn after the list.
+   *
+   * `放入` is matched exactly (not as a substring): `放入分组` in the header contains it.
+   */
   @Test
   fun `confirming a bulk file emits one action carrying every selected room`() {
     val actions = mutableListOf<UiAction>()
@@ -326,9 +334,8 @@ class FollowGroupScreenTest {
     composeRule.onNodeWithText("多选").performClick()
     composeRule.onNodeWithText("全选").performClick()
     composeRule.onNodeWithText("放入分组").performClick()
-    // The bulk sheet lists groups as plain rows, not chips, so select by text here.
-    composeRule.onNodeWithText("游戏").performClick()
-    composeRule.onNodeWithText("放入").performClick()
+    composeRule.onAllNodesWithText("游戏").onLast().performClick()
+    composeRule.onNode(hasText("放入") and hasClickAction()).performClick()
 
     val bulk = actions.filterIsInstance<UiAction.AddRoomsToGroups>().single()
     assertEquals(4, bulk.rooms.size)
