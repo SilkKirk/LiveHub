@@ -380,10 +380,26 @@ class FollowGroupScreenTest {
     composeRule.onNodeWithText("当前只显示 虎牙 的主播").assertIsDisplayed()
   }
 
+  /**
+   * The live/platform row only renders when it can narrow something — a single-platform list with
+   * no live filter would be a row of one chip. The fixture therefore needs two platforms, which is
+   * also the only state in which a platform chip exists at all.
+   */
   @Test
   fun `tapping a filter chip emits the action instead of changing a local`() {
     val actions = mutableListOf<UiAction>()
-    compose(state(), actions)
+    compose(
+      state().copy(
+        followed = rooms + Streamer(
+          platform = Platform.HUYA,
+          roomId = "h1",
+          streamerName = "虎牙主播",
+          title = "虎牙直播",
+          isLive = true,
+        ),
+      ),
+      actions,
+    )
 
     composeRule.onNodeWithText("直播中").performClick()
 
