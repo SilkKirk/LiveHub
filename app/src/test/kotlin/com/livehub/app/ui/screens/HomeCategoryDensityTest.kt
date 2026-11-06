@@ -400,6 +400,14 @@ class HomeCategoryDensityTest {
     composeRule.onNodeWithContentDescription("收起分类").assertDoesNotExist()
   }
 
+  /**
+   * Picking a third level collapses the tree too.
+   *
+   * The tap targets 云顶之弈, not the fixture's already-selected 峡谷之巅: the effect keys on the
+   * selection's *key*, so re-picking what is already selected is deliberately a no-op — collapsing
+   * on a no-op tap would make the tree jump for a user who only wanted to confirm the current
+   * filter.
+   */
   @Test
   fun `picking a third level collapses the tree too`() {
     val actions = mutableListOf<UiAction>()
@@ -407,10 +415,10 @@ class HomeCategoryDensityTest {
 
     composeRule.onNodeWithContentDescription("展开分类").performClick()
     composeRule.onNodeWithContentDescription("收起分类").assertExists()
-    composeRule.onNodeWithText("峡谷之巅").performClick()
+    composeRule.onNodeWithText("云顶之弈").performClick()
 
     assertEquals(
-      "峡谷之巅",
+      "云顶之弈",
       actions.filterIsInstance<UiAction.SelectSubCategory>().lastOrNull()?.category?.name,
     )
     composeRule.onNodeWithContentDescription("收起分类").assertDoesNotExist()
