@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -136,14 +138,17 @@ class PlatformPagerTest {
    * The pager opens on the platform the ViewModel restored, not on the first page.
    *
    * `lastPlatform` is persisted, so a user who left the app on 哔哩哔哩 must not be handed 斗鱼 and
-   * a "switch back" swipe on launch.
+   * a "switch back" swipe on launch. The assertion is on the *tab*, not on the grid: this fixture
+   * carries Douyu rooms regardless of platform (the ViewModel would have replaced them), so what
+   * is actually being checked is that the pager — and therefore the selected tab — started on the
+   * restored page rather than at index 0.
    */
   @Test
   fun `the pager opens on the restored platform`() {
     compose(state(platform = Platform.BILIBILI))
 
-    // 哔哩哔哩's tab is the current page, so the other platforms' grids are not composed.
-    composeRule.onNodeWithText("主播1").assertDoesNotExist()
+    composeRule.onNodeWithText("哔哩哔哩").assertIsSelected()
+    composeRule.onNodeWithText("斗鱼").assertIsNotSelected()
   }
 
   @Test

@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -38,10 +37,14 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -69,7 +72,6 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
-import kotlin.math.abs
 
 /** Below this count a single-page result gets an explicit end-of-list hint. */
 private const val NO_MORE_HINT_THRESHOLD = 21
@@ -318,15 +320,15 @@ private fun RoomGrid(
 }
 
 /**
- * The platform switcher, one line tall.
+ * The platform switcher.
  *
- * It used to be a wrapping `FlowRow` of `FilterChip`s, and four of those need about 296dp of
- * label plus padding — more than the 256dp a 320dp phone leaves beside the refresh button. So
- * 哔哩哔哩 always wrapped onto a line of its own, under a row of three and level with nothing,
- * and the bar cost 96dp of a 640dp screen on *every* home render. Text tabs need about 232dp
- * for the same four labels and stay on one line, and a platform is a top-level destination
- * rather than a filter, which is the shape a tab already means.
+ * Uses the Material 3 `PrimaryTabRow` rather than a hand-rolled row of labels with a `Box`
+ * underline: the tab row already animates its indicator between positions, sizes it to the label,
+ * and exposes `Tab` semantics (so `assertIsSelected` and TalkBack both work without extra wiring).
+ * The pager is driven from the same `selectedTabIndex`, which is what keeps a swipe and a tap
+ * looking identical.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlatformTabs(
   state: UiState,
@@ -334,81 +336,49 @@ private fun PlatformTabs(
   onAction: (UiAction) -> Unit,
 ) {
   Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 2.dp),
+    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    LazyRow(
-      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    PrimaryTabRow(
+      selectedTabIndex = pagerState.currentPage,
+      containerColor = Color.Transparent,
+      contentColor = MaterialTheme.colorScheme.primary,
+      divider = {},
+      indicator = {
+        // The default indicator is a full-width bar under the tab. This one is narrower and sits
+        // just under the label, which reads as an underline rather than as a second divider —
+        // there is already a hairline between the tabs and the grid.
+        Box(
+          modifier = Modifier
+            .tabIndicatorOffset(pagerState.currentPage, matchContentSize = false)
+            .padding(horizontal = 14.dp)
+            .height(3.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(MaterialTheme.colorScheme.primary),
+        )
+      },
       modifier = Modifier.weight(1f),
     ) {
-      itemsIndexed(Platform.entries, key = { _, platform -> platform.name }) { index, platform ->
-        PlatformTab(
-          label = platform.displayName,
-          // The tab follows the *pager*, not the ViewModel: during a swipe the label should lead
-          // the finger rather than snap once the request for the new platform has been issued.
+      Platform.entries.forEachIndexed { index, platform ->
+        Tab(
           selected = pagerState.currentPage == index,
-          // Distance from this tab to the pager's position, in pages: 0 when this tab is exactly
-          // current, 1 when it is a full page away. Offset fraction is negative when the pager sits
-          // to the left of `currentPage`, hence the addition rather than a subtraction.
-          selectionFraction = (1f - abs(index - pagerState.currentPage - pagerState.currentPageOffsetFraction))
-            .coerceIn(0f, 1f),
           onClick = { onAction(UiAction.SelectPlatform(platform)) },
+          selectedContentColor = MaterialTheme.colorScheme.primary,
+          unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+          text = {
+            Text(
+              text = platform.displayName,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = if (pagerState.currentPage == index) FontWeight.Bold else FontWeight.Medium,
+              maxLines = 1,
+            )
+          },
         )
       }
     }
     IconButton(onClick = { onAction(UiAction.Refresh) }) {
       Icon(Icons.Filled.Refresh, contentDescription = "刷新", modifier = Modifier.size(20.dp))
     }
-  }
-}
-
-/**
- * A platform tab: the label, and an underline that follows the pager.
- *
- * [selectionFraction] is 1 when this tab is exactly the current page and 0 when it is a full page
- * away, which is what makes the underline slide with a swipe rather than blink between tabs.
- */
-@Composable
-private fun PlatformTab(
-  label: String,
-  selected: Boolean,
-  selectionFraction: Float,
-  onClick: () -> Unit,
-) {
-  val color = if (selected) {
-    MaterialTheme.colorScheme.primary
-  } else {
-    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-  }
-  Column(
-    modifier = Modifier
-      .clip(RoundedCornerShape(10.dp))
-      .clickable(onClick = onClick)
-      .padding(horizontal = 10.dp, vertical = 5.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(4.dp),
-  ) {
-    Text(
-      text = label,
-      style = MaterialTheme.typography.titleMedium,
-      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-      color = color,
-      maxLines = 1,
-    )
-    // A fixed-width underline rather than a filled pill: a tab whose background grows with the
-    // label would shift every neighbour as the selection moves. Its width and alpha both track the
-    // swipe, so the marker is already half-way to the next tab when the finger is half-way there.
-    Box(
-      modifier = Modifier
-        .width(18.dp)
-        .height(3.dp)
-        .clip(RoundedCornerShape(2.dp))
-        .background(
-          MaterialTheme.colorScheme.primary.copy(alpha = selectionFraction),
-        ),
-    )
   }
 }
 
