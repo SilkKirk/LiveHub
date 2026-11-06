@@ -32,6 +32,7 @@ import com.livehub.app.ui.screens.PlayerContent
 import com.livehub.app.ui.screens.PlayerSettings
 import com.livehub.core.model.Category
 import com.livehub.core.model.DanmakuMessage
+import com.livehub.core.model.FollowGroup
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
@@ -476,6 +477,66 @@ class ScreenshotTest {
 
   @Test
   fun followEmpty() = capture("08-follow-empty", baseState().copy(screen = Screen.Follow))
+
+  /**
+   * The follow list with the group row.
+   *
+   * Every group claim in this feature is a *layout* claim — a second chip row, the per-room group
+   * names, the header counting only the scoped group — and none of it is visible to a JVM test.
+   * `LibraryStoreTest` proves the records merge; only a render proves they are readable.
+   */
+  @Test
+  fun followGroups() = capture(
+    "08b-follow-groups",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = listOf(
+        douyuRooms[0], douyuRooms[1], douyuRooms[2],
+        streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
+        streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档", 45_000, live = false),
+      ),
+      followGroups = listOf(
+        FollowGroup("g1", "游戏", 0),
+        FollowGroup("g2", "音乐", 1),
+      ),
+      roomGroups = mapOf(
+        douyuRooms[0].key to setOf("g1"),
+        douyuRooms[1].key to setOf("g1", "g2"),
+        douyuRooms[2].key to setOf("g2"),
+      ),
+    ),
+  )
+
+  /** The group sheet in its management mode. */
+  @Test
+  fun followGroupSheet() = capture(
+    "08c-follow-group-sheet",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = douyuRooms.take(3),
+      followGroups = listOf(FollowGroup("g1", "游戏", 0), FollowGroup("g2", "音乐", 1)),
+      roomGroups = mapOf(douyuRooms[0].key to setOf("g1")),
+    ),
+  )
+
+  /**
+   * The pinned-partition row, directly under the platform tabs.
+   *
+   * It only exists when the current platform has favourites, so it needs its own render — a
+   * baseline without favourites would never draw it, and the row's whole justification is that it
+   * disappears when empty.
+   */
+  @Test
+  fun homeFavorites() = capture(
+    "02b-home-favorites",
+    baseState().copy(
+      favorites = listOf(
+        douyuCategoriesWithAggregate[1],
+        douyuCategoriesWithAggregate[2],
+        douyuCategoriesWithAggregate[3],
+      ),
+    ),
+  )
 
   @Test
   fun searchIdle() = capture("09-search-idle", baseState().copy(screen = Screen.Search, searchQuery = ""))

@@ -1,6 +1,6 @@
 package com.livehub.app.sync
 
-import com.livehub.app.di.FollowStore
+import com.livehub.app.di.LibraryStore
 import com.livehub.app.di.UserPreferences
 import com.livehub.core.sync.CodePairing
 import com.livehub.core.sync.CodePairingResult
@@ -38,7 +38,7 @@ import kotlinx.coroutines.withContext
  */
 class SyncController(
   private val preferences: UserPreferences,
-  private val followStore: FollowStore,
+  private val libraryStore: LibraryStore,
   private val engine: SyncEngine,
   private val discovery: PeerDiscovery,
   /** Notified with the real listening port as soon as the LAN server binds. */

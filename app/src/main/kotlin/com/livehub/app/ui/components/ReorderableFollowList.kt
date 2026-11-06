@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +49,10 @@ import com.livehub.core.model.Streamer
  * so the row follows the finger, and the target index is computed from the accumulated
  * offset divided by the measured row height — no external library is needed for a
  * single-list reorder.
+ *
+ * [onReorder] receives an index into **this** list, which is a filtered view. Resolving that
+ * index against the stored order is the caller's job — see
+ * [com.livehub.app.di.FollowOrdering.moveWithin].
  */
 @Composable
 fun ReorderableFollowList(
@@ -56,6 +61,8 @@ fun ReorderableFollowList(
   onReorder: (Streamer, Int) -> Unit,
   modifier: Modifier = Modifier,
   onRemove: ((Streamer) -> Unit)? = null,
+  onFile: ((Streamer) -> Unit)? = null,
+  groupNamesOf: ((Streamer) -> List<String>) = { emptyList() },
 ) {
   val listState = rememberLazyListState()
   var draggingKey by remember { mutableStateOf<String?>(null) }
@@ -75,6 +82,8 @@ fun ReorderableFollowList(
         isDragging = isDragging,
         onClick = { onClick(streamer) },
         onRemove = onRemove?.let { remove -> { remove(streamer) } },
+        onFile = onFile?.let { file -> { file(streamer) } },
+        groupNames = groupNamesOf(streamer),
         modifier = Modifier.pointerInput(streamer.key, streamers.size) {
           detectDragGesturesAfterLongPress(
             onDragStart = {
@@ -118,6 +127,8 @@ private fun FollowRow(
   onClick: () -> Unit,
   modifier: Modifier,
   onRemove: (() -> Unit)? = null,
+  onFile: (() -> Unit)? = null,
+  groupNames: List<String> = emptyList(),
 ) {
   // A live room gets the primary-colour border the reference uses, so a long list can be
   // scanned for "who is on right now" without reading the badges.
@@ -215,9 +226,10 @@ private fun FollowRow(
             modifier = Modifier.weight(1f, fill = false),
           )
           // The one place in the app that showed a followed room without its audience figure.
-          // The store has carried `viewerCount` all along (`FollowStore.fromStreamer`,
-          // refreshed by `FollowRefreshWorker`), and the reference's 关注列表 prints it on every
-          // card, so the only thing missing was this Text. 0 means "unknown", not "empty room".
+          // The store has carried `viewerCount` all along (`LibraryStore`/`LibraryCodec`
+          // write it, `FollowRefreshWorker` refreshes it), and the reference's 关注列表 prints
+          // it on every card, so the only thing missing was this Text. 0 means "unknown", not
+          // "empty room".
           if (streamer.viewerCount > 0) {
             Text(
               text = ViewerCountFormatter.format(streamer.viewerCount),
@@ -234,6 +246,17 @@ private fun FollowRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
+        // Which groups this room is filed into. Rendered only when there is at least one: an
+        // empty line on every unfiled row would be pure noise, and 未分类 is the default.
+        if (groupNames.isNotEmpty()) {
+          Text(
+            text = groupNames.joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
       }
 
       if (onRemove != null) {
@@ -244,6 +267,19 @@ private fun FollowRow(
             imageVector = Icons.Filled.Star,
             contentDescription = "取消关注 ${streamer.streamerName}",
             tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+
+      if (onFile != null) {
+        // Filing into groups. A menu icon rather than a second icon row: at 320dp the row
+        // already carries a cover, two text lines, the star and the drag handle.
+        IconButton(onClick = onFile, modifier = Modifier.size(36.dp)) {
+          Icon(
+            imageVector = Icons.Filled.MoreVert,
+            contentDescription = "把 ${streamer.streamerName} 放进分组",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
           )
         }

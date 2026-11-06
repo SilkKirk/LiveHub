@@ -46,7 +46,7 @@ class AppWiringTest {
   @Test
   fun followListRoundTripsThroughDataStore() {
     val container = AppContainer(context)
-    val store = container.followStore
+    val store = container.libraryStore
     store.replaceAll(emptyList())
 
     val hlc = container.syncEngine.nextHlc()

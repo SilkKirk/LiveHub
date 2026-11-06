@@ -5,18 +5,22 @@ import kotlinx.serialization.Serializable
 /**
  * What gets synchronised between two LiveHub installs.
  *
- * Two scopes, and both are data whose *value* is destroyed by owning two devices: the follow
- * list (which room you care about) and the login state (who you are on Bilibili / Douyin).
+ * Two scopes, and both are data whose *value* is destroyed by owning two devices: the library
+ * (which rooms you care about, how you filed them into groups, which partitions you pinned) and
+ * the login state (who you are on Bilibili / Douyin).
  *
- * The second one reverses a decision from round 32 ("the follow list and nothing else"). That
- * decision was right for the scopes it removed — search history and danmaku settings have no
- * reason to travel — but a login is exactly the thing a user does not want to perform twice,
- * and it was requested explicitly. Login state only ever reaches a **paired** device: the
- * server rejects unauthenticated requests before a payload is read
+ * `FOLLOWS` kept its wire name while growing into the library scope. It is deliberately one
+ * scope and not four: a `member:` record references a `group:` record, so both have to land in
+ * the same merge. [com.livehub.core.sync.SyncCoordinator] iterates scopes and treats a failed
+ * scope as `continue`, so splitting them would make "a membership pointing at a group this
+ * device has not received yet" a real, reachable state.
+ *
+ * Login state only ever reaches a **paired** device: the server rejects unauthenticated
+ * requests before a payload is read
  * ([com.livehub.core.sync.server.SyncHttpServer.authenticate]), and unpairing stops it.
  */
 enum class SyncScope(val wireName: String, val displayName: String) {
-  FOLLOWS("follows", "关注列表"),
+  FOLLOWS("follows", "关注、分组与收藏"),
   CREDENTIALS("credentials", "登录状态"),
   ;
 
@@ -76,8 +80,15 @@ data class SyncPayload(
     get() = runCatching { SyncCodec.decodeRecords(entries).size }.getOrDefault(0)
 
   companion object {
-    /** Bump whenever the JSON layout of any scope changes incompatibly. */
-    const val SCHEMA: Int = 1
+    /**
+     * Bumped whenever the JSON layout of any scope changes incompatibly.
+     *
+     * 2 — the follow scope became the *library* scope: its record keys are now prefixed
+     * (`room:` / `group:` / `fav:` / `member:`) instead of being bare `<platform>:<roomId>`.
+     * A peer on schema 1 is refused with "对端版本过新" rather than being handed keys it would
+     * silently misread as rooms.
+     */
+    const val SCHEMA: Int = 2
 
     /**
      * Upper bound on the records carried by one payload.

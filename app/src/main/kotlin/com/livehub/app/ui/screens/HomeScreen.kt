@@ -27,8 +27,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.FilterChip
@@ -58,6 +61,7 @@ import com.livehub.app.ui.components.InlineLoader
 import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
+import com.livehub.app.ui.components.longPressOnly
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Category
@@ -145,6 +149,11 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
   Box(modifier = Modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize()) {
       PlatformTabs(state = state, onAction = onAction)
+      FavoritesRow(
+        state = state,
+        onOpenPicker = { pickerOpen = true },
+        onAction = onAction,
+      )
       CategoryRow(
         state = state,
         levels = levels,
@@ -294,6 +303,76 @@ private fun PlatformTab(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 /**
+ * The pinned partitions of the **current platform**, directly under the platform tabs.
+ *
+ * Sitting between the tab row and the category row is a claim about scope: everything under a
+ * platform tab belongs to that platform, so a row that mixed all four would be the one thing in
+ * the column that the tab does not govern — and tapping a Bilibili chip two centimetres under the
+ * 斗鱼 tab would silently switch platform. So the row is filtered to [UiState.platform].
+ *
+ * It disappears entirely when the platform has no favourites. That is the whole reason the
+ * previous attempt at this feature was removed: a permanent row that only repeated "select a
+ * category" cost 40dp on every home render. An empty row costs nothing.
+ *
+ * The only thing shown in the empty case is a single muted chip when *another* platform has
+ * favourites, so the feature is still findable without being a permanent fixture.
+ */
+@Composable
+private fun FavoritesRow(
+  state: UiState,
+  onOpenPicker: () -> Unit,
+  onAction: (UiAction) -> Unit,
+) {
+  val here = remember(state.favorites, state.platform) {
+    state.favorites.filter { it.platform == state.platform }
+  }
+  val elsewhere = remember(state.favorites, state.platform) {
+    state.favorites.filter { it.platform != state.platform }
+  }
+  if (here.isEmpty() && elsewhere.isEmpty()) return
+
+  LazyRow(
+    contentPadding = PaddingValues(horizontal = 12.dp),
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+  ) {
+    items(here, key = { "fav-${it.key}" }) { category ->
+      // Smaller and star-prefixed on purpose: this row sits directly above the category row and
+      // the two must not read as one strip of chips.
+      FilterChip(
+        selected = state.selectedCategory?.key == category.key,
+        onClick = { onAction(UiAction.SelectCategory(category)) },
+        label = { Text("★ ${category.name}", maxLines = 1) },
+        modifier = Modifier.height(32.dp),
+      )
+    }
+    if (here.isEmpty()) {
+      item(key = "fav-elsewhere") {
+        AssistChip(
+          onClick = {
+            val first = elsewhere.firstOrNull() ?: return@AssistChip
+            onAction(UiAction.SelectPlatform(first.platform))
+          },
+          label = {
+            Text(
+              text = "在 ${elsewhere.map { it.platform }.distinct().size} 个其他平台有收藏 ›",
+              maxLines = 1,
+            )
+          },
+          modifier = Modifier.height(32.dp),
+        )
+      }
+    }
+    item(key = "fav-add") {
+      IconButton(onClick = onOpenPicker, modifier = Modifier.size(32.dp)) {
+        Icon(Icons.Filled.Add, contentDescription = "收藏分区", modifier = Modifier.size(18.dp))
+      }
+    }
+  }
+}
+
+/**
  * The category selector: one row.
  *
  * It used to be up to three stacked chip rows — group, category, third level — which at 320dp
@@ -359,6 +438,11 @@ private fun CategoryRow(
             selected = state.selectedCategory?.key == category.key,
             onClick = { onAction(UiAction.SelectCategory(category)) },
             label = { Text(category.name, maxLines = 1) },
+            // Long press pins/unpins instead of adding a second tap target: a star on every chip
+            // would eat the label width at 320dp. The aggregate chip is reachable here too, and
+            // it has no favourite to toggle — the ViewModel explains that rather than ignoring
+            // the gesture.
+            modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
           )
         }
       }
@@ -461,6 +545,12 @@ private fun CategoryPicker(
             CategoryPickerRow(
               name = category.name,
               selected = category.key == state.selectedCategory?.key,
+              // The aggregate entry is not listed here at all (`pickable` drops it), so this star
+              // is never offered for something that cannot be pinned.
+              favorite = state.favorites.any {
+                it.platform == category.platform && it.id == category.id
+              },
+              onToggleFavorite = { onAction(UiAction.ToggleFavorite(category)) },
               onClick = {
                 onAction(UiAction.SelectCategory(category))
                 onDismiss()
@@ -474,12 +564,18 @@ private fun CategoryPicker(
 }
 
 @Composable
-private fun CategoryPickerRow(name: String, selected: Boolean, onClick: () -> Unit) {
+private fun CategoryPickerRow(
+  name: String,
+  selected: Boolean,
+  favorite: Boolean,
+  onToggleFavorite: () -> Unit,
+  onClick: () -> Unit,
+) {
   Row(
     modifier = Modifier
       .fillMaxWidth()
       .clickable(onClick = onClick)
-      .padding(horizontal = 16.dp, vertical = 14.dp),
+      .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Text(
@@ -488,7 +584,7 @@ private fun CategoryPickerRow(name: String, selected: Boolean, onClick: () -> Un
       fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
       color =
         if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-      modifier = Modifier.weight(1f),
+      modifier = Modifier.weight(1f).padding(vertical = 8.dp),
     )
     if (selected) {
       Icon(
@@ -496,6 +592,15 @@ private fun CategoryPickerRow(name: String, selected: Boolean, onClick: () -> Un
         contentDescription = null,
         tint = MaterialTheme.colorScheme.primary,
         modifier = Modifier.size(18.dp),
+      )
+    }
+    // The one place that can show the whole tree, so it is the main way to pin a partition.
+    IconButton(onClick = onToggleFavorite, modifier = Modifier.size(40.dp)) {
+      Icon(
+        imageVector = if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+        contentDescription = if (favorite) "取消收藏 $name" else "收藏 $name",
+        tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(20.dp),
       )
     }
   }

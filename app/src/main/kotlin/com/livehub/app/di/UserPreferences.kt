@@ -35,8 +35,21 @@ data class UserSettings(
   val lastPlatform: String = Platform.DOUYU.id,
   /** Keywords the search screen shows, newest first. Local only — never synchronised. */
   val searchHistory: List<String> = emptyList(),
-  /** Serialised follow records, including tombstones. The one synchronised scope. */
-  val followRecords: String = "",
+  /**
+   * Serialised library records, including tombstones: followed rooms, their groups, the
+   * room↔group memberships and the categories pinned under the platform tab.
+   *
+   * One field rather than four because all four kinds are one synchronised scope — see
+   * [LibraryStore] for why memberships in particular have to merge together with the rooms.
+   */
+  val libraryRecords: String = "",
+  /**
+   * Which record vocabulary [libraryRecords] is written in.
+   *
+   * 1 = bare `<platform>:<roomId>` keys (followed rooms only). 2 = the prefixed [LibraryKey]
+   * vocabulary. [LibraryStore] rewrites version 1 keys once on first read and then writes 2.
+   */
+  val recordsVersion: Int = 2,
   /**
    * Serialised login-state records (one per platform), including tombstones.
    *

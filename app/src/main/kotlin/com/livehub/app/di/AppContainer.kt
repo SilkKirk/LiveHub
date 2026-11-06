@@ -127,7 +127,11 @@ class AppContainer(
 
   val preferences: UserPreferences by lazy { UserPreferences(applicationContext) }
 
-  val followStore: FollowStore by lazy { FollowStore(preferences) }
+  /**
+   * The user's library: followed rooms, their groups, the memberships and the pinned
+   * categories — one synchronised record set, see [LibraryStore].
+   */
+  val libraryStore: LibraryStore by lazy { LibraryStore(preferences) }
 
   /**
    * Bilibili/Douyin login state, with the HLC metadata the sync merge needs.
@@ -140,7 +144,7 @@ class AppContainer(
     CredentialStore(preferences, bilibiliCookieStore, douyinCookieStore)
   }
 
-  val syncTargets: AppSyncTargets by lazy { AppSyncTargets(followStore, credentialStore) }
+  val syncTargets: AppSyncTargets by lazy { AppSyncTargets(libraryStore, credentialStore) }
 
   val syncEngine: SyncEngine by lazy {
     SyncEngine(
@@ -175,7 +179,7 @@ class AppContainer(
   val syncController: SyncController by lazy {
     SyncController(
       preferences = preferences,
-      followStore = followStore,
+      libraryStore = libraryStore,
       engine = syncEngine,
       discovery = peerDiscovery,
       // Lets the container know the real port the moment the server binds, so mDNS

@@ -7,9 +7,12 @@ import androidx.test.core.app.ApplicationProvider
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.screens.SyncScreen
+import com.livehub.core.model.Category
+import com.livehub.core.model.LibraryKey
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import com.livehub.core.sync.SyncCodec
+import com.livehub.core.sync.SyncPayload
 import com.livehub.core.sync.SyncScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -45,11 +48,11 @@ class SyncScopesTest {
     container = AppContainer(ApplicationProvider.getApplicationContext())
     // DataStore is a process-wide file, so a previous test's state would leak in.
     container.preferences.update { UserSettings() }
-    container.followStore.replaceAll(emptyList())
+    container.libraryStore.replaceAll(emptyList())
   }
 
   @Test
-  fun `the app exchanges the follow list and the login state`() {
+  fun `the app exchanges the library and the login state`() {
     assertEquals(
       listOf(SyncScope.FOLLOWS, SyncScope.CREDENTIALS),
       container.syncTargets.available().map { it.scope },
@@ -73,7 +76,7 @@ class SyncScopesTest {
       title = "测试直播间",
       isLive = true,
     )
-    container.followStore.toggle(
+    container.libraryStore.toggle(
       streamer = streamer,
       hlc = container.syncEngine.nextHlc(),
       deviceId = container.preferences.deviceId,
@@ -84,7 +87,70 @@ class SyncScopesTest {
 
     assertNotNull("the follow scope must still produce a payload", payload)
     val records = SyncCodec.decodeRecords(payload!!.entries)
-    assertTrue(records.any { it.key == streamer.key })
+    assertTrue(records.any { it.key == LibraryKey.Room(Platform.DOUYU, "999999").encode() })
+  }
+
+  /**
+   * Groups, memberships and pinned categories travel in the same payload as the rooms.
+   *
+   * One scope rather than four because a `member:` record references a `group:` record: split
+   * across scopes, a failed scope leaves a membership pointing at a group the peer never got.
+   */
+  @Test
+  fun `groups memberships and favourites ride in the follow payload`() {
+    val streamer = Streamer(
+      platform = Platform.DOUYU,
+      roomId = "999999",
+      streamerName = "测试主播",
+      isLive = true,
+    )
+    val hlc = container.syncEngine.nextHlc()
+    val deviceId = container.preferences.deviceId
+    container.libraryStore.toggle(streamer, hlc, deviceId, 1_700_000_000_000L)
+    val group = container.libraryStore.createGroup("游戏", hlc, deviceId, 1_700_000_000_000L)!!
+    container.libraryStore.setMembership(streamer, setOf(group.id), hlc, deviceId, 1_700_000_000_000L)
+    container.libraryStore.toggleFavorite(
+      Category(platform = Platform.DOUYU, id = "2_1", name = "英雄联盟", slug = "LOL"),
+      hlc,
+      deviceId,
+      1_700_000_000_000L,
+    )
+
+    val payload = container.syncEngine.buildPayload(SyncScope.FOLLOWS)!!
+    val keys = SyncCodec.decodeRecords(payload.entries).map { it.key }
+
+    assertTrue(keys.any { it == LibraryKey.Room(Platform.DOUYU, "999999").encode() })
+    assertTrue(keys.any { it == LibraryKey.Group(group.id).encode() })
+    assertTrue(keys.any { it == LibraryKey.Member(group.id, Platform.DOUYU, "999999").encode() })
+    assertTrue(keys.any { it == LibraryKey.Favorite(Platform.DOUYU, "2_1").encode() })
+  }
+
+  /**
+   * The record set is bigger now (rooms + memberships + groups + favourites), so the follow scope
+   * really does cross [SyncPayload.MAX_RECORDS_PER_PAYLOAD] in normal use. Chunking existed but
+   * nothing exercised it for this scope.
+   */
+  @Test
+  fun `a library larger than one payload is split and every record still arrives`() {
+    val deviceId = container.preferences.deviceId
+    val hlc = container.syncEngine.nextHlc()
+    val rooms = (0 until 400).map { index ->
+      Streamer(platform = Platform.DOUYU, roomId = "$index", streamerName = "主播$index", isLive = true)
+    }
+    rooms.forEach { container.libraryStore.toggle(it, hlc, deviceId, 1_700_000_000_000L) }
+    val group = container.libraryStore.createGroup("游戏", hlc, deviceId, 1_700_000_000_000L)!!
+    // 400 rooms + 200 memberships + 1 group = 601 records, above the 500 limit.
+    rooms.take(200).forEach {
+      container.libraryStore.setMembership(it, setOf(group.id), hlc, deviceId, 1_700_000_000_000L)
+    }
+
+    val payloads = container.syncEngine.buildPayloads(SyncScope.FOLLOWS)
+
+    assertTrue("must be split into more than one payload", payloads.size > 1)
+    val delivered = payloads.flatMap { SyncCodec.decodeRecords(it.entries) }.map { it.key }.toSet()
+    assertEquals(601, delivered.size)
+    assertTrue(delivered.contains(LibraryKey.Room(Platform.DOUYU, "399").encode()))
+    assertTrue(delivered.contains(LibraryKey.Member(group.id, Platform.DOUYU, "199").encode()))
   }
 
   /** A login is a payload too, so the peer has something to merge. */
@@ -129,7 +195,7 @@ class SyncScopesTest {
     }
     composeRule.waitForIdle()
 
-    composeRule.onNodeWithText("关注列表 · 登录状态").assertExists()
+    composeRule.onNodeWithText("关注、分组与收藏 · 登录状态").assertExists()
     composeRule.onNodeWithText("播放与弹幕设置").assertDoesNotExist()
     composeRule.onNodeWithText("搜索历史").assertDoesNotExist()
   }

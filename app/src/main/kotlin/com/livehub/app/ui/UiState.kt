@@ -25,6 +25,33 @@ data class UiState(
   val selectedSubCategory: Category? = null,
   val rooms: List<Streamer> = emptyList(),
   val followed: List<Streamer> = emptyList(),
+  /**
+   * Group ids per followed-room key (`douyu:288016`).
+   *
+   * A room can sit in any number of groups, which is why this is a set rather than a field on
+   * [followed]: two devices adding the same room to different groups have to both survive the
+   * merge. See [com.livehub.app.di.LibraryStore].
+   */
+  val roomGroups: Map<String, Set<String>> = emptyMap(),
+  /** The user's groups, in their order. */
+  val followGroups: List<com.livehub.core.model.FollowGroup> = emptyList(),
+  /**
+   * Room keys per group, in the order they were arranged **inside** that group.
+   *
+   * Separate from [followed] because the two orders are independent: the global list is one
+   * arrangement, each group has its own. Reading the group order from [followed] would make
+   * "arrange rooms inside 游戏" impossible — the group would always show the global order.
+   */
+  val groupRoomOrder: Map<String, List<String>> = emptyMap(),
+  /**
+   * Which group the follow screen is scoped to, or null for "all".
+   *
+   * Kept in the state rather than in a `remember` so returning from a room does not silently
+   * drop the user back to the unfiltered list.
+   */
+  val selectedFollowGroupId: String? = null,
+  /** Categories pinned under the platform tab, for the platform of [platform] only. */
+  val favorites: List<Category> = emptyList(),
   val searchQuery: String = "",
   /**
    * The keyword [searchResults] were searched with, and the one the next page is requested for.
@@ -135,7 +162,41 @@ sealed interface UiAction {
    */
   data class SelectSubCategory(val category: Category?) : UiAction
 
-  data class MoveFollow(val streamer: Streamer, val toIndex: Int) : UiAction
+  /**
+   * Replaces the stored order of the follow list.
+   *
+   * Whole-list rather than "move item X to index N": the list on screen is a filtered, live-first
+   * view, so a view index does not address the stored list. `FollowOrdering.moveWithin` resolves
+   * the drop position against the full list and the result travels as this one value.
+   */
+  data class SetFollowOrder(val keys: List<String>) : UiAction
+
+  /** Replaces the order of the rooms inside one group, leaving the global order untouched. */
+  data class SetGroupOrder(val groupId: String, val keys: List<String>) : UiAction
+
+  /** Scopes the follow screen to a group, or to everything when null. */
+  data class SelectFollowGroup(val groupId: String?) : UiAction
+
+  data class CreateFollowGroup(val name: String) : UiAction
+
+  data class RenameFollowGroup(val groupId: String, val name: String) : UiAction
+
+  data class DeleteFollowGroup(val groupId: String) : UiAction
+
+  /** Replaces the group row order. [keys] are group ids. */
+  data class ReorderFollowGroups(val keys: List<String>) : UiAction
+
+  /** Makes [groupIds] the exact set of groups [streamer] is filed into. */
+  data class SetRoomGroups(val streamer: Streamer, val groupIds: Set<String>) : UiAction
+
+  /** Pins or unpins [category] under the platform tab. Aggregate entries are refused. */
+  data class ToggleFavorite(val category: Category) : UiAction
+
+  /** Replaces the pinned-category order. [keys] are `LibraryKey.Favorite` encoded values. */
+  data class SetFavoriteOrder(val keys: List<String>) : UiAction
+
+  /** Shows a one-line explanation. Used where an action is refused for a reason worth stating. */
+  data class ShowMessage(val text: String) : UiAction
 
   data object LoadMore : UiAction
 

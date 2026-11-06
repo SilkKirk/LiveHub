@@ -16,8 +16,8 @@ import org.junit.Test
  */
 class FollowOrderingTest {
 
-  private fun streamer(id: String) = Streamer(
-    platform = Platform.DOUYU,
+  private fun streamer(id: String, platform: Platform = Platform.DOUYU) = Streamer(
+    platform = platform,
     roomId = id,
     streamerName = "主播$id",
     title = "直播$id",
@@ -104,5 +104,87 @@ class FollowOrderingTest {
         )
       }
     }
+  }
+
+  // ------------------------------------------------------- filtered views ---
+
+  /**
+   * The defect these cover: the follow screen hands the drag index to the *visible* list, and the
+   * store used to apply it to the *full* list. Under a platform filter, dragging row 1 to row 2
+   * therefore moved whoever happened to sit at index 2 in the unfiltered list.
+   */
+  @Test
+  fun `moving inside a filtered view never touches a hidden row`() {
+    val douyu1 = streamer("d1")
+    val huya1 = streamer("h1", Platform.HUYA)
+    val douyu2 = streamer("d2")
+    val huya2 = streamer("h2", Platform.HUYA)
+    val full = listOf(douyu1, huya1, douyu2, huya2)
+    val visible = listOf(douyu1, douyu2)
+
+    // Drag 主播d1 down one slot inside the 斗鱼 filter.
+    val result = FollowOrdering.moveWithin(full, visible, douyu1, 1)
+
+    assertEquals(listOf(huya1.key, douyu2.key, douyu1.key, huya2.key), result)
+  }
+
+  @Test
+  fun `a drop at the top of a filtered view puts the row before its first visible neighbour`() {
+    val a = streamer("a")
+    val hidden = streamer("x", Platform.HUYA)
+    val b = streamer("b")
+    val full = listOf(a, hidden, b)
+
+    val result = FollowOrdering.moveWithin(full, listOf(a, b), b, 0)
+
+    assertEquals(listOf(b.key, a.key, hidden.key), result)
+  }
+
+  @Test
+  fun `the full list keeps every key exactly once`() {
+    val full = (1..5).map { streamer("$it") }
+    val visible = listOf(full[0], full[2], full[4])
+    visible.forEach { moved ->
+      for (target in 0..2) {
+        val result = FollowOrdering.moveWithin(full, visible, moved, target)
+        assertEquals(full.size, result.size)
+        assertEquals(full.map { it.key }.toSet(), result.toSet())
+      }
+    }
+  }
+
+  @Test
+  fun `a single visible row is a no-op`() {
+    val a = streamer("a")
+    val b = streamer("b")
+    val result = FollowOrdering.moveWithin(listOf(a, b), listOf(b), b, 0)
+    assertEquals(listOf(a.key, b.key), result)
+  }
+
+  @Test
+  fun `an empty full list returns nothing`() {
+    assertTrue(FollowOrdering.moveWithin(emptyList(), emptyList(), streamer("1"), 0).isEmpty())
+  }
+
+  /**
+   * The stored order is the user's arrangement; the live-first sort is a view rule only. Writing
+   * the *view* order back is what sent whoever went offline to the bottom of the list for good.
+   */
+  @Test
+  fun `a live-first view does not reorder offline rooms`() {
+    val live = streamer("1")
+    val offline = Streamer(
+      platform = Platform.DOUYU,
+      roomId = "2",
+      streamerName = "主播2",
+      isLive = false,
+    )
+    val full = listOf(live, offline)
+    // What the screen shows: the live one first, whatever the stored order says.
+    val visible = listOf(live, offline)
+
+    val result = FollowOrdering.moveWithin(full, visible, live, 0)
+
+    assertEquals("dragging the live row onto itself must change nothing", listOf(live.key, offline.key), result)
   }
 }

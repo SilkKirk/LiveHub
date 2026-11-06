@@ -43,8 +43,8 @@ class MainViewModelTest {
     // test's "a fresh install starts at System" assertion saw it. Reset the whole settings
     // record so every test starts from the same state regardless of order.
     container.preferences.update { com.livehub.app.di.UserSettings() }
-    // Start from a clean follow list so tests do not depend on ordering.
-    container.followStore.replaceAll(emptyList())
+    // Start from a clean library so tests do not depend on ordering or leftover groups.
+    container.libraryStore.replaceAll(emptyList())
     viewModel = MainViewModel(container)
     idle()
   }
@@ -245,13 +245,13 @@ class MainViewModelTest {
 
     assertEquals(1, state.followed.size)
     assertEquals(room.key, state.followed.first().key)
-    assertTrue(container.followStore.isFollowed(room.platform, room.roomId))
+    assertTrue(container.libraryStore.isFollowed(room.platform, room.roomId))
 
     viewModel.onAction(UiAction.ToggleFollow(room))
     idle()
 
     assertTrue("unfollow must empty the list", state.followed.isEmpty())
-    assertFalse(container.followStore.isFollowed(room.platform, room.roomId))
+    assertFalse(container.libraryStore.isFollowed(room.platform, room.roomId))
   }
 
   @Test
@@ -297,14 +297,16 @@ class MainViewModelTest {
     assertEquals(3, before.size)
 
     val moving = state.followed.last()
-    viewModel.onAction(UiAction.MoveFollow(moving, 0))
+    // The view resolves the drop against the full list and sends the whole order, so a drag
+    // under a filter can never write a *filtered* order into the store.
+    viewModel.onAction(UiAction.SetFollowOrder(listOf(moving.key) + before.filterNot { it == moving.key }))
     idle()
 
     val expected = listOf(moving.key) + before.filterNot { it == moving.key }
     assertEquals(expected, state.followed.map { it.key })
 
     // And the store agrees after a reload.
-    assertEquals(expected, container.followStore.followed().map { it.key })
+    assertEquals(expected, container.libraryStore.followed().map { it.key })
   }
 
   // ---------------------------------------------------------------- preferences ---
