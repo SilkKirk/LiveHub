@@ -125,14 +125,18 @@ fun StreamerCard(
         // (the page's game tag) do, while Bilibili's room endpoint carries no area name and
         // Douyin has no partition on the room at all. An empty badge on those two platforms
         // would be worse than no badge.
-        if (!streamer.categoryName.isNullOrBlank()) {
+        //
+        // The local is not cosmetic: `categoryName` lives in `:core:model`, so a smart cast after
+        // the null check is impossible and `text =` would not compile against `String?`.
+        val partition = streamer.categoryName
+        if (!partition.isNullOrBlank()) {
           Surface(
             color = Color.Black.copy(alpha = 0.55f),
             shape = RoundedCornerShape(4.dp),
             modifier = Modifier.padding(6.dp).align(Alignment.BottomEnd),
           ) {
             Text(
-              text = streamer.categoryName,
+              text = partition,
               style = MaterialTheme.typography.labelSmall,
               color = Color.White,
               maxLines = 1,
