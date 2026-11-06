@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -85,8 +86,7 @@ class FollowGroupScreenTest {
 
   /** The group chip, as opposed to the same name printed on a room row. */
   private fun chip(label: String) = composeRule.onNode(
-    SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)
-      and androidx.compose.ui.test.hasText(label),
+    SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox) and hasText(label),
   )
 
   @Test
@@ -112,14 +112,19 @@ class FollowGroupScreenTest {
   /**
    * A room can be in several groups, so the row is a multi-select filter rather than a choice:
    * the room filed into both must still appear when either group is selected.
+   *
+   * One group per test, not a second `setContent`: a Compose test rule may only set content once
+   * per test, so "shows under each of them" has to be two cases rather than two renders.
    */
   @Test
-  fun `a room in two groups shows under each of them`() {
-    val both = mapOf(rooms[0].key to setOf("g1", "g2"))
-    compose(state(selected = "g1", roomGroups = both))
+  fun `a room in two groups shows when the first group is selected`() {
+    compose(state(selected = "g1", roomGroups = mapOf(rooms[0].key to setOf("g1", "g2"))))
     composeRule.onNodeWithText("主播1").assertIsDisplayed()
+  }
 
-    compose(state(selected = "g2", roomGroups = both))
+  @Test
+  fun `a room in two groups shows when the second group is selected`() {
+    compose(state(selected = "g2", roomGroups = mapOf(rooms[0].key to setOf("g1", "g2"))))
     composeRule.onNodeWithText("主播1").assertIsDisplayed()
   }
 
