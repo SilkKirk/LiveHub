@@ -9,6 +9,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -207,6 +208,26 @@ class FollowGroupScreenTest {
     composeRule.onNodeWithText("管理").performClick()
 
     composeRule.onNodeWithText("还没有分组。在下面输入一个名字就能建。").assertIsDisplayed()
+  }
+
+  /**
+   * The management sheet exposes a drag handle per group.
+   *
+   * A long press on a card that also holds two icon buttons is not discoverable on its own, so the
+   * handle is the affordance that says "this row can be reordered". The gesture itself is not
+   * driven here — Robolectric cannot inject a long-press-and-drag reliably — but the handle's
+   * presence is what a user sees, and `LibraryStoreTest` covers the write it triggers.
+   */
+  @Test
+  fun `the management sheet offers a drag handle per group`() {
+    compose(state())
+
+    composeRule.onNodeWithText("管理").performClick()
+
+    assertEquals(
+      2,
+      composeRule.onAllNodesWithContentDescription("长按拖动调整分组顺序").fetchSemanticsNodes().size,
+    )
   }
 
   /**

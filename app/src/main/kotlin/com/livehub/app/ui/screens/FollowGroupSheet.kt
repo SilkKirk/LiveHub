@@ -3,6 +3,7 @@ package com.livehub.app.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -34,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -41,6 +44,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -130,6 +135,7 @@ internal fun FollowGroupSheet(
               onAction(UiAction.DeleteFollowGroup(id))
               confirmingDelete = null
             },
+            onReorder = { keys -> onAction(UiAction.ReorderFollowGroups(keys)) },
             modifier = Modifier.weight(1f, fill = false),
           )
         }
@@ -231,19 +237,64 @@ private fun ManageList(
   onStartDelete: (String) -> Unit,
   onCancelDelete: () -> Unit,
   onDelete: (String) -> Unit,
+  onReorder: (List<String>) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val density = LocalDensity.current.density
+  var draggingId by remember { mutableStateOf<String?>(null) }
+  var dragOffset by remember { mutableFloatStateOf(0f) }
+  // Group rows are taller than follow rows: the card carries a title row plus, while confirming,
+  // a second line. Measured against the real row rather than guessed, because a wrong constant
+  // makes the drag skip or stall by a row.
+  var rowHeightPx by remember { mutableFloatStateOf(GROUP_ROW_HEIGHT_DP * density) }
+
   LazyColumn(
     contentPadding = PaddingValues(vertical = 8.dp),
     modifier = modifier.fillMaxWidth(),
   ) {
     items(state.followGroups, key = { it.id }) { group ->
       val count = state.roomGroups.count { (_, ids) -> group.id in ids }
+      val isDragging = draggingId == group.id
       Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 16.dp, vertical = 4.dp)
+          .onSizeChanged { rowHeightPx = it.height.toFloat().coerceAtLeast(1f) }
+          .pointerInput(group.id, state.followGroups.size) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = {
+                draggingId = group.id
+                dragOffset = 0f
+              },
+              onDrag = { change, amount ->
+                change.consume()
+                dragOffset += amount.y
+                val steps = (dragOffset / rowHeightPx).toInt()
+                if (steps == 0) return@detectDragGesturesAfterLongPress
+                val current = state.followGroups.indexOfFirst { it.id == group.id }
+                if (current < 0) return@detectDragGesturesAfterLongPress
+                val target = (current + steps).coerceIn(0, state.followGroups.lastIndex)
+                if (target == current) return@detectDragGesturesAfterLongPress
+                // Emit the whole order: the store re-stamps every group with one clock tick, so
+                // the new order wins against a concurrent reorder on another device.
+                val reordered = state.followGroups.map { it.id }.toMutableList()
+                reordered.removeAt(current)
+                reordered.add(target, group.id)
+                onReorder(reordered)
+                dragOffset = 0f
+              },
+              onDragEnd = { draggingId = null; dragOffset = 0f },
+              onDragCancel = { draggingId = null; dragOffset = 0f },
+            )
+          },
         colors = CardDefaults.cardColors(
-          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+          containerColor = if (isDragging) {
+            MaterialTheme.colorScheme.surfaceVariant
+          } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+          },
         ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 6.dp else 0.dp),
       ) {
         Column(modifier = Modifier.padding(12.dp)) {
           if (renaming == group.id) {
@@ -260,10 +311,18 @@ private fun ManageList(
             }
           } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
+              // The handle is what says "this row can be dragged": a long press on a card that
+              // also holds two icon buttons is not discoverable on its own.
+              Icon(
+                imageVector = Icons.Filled.DragHandle,
+                contentDescription = "长按拖动调整分组顺序",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+              )
               Text(
                 text = group.name,
                 style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(start = 8.dp),
               )
               Text(
                 text = "$count 位",
@@ -342,3 +401,6 @@ private fun ToggleRow(label: String, selected: Boolean, onClick: () -> Unit) {
     }
   }
 }
+
+/** Fallback row height for the drag maths, before the first layout reports the real one. */
+private const val GROUP_ROW_HEIGHT_DP = 64

@@ -332,6 +332,45 @@ class LibraryStoreTest {
     assertEquals(listOf(a.key, b.key), store.roomsInGroup(group.id))
   }
 
+  /**
+   * The group row is user-ordered, and the order is a synchronised value like the follow order.
+   *
+   * Without this the row could only ever be creation order: the sheet draws a drag handle and the
+   * action exists, so a missing write here would look like a gesture that does nothing.
+   */
+  @Test
+  fun `groups can be reordered`() {
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+    val music = store.createGroup("音乐", hlc(), 1L, clock)!!
+    val chat = store.createGroup("聊天", hlc(), 1L, clock)!!
+    assertEquals(listOf("游戏", "音乐", "聊天"), store.groups().map { it.name })
+
+    store.reorderGroups(listOf(chat.id, game.id, music.id), hlc(), 1L, clock)
+
+    assertEquals(listOf("聊天", "游戏", "音乐"), store.groups().map { it.name })
+  }
+
+  @Test
+  fun `a group reorder leaves the rooms inside untouched`() {
+    val room = streamer("1")
+    follow(room)
+    val game = store.createGroup("游戏", hlc(), 1L, clock)!!
+    val music = store.createGroup("音乐", hlc(), 1L, clock)!!
+    store.setMembership(room, setOf(game.id), hlc(), 1L, clock)
+
+    store.reorderGroups(listOf(music.id, game.id), hlc(), 1L, clock)
+
+    assertEquals(setOf(game.id), store.groupsOf(room.key))
+  }
+
+  @Test
+  fun `a newly created group lands at the end of the row`() {
+    store.createGroup("游戏", hlc(), 1L, clock)
+    store.createGroup("音乐", hlc(), 1L, clock)
+
+    assertEquals(listOf("游戏", "音乐"), store.groups().map { it.name })
+  }
+
   // ---------------------------------------------------------------- favourites
 
   @Test
