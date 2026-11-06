@@ -507,7 +507,13 @@ class ScreenshotTest {
     ),
   )
 
-  /** The group sheet in its management mode. */
+  /**
+   * The group sheet in its management mode.
+   *
+   * `clickText = "管理"` rather than a pre-opened flag: the sheet's open state is local to the
+   * screen, which is deliberate — nothing outside the follow page can leave it hanging open over
+   * a different tab.
+   */
   @Test
   fun followGroupSheet() = capture(
     "08c-follow-group-sheet",
@@ -517,6 +523,8 @@ class ScreenshotTest {
       followGroups = listOf(FollowGroup("g1", "游戏", 0), FollowGroup("g2", "音乐", 1)),
       roomGroups = mapOf(douyuRooms[0].key to setOf("g1")),
     ),
+    clickText = "管理",
+    expectText = "分组管理",
   )
 
   /**

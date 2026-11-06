@@ -323,11 +323,14 @@ private fun FavoritesRow(
   onOpenPicker: () -> Unit,
   onAction: (UiAction) -> Unit,
 ) {
+  // Aggregates are filtered here as well as in the store: the row's contract is "every chip is
+  // one concrete partition", and a hand-edited record or an older payload must not be able to
+  // put a chip in it that means "the whole platform".
   val here = remember(state.favorites, state.platform) {
-    state.favorites.filter { it.platform == state.platform }
+    state.favorites.filter { it.platform == state.platform && !it.isAggregate && it.id != Category.ALL_ID }
   }
   val elsewhere = remember(state.favorites, state.platform) {
-    state.favorites.filter { it.platform != state.platform }
+    state.favorites.filter { it.platform != state.platform && !it.isAggregate && it.id != Category.ALL_ID }
   }
   if (here.isEmpty() && elsewhere.isEmpty()) return
 

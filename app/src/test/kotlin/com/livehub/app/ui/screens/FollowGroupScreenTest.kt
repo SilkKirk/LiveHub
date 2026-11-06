@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
@@ -15,6 +16,7 @@ import com.livehub.core.model.FollowGroup
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,10 +54,12 @@ class FollowGroupScreenTest {
   private fun state(
     selected: String? = null,
     roomGroups: Map<String, Set<String>> = mapOf(rooms[0].key to setOf("g1")),
+    groupRoomOrder: Map<String, List<String>> = emptyMap(),
   ) = UiState(
     followed = rooms,
     followGroups = groups,
     roomGroups = roomGroups,
+    groupRoomOrder = groupRoomOrder,
     selectedFollowGroupId = selected,
   )
 
@@ -99,6 +103,33 @@ class FollowGroupScreenTest {
     composeRule.onNodeWithText("主播1").assertIsDisplayed()
   }
 
+  /**
+   * The group's own order, not the global one.
+   *
+   * Both orders are stored separately (`member:` records carry the group position, `room:`
+   * records the global one), so a group view that read `followed` would silently show the global
+   * arrangement and make "arrange rooms inside 游戏" a no-op.
+   */
+  @Test
+  fun `a group shows its rooms in the group's own order`() {
+    val roomGroups = mapOf(
+      rooms[0].key to setOf("g1"),
+      rooms[1].key to setOf("g1"),
+    )
+    compose(
+      state(
+        selected = "g1",
+        roomGroups = roomGroups,
+        // Global order says 主播1 first; the group order says 主播2 first.
+        groupRoomOrder = mapOf("g1" to listOf(rooms[1].key, rooms[0].key)),
+      ),
+    )
+
+    val first = composeRule.onAllNodesWithText("主播2")[0].fetchSemanticsNode().boundsInRoot.top
+    val second = composeRule.onAllNodesWithText("主播1")[0].fetchSemanticsNode().boundsInRoot.top
+    assertTrue("the group order must win inside the group", first < second)
+  }
+
   @Test
   fun `a scoped group hides rooms that are not in it`() {
     compose(state(selected = "g2"))
@@ -112,8 +143,9 @@ class FollowGroupScreenTest {
   fun `the room row names the groups it is filed into`() {
     compose(state())
 
-    // 主播1 sits in 游戏, and the row says so without opening anything.
-    composeRule.onNodeWithText("游戏").assertExists()
+    // 主播1 sits in 游戏, and the row says so without opening anything. The group name appears
+    // twice — once as the chip, once in the row — which is the point.
+    assertEquals(2, composeRule.onAllNodesWithText("游戏").fetchSemanticsNodes().size)
   }
 
   @Test
