@@ -108,16 +108,39 @@ class DouyinApi(
    *
    * Everything here is best-effort: if the negotiation fails the fallback is still sent,
    * because a request with *no* cookie looks like an empty category rather than an error.
+   *
+   * ## A stored `ttwid` is not necessarily a valid one
+   *
+   * Re-negotiation is keyed on the value being **absent**, so a stored value that has since
+   * gone stale is reused forever. Measured 2026-11-07: `enter` answers HTTP 200 with an
+   * **empty body** for a cookie that no longer validates — identical to sending no cookie at
+   * all, and nothing like the `status_code` an unknown room returns. That is the state a
+   * long-lived install ends up in, and it looks exactly like "this room does not exist".
+   * [enterRoom] therefore retries once with a freshly negotiated cookie when the body comes
+   * back empty; see [renegotiateCookie].
    */
   suspend fun cookieHeader(): String {
     val stored = cookieStore.header()
     if (stored.contains("ttwid=")) return stored
+    return negotiateAndStore() ?: stored.ifBlank { DouyinSigner.FALLBACK_COOKIE }
+  }
+
+  /**
+   * Throws the stored cookie away and negotiates a new `ttwid`, returning the header to use.
+   *
+   * Two callers: [cookieHeader] when nothing is stored, and [enterRoom] after an empty body —
+   * the only observable symptom a stale `ttwid` produces.
+   */
+  private suspend fun renegotiateCookie(): String? {
+    cookieStore.clear()
+    return negotiateAndStore()
+  }
+
+  private suspend fun negotiateAndStore(): String? {
     val fresh = runCatching { negotiateTtwid() }.getOrNull()
-    if (!fresh.isNullOrBlank()) {
-      cookieStore.save(fresh)
-      return cookieStore.header().ifBlank { fresh }
-    }
-    return stored.ifBlank { DouyinSigner.FALLBACK_COOKIE }
+    if (fresh.isNullOrBlank()) return null
+    cookieStore.save(fresh)
+    return cookieStore.header().ifBlank { fresh }
   }
 
   /**
@@ -588,32 +611,50 @@ class DouyinApi(
       // produced "该直播间可能未开播" for every room not in that feed.
       "msToken" to "",
     )
-    // **Unsigned on purpose.** `enter` does not want `a_bogus`: measured 2026-11-07, the same
-    // request returns the room unsigned and 200 + **empty body** as soon as an `a_bogus`
-    // parameter is present that the server cannot validate (a deliberately arbitrary value
-    // reproduced it exactly; an empty `a_bogus=` did not). An empty body is then read as "no
-    // such room", so signing this endpoint is what made a valid room id look like a miss —
-    // appending `a_bogus` here is how "搜不到" happened even though `web_rid` was correct.
+    // Signed with `a_bogus`, exactly like the reference client
+    // (`DouyinWebApiAndroid.fetchRoomEnter`): it builds the same query, computes
+    // `generateABogus(query, USER_AGENT)` and appends `&a_bogus=<encoded>`.
     //
-    // Unlike `partition` (which requires a valid signature) and `feed` (which works signed),
-    // this endpoint is happy with a plain query. See the class comment on signing.
-    val query = params.joinToString("&") { (key, value) ->
-      "$key=${DouyinSigner.encodeQueryValue(value)}"
-    }
-    val url = "$URL_ENTER?$query"
+    // Round 57 removed this signature on the strength of a bad experiment: sending a
+    // *deliberately arbitrary* `a_bogus` value did produce HTTP 200 + an empty body, and that
+    // was read as "this endpoint rejects signatures". It does not — it rejects an `a_bogus`
+    // that does not match the query, and the real generator was never tried. Removing the
+    // parameter therefore did not fix anything and made the request differ from the one the
+    // reference client has been using successfully.
+    val url = "$URL_ENTER?${DouyinSigner.signQuery(params)}"
     // The Referer has to be the room page, not the site root: Douyin checks it against
     // `web_rid`, and a mismatched Referer is another way to get the empty 200.
-    val response = http.get(
-      url,
-      headers = headers().toMutableMap().apply {
-        put("Referer", "https://live.douyin.com/$roomId")
-        // Without this the body may be gzip'd, and the hand-rolled reader below would see
-        // bytes it cannot parse.
-        put("Accept-Encoding", "identity")
-      },
-    )
+    fun request(cookie: String) = runCatching {
+      http.get(
+        url,
+        headers = mapOf(
+          "User-Agent" to DouyinSigner.USER_AGENT,
+          "Referer" to "https://live.douyin.com/$roomId",
+          // Without this the body may be gzip'd, and the hand-rolled reader below would see
+          // bytes it cannot parse.
+          "Accept-Encoding" to "identity",
+          "Accept" to "application/json, text/plain, */*",
+          "Accept-Language" to "zh-CN,zh;q=0.9",
+          "Cookie" to cookie,
+        ),
+      )
+    }
 
-    val root = runCatching { parseObject(response.body, "enter") }.getOrNull()
+    var body = request(cookieHeader()).map { it.body }.getOrNull().orEmpty()
+    if (body.isBlank()) {
+      // An **empty body** is the single observable symptom of a cookie Douyin no longer
+      // accepts (measured 2026-11-07: a stale/absent `ttwid` yields 200 with zero bytes,
+      // while an unknown-but-well-formed room yields `status_code = 4001038`). A user who has
+      // had the app installed for a while keeps sending the `ttwid` negotiated back then,
+      // because [cookieHeader] only re-negotiates when the value is missing. So: throw the
+      // cookie away once and try again before concluding the room does not exist.
+      body = request(renegotiateCookie() ?: DouyinSigner.FALLBACK_COOKIE)
+        .map { it.body }
+        .getOrNull()
+        .orEmpty()
+    }
+
+    val root = runCatching { parseObject(body, "enter") }.getOrNull()
     // An explicit refusal is not "the room does not exist" in general, but for search it is:
     // 4001038 is what a well-formed-but-unknown `web_rid` returns, and treating it as null is
     // what lets the UI say 没有找到 instead of the room page's "可能未开播".

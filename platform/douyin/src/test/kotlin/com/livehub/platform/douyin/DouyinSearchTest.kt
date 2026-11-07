@@ -361,6 +361,39 @@ class DouyinSearchTest {
     assertTrue(rooms.isEmpty())
   }
 
+  /**
+   * A stale `ttwid` answers HTTP 200 with an **empty body**, and the room must still be found.
+   *
+   * Measured 2026-11-07: `enter` returns zero bytes for a cookie Douyin no longer accepts (and
+   * for no cookie at all), while an unknown-but-well-formed room returns
+   * `status_code = 4001038`. A long-lived install keeps reusing the `ttwid` negotiated weeks
+   * ago — `cookieHeader()` only re-negotiates when the value is *missing* — so every room
+   * looked like "没有找到". The fix retries once with a freshly negotiated cookie.
+   *
+   * The fake serves the empty body on the first `enter` call, a real payload on the second,
+   * and counts calls so the retry itself is asserted rather than assumed.
+   */
+  @Test
+  fun `an empty body from a stale cookie is retried with a fresh one`() = runBlocking {
+    var enterCalls = 0
+    val http = FakeDouyinHttp { url ->
+      when {
+        url.contains("/webcast/room/web/enter/") -> {
+          enterCalls++
+          if (enterCalls == 1) ok("") else ok(enter(webRid = "AYM0707", nickname = "DNF王大枪"))
+        }
+        // The ttwid negotiation page.
+        else -> HttpResponse(200, "<html></html>", mapOf("Set-Cookie" to listOf("ttwid=fresh-token; Path=/")), url)
+      }
+    }
+
+    val (rooms, _) = api(http).search("AYM0707", page = 1)
+
+    assertEquals(1, rooms.size, "the retry must recover the room")
+    assertEquals("AYM0707", rooms.single().roomId)
+    assertEquals(2, enterCalls, "exactly one retry, not a loop: $enterCalls")
+  }
+
   /** A session that Douyin no longer accepts must say so, not look like "no results". */
   @Test
   fun `a login wall during search is reported as needing a login`() {
