@@ -5204,3 +5204,95 @@ detector 都收 down 事件，长按拖动松手时 tap 也照样触发——每
   记录（并且要正面回答第三轮那个"标记指向已取关房间"的问题），不能在这里临时加字段。
 - 头像行的在播状态来自 `UiState.followed`，只在刷新关注状态时更新；如果用户长时间
   停在关注页，绿环会比实际开播情况旧。和网格是同一个数据源，不是新问题。
+---
+
+## 第五十五轮迭代：抖音按房间号搜索被误判成关键词（用户报告）
+
+用户报告："抖音没登录的时候的 id 搜索用不了"。追问界面上出现的原文：
+
+> 显示抖音的关键词搜索需要登录，接口返回 2483 请先登录
+
+这句话把范围缩到了一个分支：它**只可能**来自 `search()` 里"输入不是纯数字"的那条路径，
+而且它在**任何网络请求之前**就抛出。也就是说，用户拿着房间号，被要求登录。
+
+### 根因：分类方式比用户的输入方式窄
+
+```kotlin
+if (trimmed.all(Char::isDigit)) -> enter（房间号，免登录）
+else                            -> 关键词（未登录直接抛 2483）
+```
+
+`all(Char::isDigit)` 只接受纯 ASCII 数字，于是下面这些全被推进关键词分支：
+
+| 输入 | 为什么 |
+| --- | --- |
+| `https://live.douyin.com/xxx` | 从抖音/本应用复制来的就是链接 |
+| `… 复制打开` 分享文本 | 抖音的分享文案 |
+| `１００２…` 全角数字 | 是 Nd（数字），但不是 ASCII，进 query 也要折回去 |
+| `1002\u200B683794` | U+200B 是 Cf，`trim()` 不去，`isDigit` 也不认 |
+| `房间号：1002…` | 用户自己加的前缀 |
+
+**"没登录的 id 搜索用不了"的真实含义是"看起来像 id 的输入里，只有 100% 纯数字的才走
+id 路径"。**
+
+### 顺带做的实测（不是猜）
+
+写了个一次性的探针脚本（未入库）直接打 `room/web/enter`，结论：
+
+- 带**任意** `ttwid`——包括 `DouyinSigner.FALLBACK_COOKIE` 里那个已过期的——都返回 200 +
+  完整房间对象；
+- **完全不带 cookie** 才返回 `200` + 空 body。
+
+所以 id 路径本身是好的，`cookieHeader()` 的回退也够用；坏的只是"什么算 id"。这条实测也
+再次确认了 `enterRoom` 的空 body → `null` → 搜索显示"没有找到"这条链路，将来如果真报
+"没有找到"，就是 cookie 没发出去，不是房间不存在。
+
+### 改法
+
+新增 `DouyinApi.roomIdFrom(raw): String?`：
+
+1. 先按 `live|webcast|v.douyin.com/<path>` 取路径段，链接因此永远不会落到关键词分支；
+2. 否则把数字提出来（全角用 `digitToInt().digitToChar()` 折回 ASCII）；
+3. 剩余字符只允许空白、零宽字符、全角标点，以及 `房间号：` / `room id:` 这类**标签**
+   （标签是词，先按正则剥掉，再判断剩下的）。
+   带字母的名字——包括 `红眼阿旺2024`——仍返回 `null`，照旧走关键词。
+
+登录提示与搜索页的 placeholder/hint 补上"也可以直接粘贴直播间链接"。
+
+### 测试
+
+`DouyinSearchTest` +5：链接、分享文本、零宽/全角/前缀、昵称不被吞、`roomIdFrom` 的形状
+断言。解析逻辑**先在本地用等价的 Python 逐条跑过 12 个用例再落成 Kotlin 断言**——第一次
+跑就抓到我自己的一个错（`房间号：` 里的汉字让 leftover 非空），当场改成剥标签。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `65e9ed8` 三个 job 全绿 |
+
+### CI 抓出的问题
+
+一条：`DouyinSearchTest.kt:197 None of the following candidates is applicable`。我把
+jupiter 的 `assertEquals(message, expected, actual)` 与 `(expected, actual)` 混用了——整型
+`1` 与 `Int` 之外的重载不匹配。改成常规顺序。
+
+写这条时我本该先确认重载再落笔：**同一个错误在 `assertNull` 上也差点重犯**（我一度按
+记忆断言 message-first 不存在）。教训与前几轮一致：**断言 API 的形状要查，不要背。**
+
+### 顺手修正的运行手册
+
+`loop-runbook.md` 里"push 必须走代理"这条已经不成立了：第五十四轮直连能推、带代理反而
+失败；本轮反过来。已改成"两个方向都要试，以 `ProxyEnable` 和 `Invoke-WebRequest -Proxy`
+为准"，并记下 `Test-NetConnection` / `Get-NetTCPConnection` 会在代理可用时误报不通。
+
+### 下一轮
+
+- 抖音**已登录**时的关键词搜索仍然只有单元测试守着（CI 没有抖音账号），真实响应形状
+  无法验证。若要收紧，需要用户配合抓一份 `live/search` 的真实响应。
+- `roomIdFrom` 目前也接受 `v.douyin.com/<share-code>` 这种短链码；短链需要跟随 302 才能
+  拿到房间号，当前是把码当 id 交给 `enter`，由它决定成败。真机上遇到短链失败再补跳转。
