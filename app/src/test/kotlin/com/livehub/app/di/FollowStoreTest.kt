@@ -284,7 +284,8 @@ class FollowStoreTest {
     follow(streamer("1"))
 
     assertTrue(store.specialKeys().isEmpty())
-    assertNull(store.records().single().value!!["special"])
+    val record = store.records().single()
+    assertNull(record.value?.get("special"))
   }
 
   // ---------------------------------------------------------------- migration

@@ -99,9 +99,12 @@ class FollowStore(preferences: UserPreferences) {
   fun toggleSpecial(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long): Boolean {
     val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
     val existing = records().firstOrNull { it.key == roomKey }
-    if (existing == null || existing.deleted || existing.value == null) return false
+    // Bound to a local before the null check: `SyncRecord` is declared in `:core:sync`, and Kotlin
+    // cannot smart cast a `val` from another module — `existing.value[...]` below would not compile.
+    val existingValue = existing?.value
+    if (existing == null || existing.deleted || existingValue == null) return false
 
-    val special = !FollowCodec.isSpecial(existing.value)
+    val special = !FollowCodec.isSpecial(existingValue)
     val updated = SyncRecord(
       key = roomKey,
       value = FollowCodec.fromStreamer(
@@ -109,7 +112,7 @@ class FollowStore(preferences: UserPreferences) {
         now = now,
         // Both survive the rewrite: this only flips one flag, it must not reset the arrangement
         // the user made by dragging.
-        order = existing.value["order"],
+        order = existingValue["order"],
         special = special,
       ),
       deleted = false,
