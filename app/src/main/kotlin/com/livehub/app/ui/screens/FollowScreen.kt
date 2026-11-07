@@ -95,9 +95,16 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   }
 
   val specialKeys = state.specialFollowKeys
-  /** The starred rooms, in the avatar row's own order, and always a subset of what is followed. */
-  val special = remember(state.followed, specialKeys, filter, platformFilter) {
-    val byKey = visible.associateBy { it.key }
+  /**
+   * The starred rooms, in the avatar row's own order.
+   *
+   * Deliberately **not** filtered by the live/platform row below it: the avatar row is a shortcut
+   * to the people you always watch, and hiding half of them because the grid is filtered to 直播中
+   * would make the row's contents depend on a control that sits underneath it. It is intersected
+   * with [state.followed] only, which is what keeps an unfollowed room out.
+   */
+  val special = remember(state.followed, specialKeys) {
+    val byKey = state.followed.associateBy { it.key }
     specialKeys.mapNotNull { byKey[it] }
   }
 
@@ -109,7 +116,7 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
         icon = Icons.Outlined.StarOutline,
         title = "还没有关注的主播",
         description = "在首页点击卡片上的星标即可关注。关注列表会通过局域网同步到你的其他设备，" +
-          "长按顶部头像可以调整特别关注的顺序。",
+          "关注之后可以在页顶点亮星标，把常看的主播放进特别关注。",
       )
     } else {
       Column(modifier = Modifier.fillMaxSize()) {
