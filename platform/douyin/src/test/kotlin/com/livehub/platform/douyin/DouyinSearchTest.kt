@@ -194,7 +194,7 @@ class DouyinSearchTest {
     listOf("1002\u200B683794", "房间号：1002683794").forEach { raw ->
       val http = FakeDouyinHttp { ok(enter()) }
       val (rooms, _) = api(http).search(raw, page = 1)
-      assertEquals("[$raw] must resolve to the room", 1, rooms.size)
+      assertEquals(1, rooms.size, "[$raw] must resolve to the room")
       assertEquals("1002683794", rooms.single().roomId)
     }
   }
@@ -231,7 +231,8 @@ class DouyinSearchTest {
     assertNull(api.roomIdFrom("红眼阿旺"))
     assertNull(api.roomIdFrom("看看这个"))
     assertNull(api.roomIdFrom(""))
-    assertNull("a name with digits in it is still a name", api.roomIdFrom("红眼阿旺2024"))
+    // A name that happens to contain digits is still a name.
+    assertNull(api.roomIdFrom("红眼阿旺2024"))
   }
 
   /** A session that Douyin no longer accepts must say so, not look like "no results". */
