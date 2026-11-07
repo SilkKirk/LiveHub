@@ -154,7 +154,8 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
 private val SEARCH_HINTS = mapOf(
   Platform.DOUYU to "输入关键词后按回车，可搜索斗鱼主播与直播间。",
   Platform.HUYA to "输入关键词后按回车，可搜索虎牙主播与直播间。",
-  Platform.DOUYIN to "输入房间号或直接粘贴直播间链接即可定位；在「设置 → 抖音账号」扫码登录后，可按主播昵称搜索。",
+  Platform.DOUYIN to "输入直播间号（数字或 AYM0707 这样的字母号）或直接粘贴直播间链接即可定位；" +
+    "在「设置 → 抖音账号」扫码登录后，可按主播昵称搜索。",
   Platform.BILIBILI to "输入关键词后按回车，可搜索 B 站主播与直播间。",
 )
 
@@ -167,7 +168,7 @@ private val SEARCH_HINTS = mapOf(
  * session, so the label names both inputs.
  */
 private val SEARCH_LABELS = mapOf(
-  Platform.DOUYIN to "输入抖音房间号、直播间链接或主播昵称",
+  Platform.DOUYIN to "输入抖音直播间号、直播间链接或主播昵称",
 )
 
 @Composable

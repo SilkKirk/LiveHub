@@ -49,6 +49,14 @@ class DouyinSearchTest {
     idStr: String = "7703900142109592362",
     title: String = "我的红眼看了不烧心！！",
     nickname: String = "红眼阿旺",
+    /**
+     * The id the caller searched with, echoed where `enter` puts it.
+     *
+     * Unused by the parser — `toStreamer` keeps the caller's id on purpose (round 42: the
+     * internal `id_str` cannot be used to reopen a room) — but kept in the fixture so the body
+     * describes what Douyin actually returns for that lookup.
+     */
+    webRid: String = "1002683794",
   ): String = """
     {
       "status_code": 0,
@@ -56,6 +64,7 @@ class DouyinSearchTest {
         "user": {"nickname": "$nickname", "avatar_thumb": {"url_list": ["https://a/avatar.jpg"]}},
         "data": [{
           "id_str": "$idStr",
+          "web_rid": "$webRid",
           "title": "$title",
           "cover": {"url_list": ["https://a/cover.jpg"]},
           "stats": {"total_user": 0},
@@ -213,26 +222,90 @@ class DouyinSearchTest {
     assertTrue(http.urls.isEmpty(), "a nickname must not reach the network: ${http.urls}")
   }
 
+  /**
+   * The reported case: a **vanity** web_rid.
+   *
+   * Douyin hands creators ids like `AYM0707` (measured 2026-11-07: it resolves to 房间
+   * 「来啦来啦，开搞开搞」/ DNF王大枪 and was live). The previous classifier required *digits*, so
+   * this — the exact string in the user's screenshot — fell through to keyword search and was
+   * told to log in.
+   */
   @Test
-  fun `the room id parser accepts the documented shapes and refuses names`() {
+  fun `a vanity room id with letters resolves without a login`() = runBlocking {
+    val http = FakeDouyinHttp { ok(enter(webRid = "AYM0707", nickname = "DNF王大枪")) }
+
+    val (rooms, _) = api(http).search("AYM0707", page = 1)
+
+    assertEquals(1, rooms.size, "a letter id must resolve, not throw the login message")
+    assertEquals("AYM0707", rooms.single().roomId)
+    assertTrue(http.urls.single().contains("web_rid=AYM0707"), http.urls.single())
+  }
+
+  /**
+   * An id that does not resolve, while anonymous, is "没有找到" — not "需要登录".
+   *
+   * An ASCII word can also be a nickname (`uzi`, `PDD`), but without a session there is no
+   * keyword search to fall back to, and claiming a login is needed for a room id is precisely
+   * the misreport being fixed.
+   */
+  @Test
+  fun `an unknown id returns no results instead of the login message`() = runBlocking {
+    val http = FakeDouyinHttp { url ->
+      ok(if (url.contains("/enter/")) missingRoom() else """{"data": []}""")
+    }
+
+    val (rooms, _) = api(http).search("NOSUCHROOM99", page = 1)
+
+    assertTrue(rooms.isEmpty())
+  }
+
+  /**
+   * With a session, an ASCII word that is not a room id falls back to keyword search — that is
+   * how a one-word nickname can still be found.
+   */
+  @Test
+  fun `a non-resolving word falls back to keyword search when logged in`() = runBlocking {
+    val body = """{"status_code":0,"data":[]}"""
+    val http = FakeDouyinHttp { url ->
+      ok(if (url.contains("/enter/")) missingRoom() else body)
+    }
+
+    api(http, session = true).search("uzi", page = 1)
+
+    assertTrue(
+      "the fallback must hit the keyword endpoint",
+      http.urls.any { it.startsWith("https://www.douyin.com/aweme/v1/web/live/search/") },
+    )
+  }
+
+  @Test
+  fun `the id parser accepts the documented shapes and refuses names`() {
     val api = api(FakeDouyinHttp { ok(enter()) })
 
-    assertEquals("1002683794", api.roomIdFrom("1002683794"))
-    assertEquals("1002683794", api.roomIdFrom("  1002683794  "))
-    assertEquals("1002683794", api.roomIdFrom("https://live.douyin.com/1002683794"))
-    assertEquals("1002683794", api.roomIdFrom("live.douyin.com/1002683794?from=share"))
+    assertEquals("1002683794", api.webRidFrom("1002683794"))
+    assertEquals("1002683794", api.webRidFrom("  1002683794  "))
+    assertEquals("1002683794", api.webRidFrom("https://live.douyin.com/1002683794"))
+    assertEquals("1002683794", api.webRidFrom("live.douyin.com/1002683794?from=share"))
     // A CJK keyboard produces full-width digits; they are Unicode category Nd, so they are
     // digits, but they must be folded back to ASCII before being put in a query string.
-    assertEquals("1002683794", api.roomIdFrom("１００２６８３７９４"))
-    assertEquals("1002683794", api.roomIdFrom("1002\u200B683794"))
-    // The label a user types in front of the number is a word, not punctuation.
-    assertEquals("1002683794", api.roomIdFrom("房间号：1002683794"))
+    assertEquals("1002683794", api.webRidFrom("１００２６８３７９４"))
+    assertEquals("1002683794", api.webRidFrom("1002\u200B683794"))
+    // The label a user types in front of the id is a word, not punctuation.
+    assertEquals("1002683794", api.webRidFrom("房间号：1002683794"))
 
-    assertNull(api.roomIdFrom("红眼阿旺"))
-    assertNull(api.roomIdFrom("看看这个"))
-    assertNull(api.roomIdFrom(""))
-    // A name that happens to contain digits is still a name.
-    assertNull(api.roomIdFrom("红眼阿旺2024"))
+    // Vanity ids: letters are part of the id and must survive untouched (case included).
+    assertEquals("AYM0707", api.webRidFrom("AYM0707"))
+    assertEquals("AYM0707", api.webRidFrom("https://live.douyin.com/AYM0707"))
+    assertEquals("AYM0707", api.webRidFrom("房间号：AYM0707"))
+    assertEquals("AYM-0707", api.webRidFrom("AYM-0707"))
+
+    assertNull(api.webRidFrom("红眼阿旺"))
+    assertNull(api.webRidFrom("看看这个"))
+    assertNull(api.webRidFrom(""))
+    // CJK plus digits is a name, not an id: no room id has CJK in it.
+    assertNull(api.webRidFrom("红眼阿旺2024"))
+    // A sentence is not an id either.
+    assertNull(api.webRidFrom("DNF 深渊日常"))
   }
 
   /** A session that Douyin no longer accepts must say so, not look like "no results". */

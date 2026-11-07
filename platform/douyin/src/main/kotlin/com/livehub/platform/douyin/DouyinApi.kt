@@ -328,31 +328,34 @@ class DouyinApi(
   /**
    * Douyin search.
    *
-   * A **room number** resolves through `room/web/enter` and needs no login — that is what the
-   * reference client does (`AndroidDtvRepository.searchAnchors`, `Platform.Douyin` branch) and
-   * what this did before keyword search existed.
+   * A **web_rid** resolves through `room/web/enter` and needs no login. `web_rid` is a *string*,
+   * not a number: Douyin hands creators vanity ids like `AYM0707` (measured 2026-11-07 — that one
+   * returns 房间「来啦来啦，开搞开搞」/ DNF王大枪 and is live), and the numeric form is just the
+   * common case. So "is this an id?" cannot be answered by "are all characters digits"; that
+   * assumption is what made a perfectly good room number fall through to the keyword branch and
+   * get told to log in.
+   *
+   * The order is therefore: **try the id first, fall back to keyword search**. A candidate is a
+   * single ASCII word (letters/digits/`_`/`-`), which is what both id forms satisfy and what no
+   * plausible nickname with spaces or CJK does.
    *
    * A **keyword** goes to `www.douyin.com/aweme/v1/web/live/search/`, which refuses anonymous
    * callers with `status_code = 2483` / `请先登录，再继续搜索吧` (measured 2026-11-04, with a
    * negotiated `ttwid` and the full parameter set). So keyword search is only offered when a
    * QR login has put a session cookie in [cookieStore], and the message says where to log in.
-   *
-   * The response shape below (`data[].lives.rawdata` as a JSON *string*) is taken from
-   * `dart_simple_live`'s `DouyinSite.searchRooms`, the maintained client that hit this endpoint
-   * before it required a session. It cannot be verified from this repository — there is no
-   * Douyin account in CI — so parsing is defensive: an unexpected shape yields an empty list,
-   * and a refused status is reported with the platform's own text.
    */
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
-    // `roomIdFrom` first: the commonest way to "search by id" is to paste the live-room link the
-    // app itself put on the clipboard, and `all(Char::isDigit)` used to send that down the
-    // keyword branch — where an anonymous user was told to log in for a number they had typed.
-    val roomId = roomIdFrom(keyword)
-    if (roomId != null) {
+    val webRid = webRidFrom(keyword)
+    if (webRid != null) {
       // One id can only produce one card, so there is no second page to ask for.
       if (page > 1) return emptyList<Streamer>() to false
-      val info = enterRoom(roomId) ?: return emptyList<Streamer>() to false
-      return listOf(info.toStreamer(roomId)) to false
+      val info = enterRoom(webRid)
+      if (info != null) return listOf(info.toStreamer(webRid)) to false
+      // The id did not resolve. An ASCII word can still be a nickname (`uzi`, `PDD`), so a
+      // logged-in session gets one more attempt as a keyword; without a session, "没有找到" is
+      // the honest answer — claiming "需要登录" for a string the user means as a room id is the
+      // exact misreport this path keeps producing.
+      if (!cookieStore.isLoggedIn()) return emptyList<Streamer>() to false
     }
 
     val trimmed = keyword.trim()
@@ -362,7 +365,7 @@ class DouyinApi(
       throw PlatformAuthRequiredException(
         "抖音的关键词搜索需要登录（接口返回 2483「请先登录，再继续搜索吧」）。" +
           "在「设置 → 抖音账号」扫码登录后即可按昵称搜索；" +
-          "输入房间号（或直接粘贴直播间链接）时不需要登录。",
+          "输入直播间号（字母数字都行）或直接粘贴直播间链接时不需要登录。",
         Platform.DOUYIN,
       )
     }
@@ -370,45 +373,58 @@ class DouyinApi(
   }
 
   /**
-   * The room id inside [raw], or null when [raw] is not a room number at all.
+   * The web_rid inside [raw], or null when [raw] cannot be one.
    *
-   * Accepts the shapes a user can realistically paste — the bare number, the whole live-room
-   * URL, the app's own share text ("… https://live.douyin.com/123 … 复制打开"), full-width
-   * digits from a CJK keyboard, and a `房间号：<number>` label — and returns null for anything
-   * that reads as a name, so a nickname still reaches the keyword path.
+   * Accepts the shapes a user can realistically paste — the bare id (`1002683794` or the vanity
+   * form `AYM0707`), the whole live-room URL, the app's own share text
+   * ("… https://live.douyin.com/AYM0707 … 复制打开"), full-width digits from a CJK keyboard, and a
+   * `房间号：<id>` label. Returns null for anything that reads as a name with spaces or CJK, so a
+   * nickname still reaches the keyword path.
    *
-   * `Char.isDigit()` alone is not enough: it is false for the zero-width space that survives
-   * `trim()` (category Cf, not whitespace), so `all(Char::isDigit)` rejected a number that
-   * merely had a pasted separator in it.
+   * `Char.isDigit()` alone was not enough in either direction: it is false for the zero-width
+   * space that survives `trim()` (category Cf, not whitespace), and a `web_rid` need not be
+   * numeric at all.
    */
-  fun roomIdFrom(raw: String): String? {
-    // `live.douyin.com/<id>` / `v.douyin.com/<code>`: the path segment is the id. Matched before
-    // the digit scan so a link never falls through to "keyword".
+  fun webRidFrom(raw: String): String? {
+    // `live.douyin.com/<id>` / `v.douyin.com/<code>`: the path segment is the id, and it may be
+    // letters. Matched before anything else so a link never falls through to "keyword".
     URL_ROOM_ID.find(raw)?.groupValues?.getOrNull(1)?.let { candidate ->
-      if (candidate.isNotEmpty() && candidate.all(Char::isLetterOrDigit)) return candidate
+      return candidate.takeIf { it.isIdShaped() }
     }
-    // `digitToInt` then `digitToChar`: full-width '１' is a digit (category Nd) but is *not* the
-    // ASCII '1', and the value goes into a query string. `digitToChar` renders 0..9 as ASCII.
-    val digits = raw.filter { it.isDigit() }.map { it.digitToInt().digitToChar() }.joinToString("")
-    if (digits.isEmpty()) return null
 
-    // The number has to *be* the input, apart from decoration. Decoration is anything that is
-    // not a letter: whitespace, the punctuation a copy carries along (zero-width chars, full-
-    // width colon), and the label a user types in front of it ("房间号：…"). A **letter** means
-    // the text is a name — except in the label positions, which are stripped by the whitelist
-    // below rather than by treating every letter as a separator.
+    // Strip the label a user types in front of the id, plus decoration that a copy carries along
+    // (whitespace, zero-width chars, full-width punctuation). What remains has to *be* the id.
     val stripped = raw.replace(NUMBER_LABEL, "")
-    val leftover = stripped.filterNot {
-      it.isDigit() || it.isWhitespace() || it.isInvisibleOrSeparator()
-    }
-    if (leftover.isNotEmpty()) return null
-    return digits
+      .filterNot { it.isWhitespace() || it.isInvisibleOrSeparator() }
+    if (stripped.isEmpty()) return null
+
+    // Full-width digits are digits (category Nd) but not ASCII; fold them so the value is a valid
+    // query parameter. Letters are left alone: a web_rid is case-sensitive.
+    val folded = stripped.map { if (it.isDigit()) it.digitToInt().digitToChar() else it }.joinToString("")
+    return folded.takeIf { it.isIdShaped() }
   }
 
-  /** Characters that a copy/paste can carry along without changing the meaning of a number. */
+  /**
+   * Whether [value] has the shape of a web_rid: one ASCII word, no separators inside.
+   *
+   * ASCII-only on purpose. `Char.isLetterOrDigit()` is true for CJK, so it would accept 红眼阿旺
+   * as an id and never reach keyword search.
+   */
+  private fun String.isIdShaped(): Boolean =
+    length in 1..MAX_WEB_RID_LENGTH && all { char ->
+      char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' || char == '_' || char == '-'
+    }
+
+  /**
+   * Characters a copy can carry along that never mean anything in an id.
+   *
+   * `-` and `_` are deliberately **not** here: a web_rid may contain them (`AYM-0707`), so
+   * stripping them would corrupt the id. They are legal id characters, handled by
+   * [isIdShaped] instead.
+   */
   private fun Char.isInvisibleOrSeparator(): Boolean =
     this == '\u200B' || this == '\u200C' || this == '\u200D' || this == '\uFEFF' ||
-      this == '-' || this == '_' || this == '：' || this == ':' || this == '　' ||
+      this == '：' || this == ':' || this == '　' ||
       this == '，' || this == ',' || this == '.' || this == '。'
 
   /** Keyword search for a logged-in session; see [search]. */
@@ -896,6 +912,14 @@ class DouyinApi(
      * then a nickname would parse as an id.
      */
     private val NUMBER_LABEL = Regex("""房间号\s*[:：]?|直播间\s*[:：]?|room\s*id\s*[:：]?""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Longest string still treated as a web_rid.
+     *
+     * Measured ids are 6–20 characters (`AYM0707`, `1002683794`); the cap only has to be long
+     * enough for a real one and short enough that a long sentence is not mistaken for an id.
+     */
+    private const val MAX_WEB_RID_LENGTH = 32
     const val PAGE_SIZE = 20
   }
 }
