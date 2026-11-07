@@ -25,7 +25,7 @@ class FollowRefreshWorker(
   override suspend fun doWork(): Result {
     val container = (applicationContext as? LiveHubApplication)?.container
       ?: return Result.success()
-    val followed = container.libraryStore.followed()
+    val followed = container.followStore.followed()
     if (followed.isEmpty()) return Result.success()
 
     var failures = 0
@@ -41,7 +41,7 @@ class FollowRefreshWorker(
       if (status == null) {
         failures++
       } else {
-        container.libraryStore.updateSnapshot(
+        container.followStore.updateSnapshot(
           streamer = streamer.copy(
             isLive = status.isLive,
             title = status.title ?: streamer.title,

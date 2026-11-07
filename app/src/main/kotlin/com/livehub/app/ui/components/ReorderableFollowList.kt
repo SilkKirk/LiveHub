@@ -16,11 +16,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,14 +60,6 @@ fun ReorderableFollowList(
   onReorder: (Streamer, Int) -> Unit,
   modifier: Modifier = Modifier,
   onRemove: ((Streamer) -> Unit)? = null,
-  onFile: ((Streamer) -> Unit)? = null,
-  groupNamesOf: ((Streamer) -> List<String>) = { emptyList() },
-  /**
-   * When non-null the list is in selection mode: tapping a row toggles it instead of opening it,
-   * and dragging is disabled so a long press cannot be mistaken for a scroll-selection gesture.
-   */
-  selectedKeys: Set<String>? = null,
-  onToggleSelected: ((Streamer) -> Unit)? = null,
 ) {
   val listState = rememberLazyListState()
   var draggingKey by remember { mutableStateOf<String?>(null) }
@@ -85,24 +74,12 @@ fun ReorderableFollowList(
   ) {
     items(streamers, key = { it.key }) { streamer ->
       val isDragging = draggingKey == streamer.key
-      val selecting = selectedKeys != null
       FollowRow(
         streamer = streamer,
         isDragging = isDragging,
-        selected = selectedKeys?.contains(streamer.key) == true,
-        selecting = selecting,
-        onClick = {
-          if (selecting && onToggleSelected != null) onToggleSelected(streamer) else onClick(streamer)
-        },
-        // The star and the ⋮ both change meaning in selection mode — "unfollow" on a multi-select
-        // is a destructive action nobody asked for — so they are hidden rather than reinterpreted.
-        onRemove = if (selecting) null else onRemove?.let { remove -> { remove(streamer) } },
-        onFile = if (selecting) null else onFile?.let { file -> { file(streamer) } },
-        groupNames = groupNamesOf(streamer),
-        modifier = Modifier.pointerInput(streamer.key, streamers.size, selecting) {
-          // Dragging is off in selection mode: a long press that both selects and starts a reorder
-          // is ambiguous, and reordering is a per-list action rather than a bulk one.
-          if (selecting) return@pointerInput
+        onClick = { onClick(streamer) },
+        onRemove = onRemove?.let { remove -> { remove(streamer) } },
+        modifier = Modifier.pointerInput(streamer.key, streamers.size) {
           detectDragGesturesAfterLongPress(
             onDragStart = {
               draggingKey = streamer.key
@@ -144,26 +121,20 @@ private fun FollowRow(
   isDragging: Boolean,
   onClick: () -> Unit,
   modifier: Modifier,
-  selected: Boolean = false,
-  selecting: Boolean = false,
   onRemove: (() -> Unit)? = null,
-  onFile: (() -> Unit)? = null,
-  groupNames: List<String> = emptyList(),
 ) {
   // A live room gets the primary-colour border the reference uses, so a long list can be
-  // scanned for "who is on right now" without reading the badges. In selection mode the border
-  // means "selected" instead — one border, one meaning at a time.
-  val border = when {
-    selecting && selected -> androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-    selecting -> null
-    streamer.isLive -> androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-    else -> null
+  // scanned for "who is on right now" without reading the badges.
+  val border = if (streamer.isLive) {
+    androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+  } else {
+    null
   }
   Surface(
-    color = when {
-      selecting && selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-      isDragging -> MaterialTheme.colorScheme.surfaceVariant
-      else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+    color = if (isDragging) {
+      MaterialTheme.colorScheme.surfaceVariant
+    } else {
+      MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
     },
     shape = RoundedCornerShape(12.dp),
     border = border,
@@ -181,14 +152,6 @@ private fun FollowRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      if (selecting) {
-        Icon(
-          imageVector = if (selected) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
-          contentDescription = if (selected) "已选中 ${streamer.streamerName}" else "未选中 ${streamer.streamerName}",
-          tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.size(22.dp),
-        )
-      }
       Box {
         // Reuse the same gradient placeholder the grid uses; without it a room whose
         // cover failed to load shows an empty grey square.
@@ -256,10 +219,9 @@ private fun FollowRow(
             modifier = Modifier.weight(1f, fill = false),
           )
           // The one place in the app that showed a followed room without its audience figure.
-          // The store has carried `viewerCount` all along (`LibraryStore`/`LibraryCodec`
-          // write it, `FollowRefreshWorker` refreshes it), and the reference's 关注列表 prints
-          // it on every card, so the only thing missing was this Text. 0 means "unknown", not
-          // "empty room".
+          // The store has carried `viewerCount` all along (`FollowStore`/`FollowCodec`,
+          // refreshed by `FollowRefreshWorker`), and the reference's 关注列表 prints it on every
+          // card, so the only thing missing was this Text. 0 means "unknown", not "empty room".
           if (streamer.viewerCount > 0) {
             Text(
               text = ViewerCountFormatter.format(streamer.viewerCount),
@@ -276,17 +238,6 @@ private fun FollowRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        // Which groups this room is filed into. Rendered only when there is at least one: an
-        // empty line on every unfiled row would be pure noise, and 未分类 is the default.
-        if (groupNames.isNotEmpty()) {
-          Text(
-            text = groupNames.joinToString(" · "),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
       }
 
       if (onRemove != null) {
@@ -297,19 +248,6 @@ private fun FollowRow(
             imageVector = Icons.Filled.Star,
             contentDescription = "取消关注 ${streamer.streamerName}",
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp),
-          )
-        }
-      }
-
-      if (onFile != null) {
-        // Filing into groups. A menu icon rather than a second icon row: at 320dp the row
-        // already carries a cover, two text lines, the star and the drag handle.
-        IconButton(onClick = onFile, modifier = Modifier.size(36.dp)) {
-          Icon(
-            imageVector = Icons.Filled.MoreVert,
-            contentDescription = "把 ${streamer.streamerName} 放进分组",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
           )
         }

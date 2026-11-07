@@ -31,12 +31,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.Icons
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -67,7 +63,6 @@ import com.livehub.app.ui.components.InlineLoader
 import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
-import com.livehub.app.ui.components.longPressOnly
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Category
@@ -187,7 +182,7 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
 }
 
 /**
- * One platform's page: pinned partitions, the category tree and the grid.
+ * One platform's page: the category tree and the grid.
  *
  * Extracted from the old single-platform body so the pager can compose two of them at once during
  * a swipe. Everything it reads that is *per platform* — the tree, the group being browsed, the
@@ -240,11 +235,6 @@ private fun PlatformPage(
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
-    FavoritesRow(
-      state = state,
-      onOpenPicker = { expanded = true },
-      onAction = onAction,
-    )
     CategoryTree(
       state = state,
       levels = levels,
@@ -417,82 +407,6 @@ private fun EndOfListHint(platform: Platform) {
 }
 
 /**
- * The pinned partitions of the **current platform**, directly under the platform tabs.
- *
- * Sitting between the tab row and the category row is a claim about scope: everything under a
- * platform tab belongs to that platform, so a row that mixed all four would be the one thing in
- * the column that the tab does not govern — and tapping a Bilibili chip two centimetres under the
- * 斗鱼 tab would silently switch platform. So the row is filtered to [UiState.platform].
- *
- * It disappears entirely when the platform has no favourites. That is the whole reason the
- * previous attempt at this feature was removed: a permanent row that only repeated "select a
- * category" cost 40dp on every home render. An empty row costs nothing.
- *
- * The only thing shown in the empty case is a single muted chip when *another* platform has
- * favourites, so the feature is still findable without being a permanent fixture.
- */
-@Composable
-private fun FavoritesRow(
-  state: UiState,
-  onOpenPicker: () -> Unit,
-  onAction: (UiAction) -> Unit,
-) {
-  // Aggregates are filtered here as well as in the store: the row's contract is "every chip is
-  // one concrete partition", and a hand-edited record or an older payload must not be able to
-  // put a chip in it that means "the whole platform".
-  val here = remember(state.favorites, state.platform) {
-    state.favorites.filter { it.platform == state.platform && !it.isAggregate && it.id != Category.ALL_ID }
-  }
-  val elsewhere = remember(state.favorites, state.platform) {
-    state.favorites.filter { it.platform != state.platform && !it.isAggregate && it.id != Category.ALL_ID }
-  }
-  if (here.isEmpty() && elsewhere.isEmpty()) return
-
-  LazyRow(
-    contentPadding = PaddingValues(horizontal = 12.dp),
-    horizontalArrangement = Arrangement.spacedBy(6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-  ) {
-    items(here, key = { "fav-${it.key}" }) { category ->
-      // Smaller and star-prefixed on purpose: this row sits directly above the category row and
-      // the two must not read as one strip of chips.
-      FilterChip(
-        selected = state.selectedCategory?.key == category.key,
-        onClick = { onAction(UiAction.SelectCategory(category)) },
-        label = { Text("★ ${category.name}", maxLines = 1) },
-        modifier = Modifier.height(32.dp),
-      )
-    }
-    if (here.isEmpty()) {
-      item(key = "fav-elsewhere") {
-        AssistChip(
-          onClick = {
-            val first = elsewhere.firstOrNull() ?: return@AssistChip
-            onAction(UiAction.SelectPlatform(first.platform))
-          },
-          label = {
-            Text(
-              text = "在 ${elsewhere.map { it.platform }.distinct().size} 个其他平台有收藏 ›",
-              maxLines = 1,
-            )
-          },
-          modifier = Modifier.height(32.dp),
-        )
-      }
-    }
-    item(key = "fav-add") {
-      // Expanding the tree is how a partition gets pinned now (long press a chip), so the "+"
-      // opens the tree rather than a separate picker.
-      IconButton(onClick = onOpenPicker, modifier = Modifier.size(32.dp)) {
-        Icon(Icons.Filled.Add, contentDescription = "收藏分区", modifier = Modifier.size(18.dp))
-      }
-    }
-  }
-}
-
-
-/**
  * The category tree: two inline rows, expanded or collapsed.
  *
  * Shaped after the Bilibili client's live tab (`screenshots/b.jpeg`): a row of groups with a
@@ -602,10 +516,6 @@ private fun CategoryTree(
             name = category.name,
             selected = state.selectedCategory?.key == category.key,
             onClick = { onAction(UiAction.SelectCategory(category)) },
-            // Long press pins/unpins instead of adding a second tap target: a star on every chip
-            // would eat the label width at 320dp. The aggregate chip is reachable here too, and it
-            // has no favourite to toggle — the ViewModel explains that rather than ignoring it.
-            modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
           )
         }
       }
@@ -620,7 +530,6 @@ private fun CategoryTree(
             name = category.name,
             selected = state.selectedCategory?.key == category.key,
             onClick = { onAction(UiAction.SelectCategory(category)) },
-            modifier = Modifier.longPressOnly { onAction(UiAction.ToggleFavorite(category)) },
           )
         }
       }

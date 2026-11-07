@@ -213,8 +213,7 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
         )
       }
       Text(
-        text = "关注列表、关注分组与收藏的分区会随登录状态在同一 Wi-Fi 下增量同步；删除也会同步，" +
-          "不会把旧数据带回来。",
+        text = "关注列表与登录状态会在同一 Wi-Fi 下增量同步；删除也会同步，不会把旧数据带回来。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
@@ -342,8 +341,7 @@ private fun ScopeCard() {
         style = MaterialTheme.typography.bodyMedium,
       )
       Text(
-        text = "关注列表（含关注分组与收藏的分区）与 B 站/抖音登录状态会同步到已配对的设备；" +
-          "播放设置与搜索历史留在本机。" +
+        text = "关注列表与 B 站/抖音登录状态会同步到已配对的设备；播放设置与搜索历史留在本机。" +
           "登录状态只在局域网内、只发给已配对的设备（明文传输，解除关联后不再发送）。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,

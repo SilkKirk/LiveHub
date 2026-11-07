@@ -5,22 +5,16 @@ import kotlinx.serialization.Serializable
 /**
  * What gets synchronised between two LiveHub installs.
  *
- * Two scopes, and both are data whose *value* is destroyed by owning two devices: the library
- * (which rooms you care about, how you filed them into groups, which partitions you pinned) and
- * the login state (who you are on Bilibili / Douyin).
+ * Two scopes, and both are data whose *value* is destroyed by owning two devices: the follow
+ * list (which rooms you care about and how you arranged them) and the login state (who you are
+ * on Bilibili / Douyin).
  *
- * `FOLLOWS` kept its wire name while growing into the library scope. It is deliberately one
- * scope and not four: a `member:` record references a `group:` record, so both have to land in
- * the same merge. [com.livehub.core.sync.SyncCoordinator] iterates scopes and treats a failed
- * scope as `continue`, so splitting them would make "a membership pointing at a group this
- * device has not received yet" a real, reachable state.
- *
- * Login state only ever reaches a **paired** device: the server rejects unauthenticated
- * requests before a payload is read
- * ([com.livehub.core.sync.server.SyncHttpServer.authenticate]), and unpairing stops it.
+ * The library state was briefly one scope as well. That is why the login state only ever
+ * reaches a **paired** device: the server rejects unauthenticated requests before a payload is
+ * read ([com.livehub.core.sync.server.SyncHttpServer.authenticate]), and unpairing stops it.
  */
 enum class SyncScope(val wireName: String, val displayName: String) {
-  FOLLOWS("follows", "关注、分组与收藏"),
+  FOLLOWS("follows", "关注列表"),
   CREDENTIALS("credentials", "登录状态"),
   ;
 
@@ -87,6 +81,12 @@ data class SyncPayload(
      * (`room:` / `group:` / `fav:` / `member:`) instead of being bare `<platform>:<roomId>`.
      * A peer on schema 1 is refused with "对端版本过新" rather than being handed keys it would
      * silently misread as rooms.
+     *
+     * **Not bumped for the removal of the group / pinned-category record kinds.** The layout did
+     * not change: a `room:` record has the same shape, and a schema-2 peer's extra keys are
+     * ignored by `FollowRecordSet` rather than misread. Bumping it would refuse to pair with every
+     * installation that is already out there, which is a much bigger cost than receiving a few
+     * records that are dropped on arrival.
      */
     const val SCHEMA: Int = 2
 

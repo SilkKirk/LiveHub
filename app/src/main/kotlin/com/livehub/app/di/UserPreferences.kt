@@ -12,6 +12,7 @@ import com.livehub.core.sync.DiscoveredPeer
 import com.livehub.core.sync.TrustedPeer
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID
@@ -36,20 +37,23 @@ data class UserSettings(
   /** Keywords the search screen shows, newest first. Local only — never synchronised. */
   val searchHistory: List<String> = emptyList(),
   /**
-   * Serialised library records, including tombstones: followed rooms, their groups, the
-   * room↔group memberships and the categories pinned under the platform tab.
+   * Serialised follow records, including tombstones: one record per followed room.
    *
-   * One field rather than four because all four kinds are one synchronised scope — see
-   * [LibraryStore] for why memberships in particular have to merge together with the rooms.
+   * The wire name is still `libraryRecords` because that is what versions 2 shipped. Renaming the
+   * key would decode every existing installation as "no follows at all" — an internal cleanup must
+   * not silently empty a user's follow list, so the old name stays and only the Kotlin property is
+   * renamed.
    */
-  val libraryRecords: String = "",
+  @SerialName("libraryRecords")
+  val followRecords: String = "",
   /**
-   * Which record vocabulary [libraryRecords] is written in.
+   * Which record vocabulary [followRecords] is written in.
    *
-   * 1 = bare `<platform>:<roomId>` keys (followed rooms only). 2 = the prefixed [LibraryKey]
-   * vocabulary. [LibraryStore] rewrites version 1 keys once on first read and then writes 2.
+   * 1 = bare `<platform>:<roomId>` keys. 2 = prefixed keys with four record kinds
+   * (`room:` / `group:` / `member:` / `fav:`). 3 = `room:` only again; [FollowStore] rewrites
+   * versions 1 and 2 on first read and then writes 3.
    */
-  val recordsVersion: Int = 2,
+  val recordsVersion: Int = 3,
   /**
    * Serialised login-state records (one per platform), including tombstones.
    *

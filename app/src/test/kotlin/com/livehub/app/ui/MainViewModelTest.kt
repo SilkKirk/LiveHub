@@ -44,7 +44,7 @@ class MainViewModelTest {
     // record so every test starts from the same state regardless of order.
     container.preferences.update { com.livehub.app.di.UserSettings() }
     // Start from a clean library so tests do not depend on ordering or leftover groups.
-    container.libraryStore.replaceAll(emptyList())
+    container.followStore.replaceAll(emptyList())
     viewModel = MainViewModel(container)
     idle()
   }
@@ -245,13 +245,13 @@ class MainViewModelTest {
 
     assertEquals(1, state.followed.size)
     assertEquals(room.key, state.followed.first().key)
-    assertTrue(container.libraryStore.isFollowed(room.platform, room.roomId))
+    assertTrue(container.followStore.isFollowed(room.platform, room.roomId))
 
     viewModel.onAction(UiAction.ToggleFollow(room))
     idle()
 
     assertTrue("unfollow must empty the list", state.followed.isEmpty())
-    assertFalse(container.libraryStore.isFollowed(room.platform, room.roomId))
+    assertFalse(container.followStore.isFollowed(room.platform, room.roomId))
   }
 
   @Test
@@ -306,15 +306,14 @@ class MainViewModelTest {
     assertEquals(expected, state.followed.map { it.key })
 
     // And the store agrees after a reload.
-    assertEquals(expected, container.libraryStore.followed().map { it.key })
+    assertEquals(expected, container.followStore.followed().map { it.key })
   }
 
   /**
-   * The three follow-screen filters survive opening a room and coming back.
+   * The two follow-screen filters survive opening a room and coming back.
    *
    * They used to be `remember` inside the screen, so closing the player rebuilt it from scratch
-   * and handed the user the unfiltered list again — the same defect `selectedFollowGroupId` was
-   * moved into `UiState` for, fixed for only one of the three.
+   * and handed the user the unfiltered list again.
    */
   @Test
   fun `the follow filters survive a round trip through the player`() {
@@ -336,35 +335,6 @@ class MainViewModelTest {
     assertEquals(Screen.Follow, state.screen)
     assertEquals(FollowLiveFilter.LIVE, state.followLiveFilter)
     assertEquals(Platform.DOUYU, state.followPlatformFilter)
-  }
-
-  /** "显示全部" in the empty state has to clear the group scope too, not just the two filters. */
-  @Test
-  fun `clearing the filters also leaves the group scope`() {
-    val room = streamer("42", "测试主播")
-    viewModel.onAction(UiAction.ToggleFollow(room))
-    idle()
-
-    val group = container.libraryStore.createGroup(
-      name = "游戏",
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )!!
-    viewModel.onAction(UiAction.SelectFollowGroup(group.id))
-    viewModel.onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.LIVE))
-    viewModel.onAction(UiAction.SetFollowPlatformFilter(Platform.HUYA))
-    idle()
-
-    // What the empty state's button emits.
-    viewModel.onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.ALL))
-    viewModel.onAction(UiAction.SetFollowPlatformFilter(null))
-    viewModel.onAction(UiAction.SelectFollowGroup(null))
-    idle()
-
-    assertEquals(null, state.selectedFollowGroupId)
-    assertEquals(null, state.followPlatformFilter)
-    assertEquals(FollowLiveFilter.ALL, state.followLiveFilter)
   }
 
   // ---------------------------------------------------------------- preferences ---

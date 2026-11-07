@@ -62,12 +62,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         blockedKeywords = settings.blockedKeywords,
         deviceName = preferences.deviceName,
         searchHistory = settings.searchHistory,
-        followed = container.libraryStore.followed(),
-        roomGroups = container.libraryStore.memberships(),
-        followGroups = container.libraryStore.groups(),
-        groupRoomOrder = container.libraryStore.groups()
-          .associate { group -> group.id to container.libraryStore.roomsInGroup(group.id) },
-        favorites = container.libraryStore.favorites(),
+        followed = container.followStore.followed(),
         peers = preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
         bilibiliLogin = com.livehub.app.ui.components.BiliLoginUi(
@@ -85,18 +80,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SelectCategory -> selectCategory(action.category)
       is UiAction.SelectSubCategory -> selectSubCategory(action.category)
       is UiAction.SetFollowOrder -> setFollowOrder(action.keys)
-      is UiAction.SetGroupOrder -> setGroupOrder(action.groupId, action.keys)
-      is UiAction.SelectFollowGroup -> _state.update { it.copy(selectedFollowGroupId = action.groupId) }
       is UiAction.SetFollowLiveFilter -> _state.update { it.copy(followLiveFilter = action.filter) }
       is UiAction.SetFollowPlatformFilter -> _state.update { it.copy(followPlatformFilter = action.platform) }
-      is UiAction.CreateFollowGroup -> createFollowGroup(action.name)
-      is UiAction.RenameFollowGroup -> renameFollowGroup(action.groupId, action.name)
-      is UiAction.DeleteFollowGroup -> deleteFollowGroup(action.groupId)
-      is UiAction.ReorderFollowGroups -> reorderFollowGroups(action.keys)
-      is UiAction.SetRoomGroups -> setRoomGroups(action.streamer, action.groupIds)
-      is UiAction.AddRoomsToGroups -> addRoomsToGroups(action.rooms, action.groupIds)
-      is UiAction.ToggleFavorite -> toggleFavorite(action.category)
-      is UiAction.SetFavoriteOrder -> setFavoriteOrder(action.keys)
       is UiAction.ShowMessage -> _state.update { it.copy(message = action.text) }
       UiAction.LoadMore -> loadMore()
       UiAction.Refresh -> refresh()
@@ -548,31 +533,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   // -------------------------------------------------------------------- follows
 
-  /**
-   * Every follow-scoped read, in one place.
-   *
-   * The library is four record kinds in one set, and the UI shows all four at once (list, group
-   * row, per-room group chips, pinned categories). Re-reading them together is what keeps a
-   * group rename from leaving a stale id in the row, so every mutation ends here rather than
-   * patching `_state` field by field.
-   */
-  private fun refreshLibrary() {
-    val store = container.libraryStore
-    val groups = store.groups()
-    _state.update {
-      it.copy(
-        followed = store.followed(),
-        roomGroups = store.memberships(),
-        followGroups = groups,
-        groupRoomOrder = groups.associate { group -> group.id to store.roomsInGroup(group.id) },
-        favorites = store.favorites(),
-      )
-    }
-  }
-
   private fun toggleFollow(streamer: Streamer) {
     val engine = container.syncEngine
-    val store = container.libraryStore
+    val store = container.followStore
     val deviceId = container.preferences.deviceId
     val now = System.currentTimeMillis()
     val hlc = engine.nextHlc()
@@ -581,15 +544,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     _state.update {
       it.copy(
         followed = followed,
-        roomGroups = store.memberships(),
-        groupRoomOrder = store.groups().associate { group -> group.id to store.roomsInGroup(group.id) },
         message = if (followed.any { f -> f.key == streamer.key }) "已关注 ${streamer.streamerName}" else "已取消关注",
       )
     }
   }
 
   private fun refreshFollowStatus(pullToRefresh: Boolean = false) {
-    val followed = container.libraryStore.followed()
+    val followed = container.followStore.followed()
     if (followed.isEmpty()) {
       _state.update { it.copy(followed = emptyList(), refreshing = false) }
       return
@@ -767,168 +728,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    */
   private fun setFollowOrder(keys: List<String>) {
     if (keys.isEmpty()) return
-    container.libraryStore.reorderRooms(
+    container.followStore.reorder(
       roomKeys = keys,
       hlc = container.syncEngine.nextHlc(),
       deviceId = container.preferences.deviceId,
       now = System.currentTimeMillis(),
     )
-    refreshLibrary()
-  }
-
-  private fun setGroupOrder(groupId: String, keys: List<String>) {
-    if (keys.isEmpty()) return
-    container.libraryStore.reorderWithinGroup(
-      groupId = groupId,
-      roomKeys = keys,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    refreshLibrary()
-  }
-
-  private fun createFollowGroup(name: String) {
-    val group = container.libraryStore.createGroup(
-      name = name,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    if (group == null) {
-      _state.update { it.copy(message = "分组名不能为空、不能超过 20 字，也不能和现有分组重名") }
-      return
-    }
-    refreshLibrary()
-    _state.update { it.copy(selectedFollowGroupId = group.id, message = "已创建分组「${group.name}」") }
-  }
-
-  private fun renameFollowGroup(groupId: String, name: String) {
-    val ok = container.libraryStore.renameGroup(
-      id = groupId,
-      name = name,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    if (!ok) {
-      _state.update { it.copy(message = "分组名不能为空、不能超过 20 字，也不能和现有分组重名") }
-      return
-    }
-    refreshLibrary()
-  }
-
-  private fun deleteFollowGroup(groupId: String) {
-    val name = _state.value.followGroups.firstOrNull { it.id == groupId }?.name
-    container.libraryStore.deleteGroup(
-      groupId = groupId,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    refreshLibrary()
-    _state.update {
-      it.copy(
-        // A deleted group cannot stay selected: the row would render no chip as active.
-        selectedFollowGroupId = it.selectedFollowGroupId?.takeIf { id -> id != groupId },
-        message = if (name != null) "已删除「$name」，组内主播已回到未分类" else "已删除分组",
-      )
-    }
-  }
-
-  private fun reorderFollowGroups(keys: List<String>) {
-    if (keys.isEmpty()) return
-    container.libraryStore.reorderGroups(
-      keys = keys,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    refreshLibrary()
-  }
-
-  private fun setRoomGroups(streamer: Streamer, groupIds: Set<String>) {
-    container.libraryStore.setMembership(
-      streamer = streamer,
-      targetGroupIds = groupIds,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    refreshLibrary()
-  }
-
-  /**
-   * Files several rooms into [groupIds] at once.
-   *
-   * Adds rather than replaces — see [UiAction.AddRoomsToGroups]. The count in the message is what
-   * the store reports, not how many rooms were selected: selecting five rooms for a group three of
-   * them were already in should say "3" not "5".
-   */
-  private fun addRoomsToGroups(rooms: List<Streamer>, groupIds: Set<String>) {
-    if (rooms.isEmpty() || groupIds.isEmpty()) return
-    val added = container.libraryStore.addRoomsToGroups(
-      streamers = rooms,
-      groupIds = groupIds,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    refreshLibrary()
-    val names = _state.value.followGroups.filter { it.id in groupIds }.joinToString("、") { it.name }
-    _state.update {
-      it.copy(
-        message = if (added == 0) {
-          "这些主播已经在「$names」里了"
-        } else {
-          "已把 $added 位主播放进「$names」"
-        },
-      )
-    }
-  }
-
-  /**
-   * Pins or unpins [category].
-   *
-   * Refusals are explained rather than swallowed. The aggregate entry ("全部直播") is the one
-   * category a long-press can land on that has no favourite to toggle — it is the whole
-   * platform, not a partition — and a tap that does nothing at all reads as a bug.
-   */
-  private fun toggleFavorite(category: Category) {
-    if (category.isAggregate || category.id == Category.ALL_ID) {
-      _state.update { it.copy(message = "「${category.name}」是整个平台，不需要收藏") }
-      return
-    }
-    val pinned = container.libraryStore.isFavorite(category)
-    val ok = container.libraryStore.toggleFavorite(
-      category = category,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    if (!ok) {
-      _state.update {
-        it.copy(
-          message = if (pinned) "取消收藏失败" else "收藏已达上限（100 个），先取消一些",
-        )
-      }
-      return
-    }
-    refreshLibrary()
-    _state.update {
-      it.copy(message = if (pinned) "已取消收藏「${category.name}」" else "已收藏「${category.name}」")
-    }
-  }
-
-  private fun setFavoriteOrder(keys: List<String>) {
-    if (keys.isEmpty()) return
-    container.libraryStore.reorderFavorites(
-      keys = keys,
-      hlc = container.syncEngine.nextHlc(),
-      deviceId = container.preferences.deviceId,
-      now = System.currentTimeMillis(),
-    )
-    refreshLibrary()
+    _state.update { it.copy(followed = container.followStore.followed()) }
   }
 
   /**
@@ -1277,7 +1083,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       _state.update {
         it.copy(
           peers = container.preferences.trustedPeers(),
-          followed = container.libraryStore.followed(),
+          followed = container.followStore.followed(),
           message = result.fold(
             onSuccess = { name -> "已与 $name 关联" },
             onFailure = { error -> error.message ?: "配对失败" },
@@ -1334,12 +1140,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         it.copy(
           syncing = false,
           peers = container.preferences.trustedPeers(),
-          followed = container.libraryStore.followed(),
-          roomGroups = container.libraryStore.memberships(),
-          followGroups = container.libraryStore.groups(),
-          groupRoomOrder = container.libraryStore.groups()
-            .associate { group -> group.id to container.libraryStore.roomsInGroup(group.id) },
-          favorites = container.libraryStore.favorites(),
+          followed = container.followStore.followed(),
           syncLog = container.syncEngine.logEntries(),
           message = summary.message,
         )

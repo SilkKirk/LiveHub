@@ -33,7 +33,6 @@ import com.livehub.app.ui.screens.PlayerContent
 import com.livehub.app.ui.screens.PlayerSettings
 import com.livehub.core.model.Category
 import com.livehub.core.model.DanmakuMessage
-import com.livehub.core.model.FollowGroup
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
@@ -475,74 +474,6 @@ class ScreenshotTest {
   @Test
   fun followEmpty() = capture("08-follow-empty", baseState().copy(screen = Screen.Follow))
 
-  /**
-   * The follow list with the group row.
-   *
-   * Every group claim in this feature is a *layout* claim — a second chip row, the per-room group
-   * names, the header counting only the scoped group — and none of it is visible to a JVM test.
-   * `LibraryStoreTest` proves the records merge; only a render proves they are readable.
-   */
-  @Test
-  fun followGroups() = capture(
-    "08b-follow-groups",
-    baseState().copy(
-      screen = Screen.Follow,
-      followed = listOf(
-        douyuRooms[0], douyuRooms[1], douyuRooms[2],
-        streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
-        streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档", 45_000, live = false),
-      ),
-      followGroups = listOf(
-        FollowGroup("g1", "游戏", 0),
-        FollowGroup("g2", "音乐", 1),
-      ),
-      roomGroups = mapOf(
-        douyuRooms[0].key to setOf("g1"),
-        douyuRooms[1].key to setOf("g1", "g2"),
-        douyuRooms[2].key to setOf("g2"),
-      ),
-    ),
-  )
-
-  /**
-   * The group sheet in its management mode.
-   *
-   * `clickText = "管理"` rather than a pre-opened flag: the sheet's open state is local to the
-   * screen, which is deliberate — nothing outside the follow page can leave it hanging open over
-   * a different tab.
-   */
-  @Test
-  fun followGroupSheet() = capture(
-    "08c-follow-group-sheet",
-    baseState().copy(
-      screen = Screen.Follow,
-      followed = douyuRooms.take(3),
-      followGroups = listOf(FollowGroup("g1", "游戏", 0), FollowGroup("g2", "音乐", 1)),
-      roomGroups = mapOf(douyuRooms[0].key to setOf("g1")),
-    ),
-    clickText = "管理",
-    expectText = "分组管理",
-  )
-
-  /**
-   * The pinned-partition row, directly under the platform tabs.
-   *
-   * It only exists when the current platform has favourites, so it needs its own render — a
-   * baseline without favourites would never draw it, and the row's whole justification is that it
-   * disappears when empty.
-   */
-  @Test
-  fun homeFavorites() = capture(
-    "02b-home-favorites",
-    baseState().copy(
-      favorites = listOf(
-        douyuCategoriesWithAggregate[1],
-        douyuCategoriesWithAggregate[2],
-        douyuCategoriesWithAggregate[3],
-      ),
-    ),
-  )
-
   @Test
   fun searchIdle() = capture("09-search-idle", baseState().copy(screen = Screen.Search, searchQuery = ""))
 
@@ -935,11 +866,6 @@ class ScreenshotTest {
    *   fold. Reaching it is part of what the render asserts: the scroll fails outright when the
    *   list cannot scroll, so a page that merely *contains* a section cannot pass as one that
    *   can show it.
-   * @param clickText text to tap before capturing, for state the render has to be put into.
-   *   The panel it opens is drawn in the activity window with no animation, so one frozen frame
-   *   after the tap is the whole thing.
-   * @param expectText text the render must show *after* the tap. Without it a tap that did
-   *   nothing would still produce a plausible-looking screenshot of the screen underneath.
    * @param content replaces the screen the state would otherwise pick. Used for panels that a
    *   state cannot express — the player settings sheet is switched on by a tap, and it is
    *   exactly where the quality and line chips live.
@@ -951,10 +877,8 @@ class ScreenshotTest {
     advanceMillis: Long = 0L,
     onScreenText: String? = null,
     scrollToText: String? = null,
-    clickText: String? = null,
-    /** Clicks an icon-only control by its content description, where [clickText] cannot match. */
+    /** Clicks an icon-only control by its content description. */
     clickDescription: String? = null,
-    expectText: String? = null,
     /** Asserts an icon-only control is present, for the same reason as [clickDescription]. */
     expectDescription: String? = null,
     content: (@Composable () -> Unit)? = null,
@@ -992,14 +916,6 @@ class ScreenshotTest {
     composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
 
-    if (clickText != null) {
-      // The tap lands synchronously but the recomposition that reveals the panel needs a frame,
-      // and the clock is frozen for the capture — so that frame is advanced explicitly.
-      composeRule.onNodeWithText(clickText).performClick()
-      composeRule.mainClock.advanceTimeByFrame()
-      composeRule.waitForIdle()
-    }
-
     if (clickDescription != null) {
       // Icon-only controls have no text to match; the chevron is one of them.
       composeRule.onNodeWithContentDescription(clickDescription).performClick()
@@ -1009,10 +925,6 @@ class ScreenshotTest {
 
     expectDescription?.let { description ->
       composeRule.onNodeWithContentDescription(description).assertIsDisplayed()
-    }
-
-    expectText?.let { text ->
-      composeRule.onNodeWithText(text).assertIsDisplayed()
     }
 
     if (scrollToText != null) {
