@@ -292,11 +292,9 @@ class FollowStoreTest {
 
     val reopened = FollowStore(preferences)
 
-    assertEquals(
-      "only the room may survive",
-      listOf(room),
-      reopened.followed().map { it.key },
-    )
+    // `Streamer.key` is the bare `douyu:288016` identity the UI uses; the *record* key is the
+    // prefixed one, so the two assertions below read different maps on purpose.
+    assertEquals("only the room may survive", listOf("douyu:288016"), reopened.followed().map { it.key })
     assertEquals(3, preferences.settings.recordsVersion)
     // The dropped keys are gone from disk too, not merely filtered on read: leaving them would
     // mean re-parsing and re-dropping them on every cold start.
