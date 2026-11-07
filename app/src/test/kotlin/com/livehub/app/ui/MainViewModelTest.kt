@@ -354,9 +354,12 @@ class MainViewModelTest {
     assertNotNull(state.message)
   }
 
-  /** Unfollowing has to take the room off the avatar row in the same update. */
+  /**
+   * Unfollowing has to take the room off the avatar row in the same update — and re-following
+   * must not put it back, because the user never re-gave that mark.
+   */
   @Test
-  fun `unfollowing clears the special mark`() {
+  fun `unfollowing clears the special mark and re-following does not restore it`() {
     val room = streamer("42", "测试主播")
     viewModel.onAction(UiAction.ToggleFollow(room))
     viewModel.onAction(UiAction.ToggleSpecialFollow(room))
@@ -365,8 +368,12 @@ class MainViewModelTest {
 
     viewModel.onAction(UiAction.ToggleFollow(room))
     idle()
-
     assertTrue(state.followed.isEmpty())
+    assertTrue(state.specialFollowKeys.isEmpty())
+
+    viewModel.onAction(UiAction.ToggleFollow(room))
+    idle()
+    assertEquals(1, state.followed.size)
     assertTrue(state.specialFollowKeys.isEmpty())
   }
 

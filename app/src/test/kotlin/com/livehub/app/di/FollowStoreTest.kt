@@ -89,22 +89,36 @@ class FollowStoreTest {
     assertTrue("the delete must be an HLC-stamped tombstone", record.deleted)
   }
 
+  /**
+   * A re-followed room comes back as a new record, at the end of the list and unstarred.
+   *
+   * The tombstone carries no payload, so there is nothing to inherit — and that is the semantic we
+   * want: unfollowing means "I am done with this room", and a position or a 特别关注 mark the user
+   * never re-gave must not silently return.
+   *
+   * (The test used to assert the opposite. It passed only because it never actually re-followed a
+   * room whose record had been tombstoned — the assertion described a behaviour the code never
+   * had.)
+   */
   @Test
-  fun `re-following keeps the manual position`() {
+  fun `re-following starts from scratch`() {
     val a = streamer("1")
     val b = streamer("2")
-    follow(a)
-    follow(b)
-    store.reorder(listOf(b.key, a.key), hlc(), 1L, clock)
+    val c = streamer("3")
+    listOf(a, b, c).forEach { follow(it) }
+    // Arrange so `a` sits first; re-following must not restore that.
+    store.reorder(listOf(a.key, b.key, c.key), hlc(), 1L, clock)
+    assertEquals(listOf(a.key, b.key, c.key), store.followed().map { it.key })
 
     follow(a) // unfollow
     follow(a) // follow again
 
     assertEquals(
-      "a room that comes back must not jump to the bottom",
-      listOf(b.key, a.key),
+      "a re-followed room is a new record, so it lands at the end",
+      listOf(b.key, c.key, a.key),
       store.followed().map { it.key },
     )
+    assertTrue("and it is not starred", store.specialKeys().isEmpty())
   }
 
   @Test
@@ -241,20 +255,27 @@ class FollowStoreTest {
     assertEquals(999, store.followed().single().viewerCount.toInt())
   }
 
+  /**
+   * Unfollowing clears the 特别关注 mark, and re-following does **not** bring it back.
+   *
+   * The tombstone has no payload, so there is nothing to inherit from — and inheriting would be
+   * wrong anyway: the user chose to stop following, so a mark they never re-gave must not
+   * reappear. This is the case the first version of this feature got wrong in a comment (it
+   * claimed the opposite) while the code already behaved correctly.
+   */
   @Test
-  fun `re-following keeps the special mark and the position`() {
-    val a = streamer("1")
-    val b = streamer("2")
-    follow(a)
-    follow(b)
-    store.toggleSpecial(a, hlc(), 1L, clock)
-    store.reorder(listOf(b.key, a.key), hlc(), 1L, clock)
+  fun `unfollowing clears the special mark for good`() {
+    val room = streamer("1")
+    follow(room)
+    store.toggleSpecial(room, hlc(), 1L, clock)
+    assertEquals(listOf(room.key), store.specialKeys())
 
-    follow(a) // unfollow
-    follow(a) // follow again
+    follow(room) // unfollow
 
-    assertEquals(listOf(a.key), store.specialKeys())
-    assertEquals(listOf(b.key, a.key), store.followed().map { it.key })
+    assertTrue(store.specialKeys().isEmpty())
+
+    follow(room) // follow again
+    assertTrue("a re-followed room must not silently return to the avatar row", store.specialKeys().isEmpty())
   }
 
   @Test

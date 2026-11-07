@@ -127,9 +127,10 @@ class FollowStore(preferences: UserPreferences) {
   /**
    * Follows [streamer], or unfollows it when it is already followed.
    *
-   * Re-following keeps the old record's position and its 特别关注 mark: unfollowing is a
-   * tombstone, and a room that comes back should return where the user had put it rather than
-   * silently dropping out of the avatar row.
+   * A re-followed room comes back as a **brand-new record**: at the end of the list, unstarred.
+   * The tombstone written on unfollow carries no payload, so there is nothing to inherit — and
+   * inheriting would be wrong anyway. Unfollowing means "I am done with this room"; a position or
+   * a 特别关注 mark the user never re-gave must not silently return.
    */
   fun toggle(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long) {
     val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
@@ -140,12 +141,7 @@ class FollowStore(preferences: UserPreferences) {
     if (following) {
       next += SyncRecord(
         key = roomKey,
-        value = FollowCodec.fromStreamer(
-          streamer = streamer,
-          now = now,
-          order = existing?.value?.get("order"),
-          special = FollowCodec.isSpecial(existing?.value),
-        ),
+        value = FollowCodec.fromStreamer(streamer, now, order = null, special = false),
         deleted = false,
         hlc = hlc,
         deviceId = deviceId,
