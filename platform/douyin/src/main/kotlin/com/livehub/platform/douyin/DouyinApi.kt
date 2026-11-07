@@ -624,7 +624,9 @@ class DouyinApi(
     val url = "$URL_ENTER?${DouyinSigner.signQuery(params)}"
     // The Referer has to be the room page, not the site root: Douyin checks it against
     // `web_rid`, and a mismatched Referer is another way to get the empty 200.
-    fun request(cookie: String) = runCatching {
+    // A `suspend` local: `http.get` suspends, and a plain lambda cannot call it. Declared here
+    // rather than at class level because it closes over `url` and `roomId`.
+    suspend fun request(cookie: String) = runCatching {
       http.get(
         url,
         headers = mapOf(
