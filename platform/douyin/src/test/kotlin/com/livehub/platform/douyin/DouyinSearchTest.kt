@@ -315,6 +315,52 @@ class DouyinSearchTest {
     assertNull(api.webRidFrom("DNF 深渊日常"))
   }
 
+  /**
+   * `enter` must be sent **without** `a_bogus`.
+   *
+   * Measured 2026-11-07: the same request returns the room unsigned, but answers HTTP 200 with
+   * an **empty body** as soon as an `a_bogus` value the server cannot validate is present —
+   * and an empty body is read as "no such room". That is what made a valid `web_rid` report
+   * 没有找到 even after the id classifier was fixed. This is the one endpoint that does not
+   * want a signature; `partition` requires a valid one and `feed` works signed.
+   */
+  @Test
+  fun `the enter request carries no a_bogus signature`() = runBlocking {
+    val http = FakeDouyinHttp { ok(enter(webRid = "AYM0707")) }
+
+    api(http).search("AYM0707", page = 1)
+
+    val url = http.urls.single()
+    assertTrue(url.contains("/webcast/room/web/enter/"), url)
+    assertTrue(!url.contains("a_bogus"), "enter must stay unsigned: $url")
+    assertTrue(url.contains("web_rid=AYM0707"), url)
+    // `msToken` must still be present even though it is empty — omitting the key entirely
+    // also produces the empty 200.
+    assertTrue(url.contains("msToken="), url)
+  }
+
+  /**
+   * A well-formed but unknown id answers `status_code = 4001038`, not an exception.
+   *
+   * Search turns that into "没有找到"; the room page still reports its own error.
+   */
+  @Test
+  fun `an unknown id status is reported as no results rather than a failure`() = runBlocking {
+    val http = FakeDouyinHttp { url ->
+      ok(
+        if (url.contains("/enter/")) {
+          """{"status_code":4001038,"data":{"data":[]}}"""
+        } else {
+          """{"data":[]}"""
+        },
+      )
+    }
+
+    val (rooms, _) = api(http).search("999999999999999", page = 1)
+
+    assertTrue(rooms.isEmpty())
+  }
+
   /** A session that Douyin no longer accepts must say so, not look like "no results". */
   @Test
   fun `a login wall during search is reported as needing a login`() {

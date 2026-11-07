@@ -588,7 +588,19 @@ class DouyinApi(
       // produced "该直播间可能未开播" for every room not in that feed.
       "msToken" to "",
     )
-    val url = "$URL_ENTER?${DouyinSigner.signQuery(params)}"
+    // **Unsigned on purpose.** `enter` does not want `a_bogus`: measured 2026-11-07, the same
+    // request returns the room unsigned and 200 + **empty body** as soon as an `a_bogus`
+    // parameter is present that the server cannot validate (a deliberately arbitrary value
+    // reproduced it exactly; an empty `a_bogus=` did not). An empty body is then read as "no
+    // such room", so signing this endpoint is what made a valid room id look like a miss —
+    // appending `a_bogus` here is how "搜不到" happened even though `web_rid` was correct.
+    //
+    // Unlike `partition` (which requires a valid signature) and `feed` (which works signed),
+    // this endpoint is happy with a plain query. See the class comment on signing.
+    val query = params.joinToString("&") { (key, value) ->
+      "$key=${DouyinSigner.encodeQueryValue(value)}"
+    }
+    val url = "$URL_ENTER?$query"
     // The Referer has to be the room page, not the site root: Douyin checks it against
     // `web_rid`, and a mismatched Referer is another way to get the empty 200.
     val response = http.get(
@@ -602,6 +614,11 @@ class DouyinApi(
     )
 
     val root = runCatching { parseObject(response.body, "enter") }.getOrNull()
+    // An explicit refusal is not "the room does not exist" in general, but for search it is:
+    // 4001038 is what a well-formed-but-unknown `web_rid` returns, and treating it as null is
+    // what lets the UI say 没有找到 instead of the room page's "可能未开播".
+    val status = root?.get("status_code")?.jsonPrimitive?.intOrNull
+    if (status != null && status != 0) return null
     // The live shape is `data.data[0]`, not `data.room` — reading `data.room` always yielded
     // null, so the feed fallback ran even on a successful response.
     val data = root?.get("data")?.let { it as? JsonObject }
