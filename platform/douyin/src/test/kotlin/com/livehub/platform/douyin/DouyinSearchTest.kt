@@ -264,17 +264,17 @@ class DouyinSearchTest {
    * how a one-word nickname can still be found.
    */
   @Test
-  fun `a non-resolving word falls back to keyword search when logged in`() = runBlocking {
+  fun `a non-resolving word falls back to keyword search when logged in`() {
     val body = """{"status_code":0,"data":[]}"""
     val http = FakeDouyinHttp { url ->
       ok(if (url.contains("/enter/")) missingRoom() else body)
     }
 
-    api(http, session = true).search("uzi", page = 1)
+    runBlocking { api(http, session = true).search("uzi", page = 1) }
 
     assertTrue(
-      "the fallback must hit the keyword endpoint",
       http.urls.any { it.startsWith("https://www.douyin.com/aweme/v1/web/live/search/") },
+      "the fallback must hit the keyword endpoint: ${http.urls}",
     )
   }
 
