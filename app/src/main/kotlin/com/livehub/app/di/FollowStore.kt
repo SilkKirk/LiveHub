@@ -61,13 +61,72 @@ class FollowStore(preferences: UserPreferences) {
   fun isFollowed(platform: Platform, roomId: String): Boolean =
     set.liveValue(LibraryKey.Room(platform, roomId).encode()) != null
 
+  /**
+   * Keys of the rooms pinned to the 特别关注 row, in the user's order.
+   *
+   * Returned as keys rather than streamers so the screen can intersect it with whatever it is
+   * already filtering: the avatar row is a *view* over the follow list, not a second list that
+   * would need its own refresh path.
+   */
+  fun specialKeys(): List<String> {
+    val positions = HashMap<String, Int>()
+    for (record in records()) {
+      if (record.deleted) continue
+      val key = LibraryKey.decode(record.key) as? LibraryKey.Room ?: continue
+      val value = record.value ?: continue
+      if (!FollowCodec.isSpecial(value)) continue
+      positions[Streamer.keyOf(key.platform, key.roomId)] = FollowCodec.orderOf(value)
+    }
+    return positions.keys.sortedWith(
+      compareBy<String> { positions[it] ?: Int.MAX_VALUE },
+    )
+  }
+
   // -------------------------------------------------------------------- writing
+
+  /**
+   * Pins [streamer] to the 特别关注 row, or unpins it.
+   *
+   * The flag lives on the room's own record rather than in a separate one: it describes the same
+   * thing the record already is ("this is a room you follow"), and a second record kind would bring
+   * back the ordering/reference problem the removed `member:` records had. The tradeoff is that
+   * "phone stars it" and "tablet unstars it" resolve by HLC instead of both surviving — which is
+   * the correct semantic for a single boolean.
+   *
+   * Returns false when the room is not followed; a special mark without a follow would be a pin to
+   * a row it can never appear in.
+   */
+  fun toggleSpecial(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long): Boolean {
+    val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
+    val existing = records().firstOrNull { it.key == roomKey }
+    if (existing == null || existing.deleted || existing.value == null) return false
+
+    val special = !FollowCodec.isSpecial(existing.value)
+    val updated = SyncRecord(
+      key = roomKey,
+      value = FollowCodec.fromStreamer(
+        streamer = streamer,
+        now = now,
+        // Both survive the rewrite: this only flips one flag, it must not reset the arrangement
+        // the user made by dragging.
+        order = existing.value["order"],
+        special = special,
+      ),
+      deleted = false,
+      hlc = hlc,
+      deviceId = deviceId,
+      updatedAt = now,
+    )
+    persist(records().filterNot { it.key == roomKey } + updated)
+    return true
+  }
 
   /**
    * Follows [streamer], or unfollows it when it is already followed.
    *
-   * Re-following keeps no memory of the old record other than its position: a room that comes back
-   * returns where the user had arranged it rather than at the bottom.
+   * Re-following keeps the old record's position and its 特别关注 mark: unfollowing is a
+   * tombstone, and a room that comes back should return where the user had put it rather than
+   * silently dropping out of the avatar row.
    */
   fun toggle(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long) {
     val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
@@ -78,7 +137,12 @@ class FollowStore(preferences: UserPreferences) {
     if (following) {
       next += SyncRecord(
         key = roomKey,
-        value = FollowCodec.fromStreamer(streamer, now, order = existing?.value?.get("order")),
+        value = FollowCodec.fromStreamer(
+          streamer = streamer,
+          now = now,
+          order = existing?.value?.get("order"),
+          special = FollowCodec.isSpecial(existing?.value),
+        ),
         deleted = false,
         hlc = hlc,
         deviceId = deviceId,
@@ -102,9 +166,15 @@ class FollowStore(preferences: UserPreferences) {
     if (existing == null || existing.deleted) return
     val updated = SyncRecord(
       key = roomKey,
-      // The manual order survives the refresh; without this every background run would reset the
-      // user's arrangement back to recency.
-      value = FollowCodec.fromStreamer(streamer, now, existing.value?.get("order")),
+      // Both the manual order *and* the 特别关注 mark survive the refresh. The worker rebuilds the
+      // record from a network `Streamer`, which knows nothing about either — dropping the flag here
+      // would quietly empty the avatar row every 30 minutes.
+      value = FollowCodec.fromStreamer(
+        streamer = streamer,
+        now = now,
+        order = existing.value?.get("order"),
+        special = FollowCodec.isSpecial(existing.value),
+      ),
       deleted = false,
       hlc = hlc,
       deviceId = deviceId,

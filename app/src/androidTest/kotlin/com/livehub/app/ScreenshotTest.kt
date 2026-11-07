@@ -458,17 +458,46 @@ class ScreenshotTest {
     baseState().copy(rooms = emptyList(), loading = false, error = "无法连接到服务器，请检查网络后重试"),
   )
 
+  private val followRooms = listOf(
+    douyuRooms[0], douyuRooms[1], douyuRooms[2],
+    streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
+    streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档", 45_000, live = false),
+  )
+
+  /**
+   * The follow list: the 特别关注 avatar row over a two-column grid.
+   *
+   * The layout is a *visual* claim that no JVM assertion can hold — a strip of circular avatars
+   * with a live ring, and covers two per row underneath it. The fixture deliberately mixes live
+   * and offline rooms so the ring and the "未开播" badge are both on screen.
+   */
   @Test
   fun followList() = capture(
     "07-follow-list",
     baseState().copy(
       screen = Screen.Follow,
-      followed = listOf(
-        douyuRooms[0], douyuRooms[1], douyuRooms[2],
-        streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
-        streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档", 45_000, live = false),
-      ),
+      followed = followRooms,
+      specialFollowKeys = listOf(followRooms[0].key, followRooms[3].key, followRooms[4].key),
     ),
+  )
+
+  /**
+   * The 特别关注 picker, opened by the ＋ at the end of the avatar row.
+   *
+   * The panel is where a room is starred, so it needs a render of its own: the checked rows, the
+   * live dots and the explanatory line are the whole affordance. `expectText` is the panel title —
+   * without it a click that opened nothing would still produce a plausible screenshot of the grid.
+   */
+  @Test
+  fun followSpecialPicker() = capture(
+    "07b-follow-special-picker",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = followRooms,
+      specialFollowKeys = listOf(followRooms[0].key, followRooms[2].key),
+    ),
+    clickDescription = "添加特别关注",
+    expectText = "选择特别关注",
   )
 
   @Test
@@ -881,6 +910,11 @@ class ScreenshotTest {
     clickDescription: String? = null,
     /** Asserts an icon-only control is present, for the same reason as [clickDescription]. */
     expectDescription: String? = null,
+    /**
+     * Text the render must show *after* the click. Without it a click that opened nothing would
+     * still produce a plausible-looking screenshot of the screen underneath.
+     */
+    expectText: String? = null,
     content: (@Composable () -> Unit)? = null,
   ) {
     composeRule.mainClock.autoAdvance = false
@@ -925,6 +959,10 @@ class ScreenshotTest {
 
     expectDescription?.let { description ->
       composeRule.onNodeWithContentDescription(description).assertIsDisplayed()
+    }
+
+    expectText?.let { text ->
+      composeRule.onNodeWithText(text).assertIsDisplayed()
     }
 
     if (scrollToText != null) {

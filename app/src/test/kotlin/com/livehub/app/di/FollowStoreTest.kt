@@ -16,6 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -206,6 +207,84 @@ class FollowStoreTest {
     follow(room)
 
     assertEquals(room.copy(updatedAt = 1_700_000_000_500), store.followed().single())
+  }
+
+  // ------------------------------------------------------- 特别关注 (special) ---
+
+  @Test
+  fun `a room can be starred and unstarred`() {
+    val room = streamer("1")
+    follow(room)
+    assertTrue(store.specialKeys().isEmpty())
+
+    assertTrue(store.toggleSpecial(room, hlc(), 1L, clock))
+    assertEquals(listOf(room.key), store.specialKeys())
+
+    assertTrue(store.toggleSpecial(room, hlc(), 1L, clock))
+    assertTrue(store.specialKeys().isEmpty())
+  }
+
+  /**
+   * The flag lives on the room's own record, so the two things that rewrite that record — the
+   * background refresh and a follow/unfollow round trip — both have to carry it over. Losing it
+   * here is invisible in a screenshot: the avatar row would just quietly be empty again.
+   */
+  @Test
+  fun `a snapshot refresh keeps the special mark`() {
+    val room = streamer("1")
+    follow(room)
+    store.toggleSpecial(room, hlc(), 1L, clock)
+
+    store.updateSnapshot(room.copy(viewerCount = 999, isLive = false), hlc(), 1L, clock)
+
+    assertEquals(listOf(room.key), store.specialKeys())
+    assertEquals(999, store.followed().single().viewerCount.toInt())
+  }
+
+  @Test
+  fun `re-following keeps the special mark and the position`() {
+    val a = streamer("1")
+    val b = streamer("2")
+    follow(a)
+    follow(b)
+    store.toggleSpecial(a, hlc(), 1L, clock)
+    store.reorder(listOf(b.key, a.key), hlc(), 1L, clock)
+
+    follow(a) // unfollow
+    follow(a) // follow again
+
+    assertEquals(listOf(a.key), store.specialKeys())
+    assertEquals(listOf(b.key, a.key), store.followed().map { it.key })
+  }
+
+  @Test
+  fun `starring a room that is not followed writes nothing`() {
+    assertFalse(store.toggleSpecial(streamer("404"), hlc(), 1L, clock))
+    assertTrue(store.records().isEmpty())
+  }
+
+  /** The avatar row is ordered by the same manual arrangement the grid falls back to. */
+  @Test
+  fun `special keys follow the stored order`() {
+    val a = streamer("1")
+    val b = streamer("2")
+    follow(a)
+    follow(b)
+    store.toggleSpecial(a, hlc(), 1L, clock)
+    store.toggleSpecial(b, hlc(), 1L, clock)
+
+    store.reorder(listOf(b.key, a.key), hlc(), 1L, clock)
+
+    assertEquals(listOf(b.key, a.key), store.specialKeys())
+  }
+
+  /** A record written before this feature simply has no `special` field, and reads as false. */
+  @Test
+  fun `a record without the field is not special`() {
+    follow(streamer("1"))
+
+    assertTrue(store.specialKeys().isEmpty())
+    assertNull(store.records().single().value!!["special"])
   }
 
   // ---------------------------------------------------------------- migration

@@ -46,6 +46,14 @@ data class UiState(
   val rooms: List<Streamer> = emptyList(),
   val followed: List<Streamer> = emptyList(),
   /**
+   * Keys of the rooms pinned to the 特别关注 avatar row, in the user's order.
+   *
+   * Kept as keys rather than a second `List<Streamer>`: the row is a view over [followed], so it
+   * has to disappear immediately when one of them is unfollowed, and a separate list would need
+   * its own refresh path for every follow change.
+   */
+  val specialFollowKeys: List<String> = emptyList(),
+  /**
    * The live-state filter on the follow screen.
    *
    * In the state rather than in a `remember`: opening a room and coming back used to reset it, so
@@ -173,6 +181,14 @@ sealed interface UiAction {
    * the drop position against the full list and the result travels as this one value.
    */
   data class SetFollowOrder(val keys: List<String>) : UiAction
+
+  /**
+   * Pins or unpins [streamer] on the 特别关注 row.
+   *
+   * Refused (with a message) when the room is not followed: a pin to a row it can never appear in
+   * would be a tap that silently does nothing.
+   */
+  data class ToggleSpecialFollow(val streamer: Streamer) : UiAction
 
   /** Narrows the follow screen to live / offline rooms. */
   data class SetFollowLiveFilter(val filter: FollowLiveFilter) : UiAction

@@ -309,6 +309,85 @@ class MainViewModelTest {
     assertEquals(expected, container.followStore.followed().map { it.key })
   }
 
+  // -------------------------------------------------------- 特别关注 (special) ---
+
+  @Test
+  fun `starring a followed room puts it on the special row`() {
+    val room = streamer("42", "测试主播")
+    viewModel.onAction(UiAction.ToggleFollow(room))
+    idle()
+    assertTrue("nothing is special until it is starred", state.specialFollowKeys.isEmpty())
+
+    viewModel.onAction(UiAction.ToggleSpecialFollow(room))
+    idle()
+
+    assertEquals(listOf(room.key), state.specialFollowKeys)
+    // Persisted, not just in the state: the row has to survive a restart.
+    assertEquals(listOf(room.key), container.followStore.specialKeys())
+  }
+
+  @Test
+  fun `unstarring removes it from the special row`() {
+    val room = streamer("42", "测试主播")
+    viewModel.onAction(UiAction.ToggleFollow(room))
+    viewModel.onAction(UiAction.ToggleSpecialFollow(room))
+    idle()
+
+    viewModel.onAction(UiAction.ToggleSpecialFollow(room))
+    idle()
+
+    assertTrue(state.specialFollowKeys.isEmpty())
+    assertTrue(container.followStore.specialKeys().isEmpty())
+  }
+
+  /**
+   * A special mark without a follow has nowhere to live — the flag is a field on the follow
+   * record — so the action explains itself instead of silently doing nothing.
+   */
+  @Test
+  fun `starring a room that is not followed is refused with a message`() {
+    val room = streamer("404", "没关注的主播")
+    viewModel.onAction(UiAction.ToggleSpecialFollow(room))
+    idle()
+
+    assertTrue(state.specialFollowKeys.isEmpty())
+    assertNotNull(state.message)
+  }
+
+  /** Unfollowing has to take the room off the avatar row in the same update. */
+  @Test
+  fun `unfollowing clears the special mark`() {
+    val room = streamer("42", "测试主播")
+    viewModel.onAction(UiAction.ToggleFollow(room))
+    viewModel.onAction(UiAction.ToggleSpecialFollow(room))
+    idle()
+    assertEquals(1, state.specialFollowKeys.size)
+
+    viewModel.onAction(UiAction.ToggleFollow(room))
+    idle()
+
+    assertTrue(state.followed.isEmpty())
+    assertTrue(state.specialFollowKeys.isEmpty())
+  }
+
+  @Test
+  fun `the special row keeps the user's order, not the live-first one`() {
+    val offline = streamer("1", "未开播").copy(isLive = false)
+    val live = streamer("2", "在播")
+    viewModel.onAction(UiAction.ToggleFollow(offline))
+    viewModel.onAction(UiAction.ToggleFollow(live))
+    viewModel.onAction(UiAction.ToggleSpecialFollow(offline))
+    viewModel.onAction(UiAction.ToggleSpecialFollow(live))
+    idle()
+
+    // Put the offline one first, then read the row back: the row is a *manual* arrangement, so
+    // being offline must not push it behind the live room the way the grid's sort would.
+    viewModel.onAction(UiAction.SetFollowOrder(listOf(offline.key, live.key)))
+    idle()
+
+    assertEquals(listOf(offline.key, live.key), container.followStore.specialKeys())
+  }
+
   /**
    * The two follow-screen filters survive opening a room and coming back.
    *

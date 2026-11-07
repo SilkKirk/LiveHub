@@ -25,7 +25,12 @@ import kotlinx.serialization.json.put
  */
 internal object FollowCodec {
 
-  fun fromStreamer(streamer: Streamer, now: Long, order: JsonElement?): JsonObject = buildJsonObject {
+  fun fromStreamer(
+    streamer: Streamer,
+    now: Long,
+    order: JsonElement?,
+    special: Boolean = false,
+  ): JsonObject = buildJsonObject {
     put("platform", streamer.platform.id)
     put("roomId", streamer.roomId)
     put("streamerName", streamer.streamerName)
@@ -37,6 +42,9 @@ internal object FollowCodec {
     put("categoryName", streamer.categoryName.orEmpty())
     put("updatedAt", if (streamer.updatedAt == 0L) now else streamer.updatedAt)
     order?.let { put("order", it) }
+    // Only written when set, so a version-3 record stays byte-identical for users who never
+    // star anybody: an always-present `false` would rewrite every record on the next reorder.
+    if (special) put("special", true)
   }
 
   fun toStreamer(key: LibraryKey.Room, value: JsonObject): Streamer? {
@@ -62,4 +70,14 @@ internal object FollowCodec {
   /** A record's position in the follow list, or [Int.MAX_VALUE] when it has none yet. */
   fun orderOf(record: JsonObject?): Int =
     record?.get("order")?.jsonPrimitive?.intOrNull ?: Int.MAX_VALUE
+
+  /**
+   * True when this room is pinned to the 特别关注 row.
+   *
+   * Absent means false: the field only exists on records the user actually starred, so an old
+   * record (or any record written before this feature) reads as "not special" rather than needing
+   * a migration pass.
+   */
+  fun isSpecial(record: JsonObject?): Boolean =
+    record?.get("special")?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
 }

@@ -63,6 +63,15 @@ fun StreamerCard(
   onClick: () -> Unit,
   onToggleFollow: () -> Unit,
   modifier: Modifier = Modifier,
+  /**
+   * What the star means on this surface.
+   *
+   * The follow grid has no use for "关注" — every card in it is already followed — so there the
+   * star pins the room to 特别关注 instead. The icon stays the same because it is the same kind of
+   * action (a persistent mark on a room); only the words change, and they change because a screen
+   * reader user would otherwise be told "取消关注" by a button that unfollows nothing.
+   */
+  starLabels: Pair<String, String> = "关注" to "取消关注",
 ) {
   Surface(
     modifier = modifier
@@ -185,7 +194,7 @@ fun StreamerCard(
         ) {
           Icon(
             imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
-            contentDescription = if (followed) "取消关注" else "关注",
+            contentDescription = if (followed) starLabels.second else starLabels.first,
             // A filled star sits on a solid disc so it reads over any cover; the hollow one only
             // needs the scrim, which keeps the card calm when nothing is followed.
             tint = if (followed) MaterialTheme.colorScheme.primary else Color.White,

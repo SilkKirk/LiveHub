@@ -63,6 +63,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         deviceName = preferences.deviceName,
         searchHistory = settings.searchHistory,
         followed = container.followStore.followed(),
+        specialFollowKeys = container.followStore.specialKeys(),
         peers = preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
         bilibiliLogin = com.livehub.app.ui.components.BiliLoginUi(
@@ -80,6 +81,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SelectCategory -> selectCategory(action.category)
       is UiAction.SelectSubCategory -> selectSubCategory(action.category)
       is UiAction.SetFollowOrder -> setFollowOrder(action.keys)
+      is UiAction.ToggleSpecialFollow -> toggleSpecialFollow(action.streamer)
       is UiAction.SetFollowLiveFilter -> _state.update { it.copy(followLiveFilter = action.filter) }
       is UiAction.SetFollowPlatformFilter -> _state.update { it.copy(followPlatformFilter = action.platform) }
       is UiAction.ShowMessage -> _state.update { it.copy(message = action.text) }
@@ -544,7 +546,36 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     _state.update {
       it.copy(
         followed = followed,
+        // Unfollowing drops the room from the avatar row too, so the pair has to be read together.
+        specialFollowKeys = store.specialKeys(),
         message = if (followed.any { f -> f.key == streamer.key }) "已关注 ${streamer.streamerName}" else "已取消关注",
+      )
+    }
+  }
+
+  /**
+   * Pins or unpins [streamer] on the 特别关注 row.
+   *
+   * A room that is not followed is refused with a message rather than written: the flag lives on
+   * the follow record, so there is nowhere to put it, and a tap that silently does nothing reads
+   * as a broken button.
+   */
+  private fun toggleSpecialFollow(streamer: Streamer) {
+    val wasSpecial = streamer.key in _state.value.specialFollowKeys
+    val ok = container.followStore.toggleSpecial(
+      streamer = streamer,
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )
+    if (!ok) {
+      _state.update { it.copy(message = "先关注 ${streamer.streamerName}，才能设为特别关注") }
+      return
+    }
+    _state.update {
+      it.copy(
+        specialFollowKeys = container.followStore.specialKeys(),
+        message = if (wasSpecial) "已取消特别关注" else "已设为特别关注",
       )
     }
   }
@@ -1084,6 +1115,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         it.copy(
           peers = container.preferences.trustedPeers(),
           followed = container.followStore.followed(),
+          specialFollowKeys = container.followStore.specialKeys(),
           message = result.fold(
             onSuccess = { name -> "已与 $name 关联" },
             onFailure = { error -> error.message ?: "配对失败" },
@@ -1141,6 +1173,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           syncing = false,
           peers = container.preferences.trustedPeers(),
           followed = container.followStore.followed(),
+          specialFollowKeys = container.followStore.specialKeys(),
           syncLog = container.syncEngine.logEntries(),
           message = summary.message,
         )
