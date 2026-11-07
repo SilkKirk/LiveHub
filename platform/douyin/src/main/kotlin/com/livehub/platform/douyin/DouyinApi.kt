@@ -344,25 +344,72 @@ class DouyinApi(
    * and a refused status is reported with the platform's own text.
    */
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
-    val trimmed = keyword.trim()
-    if (trimmed.isEmpty()) return emptyList<Streamer>() to false
-
-    if (trimmed.all(Char::isDigit)) {
+    // `roomIdFrom` first: the commonest way to "search by id" is to paste the live-room link the
+    // app itself put on the clipboard, and `all(Char::isDigit)` used to send that down the
+    // keyword branch — where an anonymous user was told to log in for a number they had typed.
+    val roomId = roomIdFrom(keyword)
+    if (roomId != null) {
       // One id can only produce one card, so there is no second page to ask for.
       if (page > 1) return emptyList<Streamer>() to false
-      val info = enterRoom(trimmed) ?: return emptyList<Streamer>() to false
-      return listOf(info.toStreamer(trimmed)) to false
+      val info = enterRoom(roomId) ?: return emptyList<Streamer>() to false
+      return listOf(info.toStreamer(roomId)) to false
     }
+
+    val trimmed = keyword.trim()
+    if (trimmed.isEmpty()) return emptyList<Streamer>() to false
 
     if (!cookieStore.isLoggedIn()) {
       throw PlatformAuthRequiredException(
         "抖音的关键词搜索需要登录（接口返回 2483「请先登录，再继续搜索吧」）。" +
-          "在「设置 → 抖音账号」扫码登录后即可按昵称搜索；只输入房间号时不需要登录。",
+          "在「设置 → 抖音账号」扫码登录后即可按昵称搜索；" +
+          "输入房间号（或直接粘贴直播间链接）时不需要登录。",
         Platform.DOUYIN,
       )
     }
     return searchByKeyword(trimmed, page)
   }
+
+  /**
+   * The room id inside [raw], or null when [raw] is not a room number at all.
+   *
+   * Accepts the shapes a user can realistically paste — the bare number, the whole live-room
+   * URL, the app's own share text ("… https://live.douyin.com/123 … 复制打开"), full-width
+   * digits from a CJK keyboard, and a `房间号：<number>` label — and returns null for anything
+   * that reads as a name, so a nickname still reaches the keyword path.
+   *
+   * `Char.isDigit()` alone is not enough: it is false for the zero-width space that survives
+   * `trim()` (category Cf, not whitespace), so `all(Char::isDigit)` rejected a number that
+   * merely had a pasted separator in it.
+   */
+  fun roomIdFrom(raw: String): String? {
+    // `live.douyin.com/<id>` / `v.douyin.com/<code>`: the path segment is the id. Matched before
+    // the digit scan so a link never falls through to "keyword".
+    URL_ROOM_ID.find(raw)?.groupValues?.getOrNull(1)?.let { candidate ->
+      if (candidate.isNotEmpty() && candidate.all(Char::isLetterOrDigit)) return candidate
+    }
+    // `digitToInt` then `digitToChar`: full-width '１' is a digit (category Nd) but is *not* the
+    // ASCII '1', and the value goes into a query string. `digitToChar` renders 0..9 as ASCII.
+    val digits = raw.filter { it.isDigit() }.map { it.digitToInt().digitToChar() }.joinToString("")
+    if (digits.isEmpty()) return null
+
+    // The number has to *be* the input, apart from decoration. Decoration is anything that is
+    // not a letter: whitespace, the punctuation a copy carries along (zero-width chars, full-
+    // width colon), and the label a user types in front of it ("房间号：…"). A **letter** means
+    // the text is a name — except in the label positions, which are stripped by the whitelist
+    // below rather than by treating every letter as a separator.
+    val stripped = raw.replace(NUMBER_LABEL, "")
+    val leftover = stripped.filterNot {
+      it.isDigit() || it.isWhitespace() || it.isInvisibleOrSeparator()
+    }
+    if (leftover.isNotEmpty()) return null
+    return digits
+  }
+
+  /** Characters that a copy/paste can carry along without changing the meaning of a number. */
+  private fun Char.isInvisibleOrSeparator(): Boolean =
+    this == '\u200B' || this == '\u200C' || this == '\u200D' || this == '\uFEFF' ||
+      this == '-' || this == '_' || this == '：' || this == ':' || this == '　' ||
+      this == '，' || this == ',' || this == '.' || this == '。'
 
   /** Keyword search for a logged-in session; see [search]. */
   private suspend fun searchByKeyword(
@@ -827,6 +874,28 @@ class DouyinApi(
 
     /** `status_code` Douyin uses for "log in before you search". */
     private const val STATUS_LOGIN_REQUIRED = 2483
+
+    /**
+     * The room id at the end of a live-room link.
+     *
+     * Covers the shapes the app and the site produce: `https://live.douyin.com/<id>`,
+     * `live.douyin.com/<id>`, an optional query string, and the short `v.douyin.com/<code>`
+     * form (whose path is a share code, not a room number, and is passed through as-is — the
+     * `enter` call is what decides whether it resolves).
+     */
+    private val URL_ROOM_ID = Regex(
+      """(?:live|webcast|v)\.douyin\.com/(?:share/)?([A-Za-z0-9]+)""",
+      RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * The label a user types in front of an id.
+     *
+     * Stripped before the "is anything left besides the number?" check, because 房间号 is a
+     * word — treating it like punctuation would mean treating every letter as punctuation, and
+     * then a nickname would parse as an id.
+     */
+    private val NUMBER_LABEL = Regex("""房间号\s*[:：]?|直播间\s*[:：]?|room\s*id\s*[:：]?""", RegexOption.IGNORE_CASE)
     const val PAGE_SIZE = 20
   }
 }
