@@ -316,23 +316,23 @@ class DouyinSearchTest {
   }
 
   /**
-   * `enter` must be sent **without** `a_bogus`.
+   * `enter` is sent **with** `a_bogus`, exactly like the reference client.
    *
-   * Measured 2026-11-07: the same request returns the room unsigned, but answers HTTP 200 with
-   * an **empty body** as soon as an `a_bogus` value the server cannot validate is present —
-   * and an empty body is read as "no such room". That is what made a valid `web_rid` report
-   * 没有找到 even after the id classifier was fixed. This is the one endpoint that does not
-   * want a signature; `partition` requires a valid one and `feed` works signed.
+   * The reference (`DouyinWebApiAndroid.fetchRoomEnter`) computes `generateABogus(query, UA)` and
+   * appends it; our `aBogus` is the same implementation. Round 57 asserted the opposite on the
+   * strength of a bad experiment — a *deliberately arbitrary* `a_bogus` does yield HTTP 200 with
+   * an empty body, but that says the value must be valid, not that the parameter is unwanted.
+   * That assertion is why the regression went out: the test locked in the wrong request.
    */
   @Test
-  fun `the enter request carries no a_bogus signature`() = runBlocking {
+  fun `the enter request is signed with a_bogus`() = runBlocking {
     val http = FakeDouyinHttp { ok(enter(webRid = "AYM0707")) }
 
     api(http).search("AYM0707", page = 1)
 
     val url = http.urls.single()
     assertTrue(url.contains("/webcast/room/web/enter/"), url)
-    assertTrue(!url.contains("a_bogus"), "enter must stay unsigned: $url")
+    assertTrue(url.contains("a_bogus="), "enter must be signed: $url")
     assertTrue(url.contains("web_rid=AYM0707"), url)
     // `msToken` must still be present even though it is empty — omitting the key entirely
     // also produces the empty 200.
@@ -376,6 +376,7 @@ class DouyinSearchTest {
   @Test
   fun `an empty body from a stale cookie is retried with a fresh one`() = runBlocking {
     var enterCalls = 0
+    var negotiations = 0
     val http = FakeDouyinHttp { url ->
       when {
         url.contains("/webcast/room/web/enter/") -> {
@@ -383,15 +384,28 @@ class DouyinSearchTest {
           if (enterCalls == 1) ok("") else ok(enter(webRid = "AYM0707", nickname = "DNF王大枪"))
         }
         // The ttwid negotiation page.
-        else -> HttpResponse(200, "<html></html>", mapOf("Set-Cookie" to listOf("ttwid=fresh-token; Path=/")), url)
+        else -> {
+          negotiations++
+          HttpResponse(
+            200,
+            "<html></html>",
+            mapOf("Set-Cookie" to listOf("ttwid=fresh-token; Path=/")),
+            url,
+          )
+        }
       }
     }
+    // A stored-but-stale cookie is the state the bug is about, so seed one rather than leaving
+    // the store empty: with nothing stored the *first* request would already re-negotiate and
+    // the retry path would never run.
+    val api = DouyinApi(http, InMemoryDouyinCookieStore().apply { save("ttwid=stale-token") })
 
-    val (rooms, _) = api(http).search("AYM0707", page = 1)
+    val (rooms, _) = api.search("AYM0707", page = 1)
 
     assertEquals(1, rooms.size, "the retry must recover the room")
     assertEquals("AYM0707", rooms.single().roomId)
     assertEquals(2, enterCalls, "exactly one retry, not a loop: $enterCalls")
+    assertEquals(1, negotiations, "one fresh ttwid, not one per attempt: $negotiations")
   }
 
   /** A session that Douyin no longer accepts must say so, not look like "no results". */
