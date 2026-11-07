@@ -114,7 +114,10 @@ class DouyinSearchTest {
     // specific word, because the wording moved from 房间号 to 直播间号 when vanity ids
     // (AYM0707) turned out to be ids too.
     assertTrue(error.message.orEmpty().contains("直播间号"), error.message)
-    assertTrue("the message must say letters are fine too", error.message.orEmpty().contains("字母"), error.message)
+    assertTrue(
+      error.message.orEmpty().contains("字母"),
+      "the message must say letters are fine too: ${error.message}",
+    )
     assertTrue(http.urls.isEmpty(), "a keyword must not reach the network at all: ${http.urls}")
   }
 
