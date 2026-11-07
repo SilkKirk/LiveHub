@@ -2101,6 +2101,7 @@ val hasMore = list.isNotEmpty()
 - `DouyuAdapter.rooms` 的 `slug` 形参现在是纯接口占位（`LivePlatformAdapter.rooms` 要求它，
   但斗鱼已不用 HTML 抓取）。要不要从接口上撤掉，等虎牙/抖音/B 站一起看。
 - `关联设备` 弹层的截断疑点（第二十一轮记）仍在，要动先量到。
+
 ---
 
 ## 第二十四轮迭代：虎牙的两个真缺陷（房间页抓两遍、观众数恒为 0）
@@ -4990,3 +4991,105 @@ index 1，被挪走的可能是另一个平台的人。
   面板开关留在局部是对的，但 `selectedKeys` 在切分组时不会被清理——用户在
   多选状态下切分组，选中集合里会留下已经不在视图里的房间。目前批量面板会把
   它们一起归档，行为上说得过去，但值得确认这是不是想要的。
+
+---
+
+## 第五十三轮迭代：关注页去掉自定义分组，只剩两个筛选（用户要求）
+
+用户的原话是"关注这里还是还原回去吧，不用自定义分类了"。问清范围之后确认了两件事：
+
+| 问题 | 回答 |
+| --- | --- |
+| 回退到哪一步 | 连首页的「我的分区」收藏一起回退到第五十轮之前 |
+| 已经建过分组的设备怎么办 | 记录集版本升到 3，加载时丢掉 `group:` / `member:` / `fav:` |
+
+第五十轮加的是两件互相独立的事——关注分组与收藏分区。它们在同一批提交里，
+共用一份记录集和一次 schema 迁移，所以"只删分组、留着收藏"会把那份共用结构留成
+半死状态；用户选了整块回退，本轮就按整块做。
+
+### 删掉的是什么
+
+界面：
+
+- `FollowGroupSheet`（分组管理 + 逐房间归档）与 `BulkFileSheet`（多选批量归档）
+  整文件删除，连带 `LongPress.longPressOnly`——它唯一的调用点就是分类 chip 的长按收藏。
+- `FollowScreen` 回到"状态 + 平台"两行筛选：分组 chip 行、`管理` / `多选` 按钮、
+  行尾 `⋮`、行内分组标签、多选态下的选中边框全部消失。
+- 首页 `FavoritesRow`（「我的分区」）与分类 chip 上的长按收藏一起删除。
+- `UiState` 去掉 `roomGroups` / `followGroups` / `groupRoomOrder` / `selectedFollowGroupId`
+  / `favorites`；`UiAction` 去掉十个与之对应的 action。
+- `SyncScope.FOLLOWS` 的显示名回到「关注列表」，同步页两段说明文案同步改回。
+
+数据：
+
+- `LibraryStore` / `LibraryRecordSet` / `LibraryCodec` 改名为 `FollowStore` /
+  `FollowRecordSet` / `FollowCodec`，`AppContainer.libraryStore` 变回 `followStore`。
+  这与第五十轮之前的命名一致，git 历史里两个名字都能对上。
+- `LibraryKey` 只剩 `Room` 一种；`Group` / `Member` / `Favorite` 三个类型删除。
+- `RECORDS_VERSION` 2 → 3。
+
+### 三个不显然的决定
+
+**一、版本 3 是"丢掉"，不是"写墓碑"。** 这三种记录已经没有读方，留着只是把死重量
+推给每个对端。墓碑在同步语义上更干净，但它需要在加载时就有 HLC 和设备号——那时
+同步引擎还不存在——而这份分组在本机已经不可见了。所以选丢弃。
+
+代价是诚实地记在这里的：**仍在使用旧版本的已配对设备会把分组再推回来**，新版本
+每次都会丢掉它，旧设备那边则一直看得见自己的分组。这是"降级功能不带迁移"的必然
+结果，不是遗漏。
+
+**二、`normalize()` 在每次加载和每次 `replaceAll` 都跑，不是一次性迁移。** 一次性
+迁移的前提是"旧数据只会出现一次"，但一个仍在旧版本的对端可以随时推进来
+`group:` 记录。只在加载时丢，`apply()` 收下的记录会被原样存下并回推给所有对端。
+
+**三、`SCHEMA` 不动。** `room:` 记录的 JSON 形状没变，schema 描述的是**布局**而不是
+**种类集合**。升 schema 会让所有已发布设备拒绝与新版配对（`SyncEngine.applyPayload`
+对 `payload.schema > SCHEMA` 回"对端版本过新"），而旧对端多出来的那几个 key 只是
+被忽略。为了"少收几个会被丢掉的 key"去切断整个配对链路，代价不对等。
+
+### 一个跟着改的细节
+
+`FollowSyncTarget.apply()` 原来拿**收到的**记录数去比 `before` 映射，于是一个旧对端
+推进来的 `group:` 记录会被记成"同步了一条数据"——同步日志会声称移动了它根本没存的
+东西。现在按 store 里**留下的**记录数，`FollowStoreTest` 里那条
+`a retired record kind arriving from a peer is dropped on apply` 钉住了它（断言
+`applied == 0`）。
+
+### 顺手记下的两处旧账（本轮未动）
+
+- `UserSettings` 的字段改名为 `followRecords`，但保留了 `@SerialName("libraryRecords")`。
+  改线名会让已有安装读出一个空字符串，也就是"一条关注都没有"——内部重构不该清空
+  用户的关注列表。
+- `HomeScreen` 里有四个从来没用过的 import（`clickable` / `getValue` / `setValue` /
+  `pointerInput`），`UiState` 里有一个（`RoomPage`）。这些在本次改动**之前**就在，
+  按"改哪个文件就顺手收拾干净"的原则清了 `AssistChip` 与 `StarBorder`（这两个是本轮
+  删功能后变成孤儿的），其余四个没动——它们是既有问题，混进一次功能性提交会让 diff
+  更难读。
+
+### CI 抓出的问题
+
+一条，是测试自己写错，而且正是本轮改动最该警惕的那类混淆：`FollowStoreTest` 里把
+`room:douyu:288016`（记录 key）与 `followed()` 返回的 `Streamer.key`
+（裸 `douyu:288016`）当成同一种东西直接断言。CI 的报错
+`expected:<[room:douyu:288016]> but was:<[douyu:288016]>` 把两个命名空间摆在一起，
+一眼就能看出问题。两条断言现在各读各的映射，注释里写清了区别。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `633d093` 三个 job 全绿 |
+
+### 下一轮
+
+- `FollowScreen` 的两个筛选还在 `UiState` 里，这点是本轮刻意保留的：第五十二轮
+  修的是"从房间返回筛选被重置"，与分组无关。
+- 记录集现在只有一种 key，`LibraryKey` 这个**类型名**已经名不副实（它描述的是
+  follow 列表里的一条记录）。改名会再动一次 `core:model` 的测试与 `LibraryKeyTest`，
+  留到真正需要碰这个文件的时候一起做。
+- 旧版本对端的分组会一直"推回来又被丢掉"。如果以后要处理，正确做法是让
+  `SyncPayload.SCHEMA` 之外再加一个"对端能力"字段，而不是再升一次布局版本。
