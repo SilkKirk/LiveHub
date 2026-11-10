@@ -66,7 +66,10 @@ class InfiniteScrollTest {
     Streamer(
       platform = Platform.DOUYU,
       roomId = "$prefix$index",
-      streamerName = "$prefix主播$index",
+      // Braces are required, not cosmetic: CJK characters are valid Kotlin identifier
+      // characters, so `"$prefix主播"` parses as one identifier named `prefix主播` and fails to
+      // resolve. This is the one place a template needs delimiting.
+      streamerName = "${prefix}主播$index",
       title = "$prefix 标题 $index",
       isLive = true,
       viewerCount = 1_000L * index,
@@ -114,8 +117,8 @@ class InfiniteScrollTest {
 
     // The cold-start shape: nothing loaded yet, so there is nothing to scroll.
     assertTrue(
-      state.rooms.isEmpty(),
       "the fixture must start empty, otherwise this test cannot reproduce a cold start",
+      state.rooms.isEmpty(),
     )
 
     // The first page arrives, and the platform reports another one behind it.
@@ -126,8 +129,8 @@ class InfiniteScrollTest {
     composeRule.waitForIdle()
 
     assertTrue(
-      actions.contains(UiAction.LoadMore),
       "scrolling to the bottom of the grid must dispatch LoadMore, got $actions",
+      actions.contains(UiAction.LoadMore),
     )
   }
 
@@ -151,8 +154,8 @@ class InfiniteScrollTest {
     composeRule.waitForIdle()
 
     assertTrue(
-      state.searchResults.isEmpty(),
       "the fixture must start with no results, which is how the search page is always entered",
+      state.searchResults.isEmpty(),
     )
 
     state = state.copy(
@@ -167,8 +170,8 @@ class InfiniteScrollTest {
     composeRule.waitForIdle()
 
     assertTrue(
-      actions.contains(UiAction.LoadMoreSearch),
       "scrolling to the bottom of the results must dispatch LoadMoreSearch, got $actions",
+      actions.contains(UiAction.LoadMoreSearch),
     )
   }
 
@@ -198,8 +201,8 @@ class InfiniteScrollTest {
     composeRule.waitForIdle()
 
     assertTrue(
-      actions.none { it == UiAction.LoadMore },
       "a list with no next page must not dispatch LoadMore, got $actions",
+      actions.none { it == UiAction.LoadMore },
     )
   }
 }
