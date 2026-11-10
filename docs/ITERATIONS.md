@@ -5515,3 +5515,157 @@ val url = "https://live.douyin.com/webcast/room/web/enter/?$query&a_bogus=${sign
   以及代码会在空 body 时重试。用户设备上的旧 ttwid 是否真的被这一步换掉，只有装上才知道。
 - `feed` / `partition` 的签名要求仍没有各自单独验证过。本轮只确认了 `enter` 与参考项目一致。
 - 抖音已登录的关键词搜索仍无真实响应验证（无账号）。
+
+---
+
+## 第五十九轮迭代：无限加载从未触发，以及一个能被同网段任意程序读走的洞
+
+这一轮不是从待办里挑的，是对整个项目做了一次审计后按"用户每天都会碰到"排序得到的两件事。
+审计读了 176 个 Kotlin 文件、CI 配置、39 张截图与全部迭代记录。
+
+### 缺陷一：首页和搜索页的"加载更多"从来没被派发过
+
+两处的写法一模一样：
+
+```kotlin
+val shouldLoadMore by remember {
+  derivedStateOf {
+    state.hasMore && last >= state.rooms.size - 4 && state.rooms.isNotEmpty()
+  }
+}
+```
+
+`UiState` 是**不可变 data class**，不是 snapshot state。`derivedStateOf` 只跟踪它内部
+读到的 snapshot state（这里是 `gridState.layoutInfo`），重算时读 `state` 读到的是**闭包
+捕获的那个实例**。而 `remember` 没有 key，捕获的是**首次组合**的实例。
+
+冷启动那一刻：`rooms = emptyList()`、`hasNextPage = false`。于是 `state.hasMore` 恒为
+`false`，`LaunchedEffect` 永远不派发 `LoadMore`。
+
+**它为什么能活过五十八轮**：切到关注页再切回首页会销毁并重建这个 composable，`remember`
+重新执行、捕获到一个已经有数据的 `state`，于是它"有时能用"。搜索页没有这个运气——它
+**总是**在搜索之前被进入，捕获的空结果集是必然的，所以按关键词翻页**一次都没有工作过**。
+
+修法是 `rememberUpdatedState(state)`，派生值改读 `current`。
+
+**为什么现有测试抓不到**：`CategoryPaginationTest` 与 `SearchPagingTest` 都直接调
+`viewModel.onAction(UiAction.LoadMore)`。它们测的是 ViewModel 的请求形状，没有一条测试
+真的把列表滚到底。新增的 `InfiniteScrollTest` 三条：
+
+| 用例 | 断言 |
+| --- | --- |
+| 首页滚动到底 | **先组合空态**、再推 12 条进去、滚到 index 11 → 必须派发 `LoadMore` |
+| 搜索页滚动到底 | 同上，必须派发 `LoadMoreSearch` |
+| 单页平台（`hasNextPage = false`） | 滚到底**不得**派发，否则修复会变成对抖音 feed 无限打请求 |
+
+第一条和第二条的"先空后满"是**这个测试的全部价值**：直接组合一个已填充的 state，
+在坏代码上也会通过。
+
+本地用 Python 把两个判据等价跑了一遍（runbook 要求的做法，本机不跑 Gradle）：
+
+```
+broken -> home=False, search=False
+fixed  -> home=True,  search=True
+ALL CHECKS PASSED
+```
+
+### 缺陷二：未配对设备只要 `secret: ""` 就能拉走关注列表和登录 cookie
+
+`SyncHttpServer` 的 `handlePull` / `handlePush` 判据是：
+
+```kotlin
+if (peer == null && !acceptsUnpaired(envelope)) return Response(403, ...)
+
+private fun acceptsUnpaired(envelope: SyncEnvelope): Boolean =
+  envelope.secret.isBlank() && handler.peerById(envelope.deviceId) == null
+```
+
+`acceptsUnpaired` 本来是给**配对**用的（配对时对方还没有密钥可出示，六位码就是凭据）。
+把它用在数据路径上，等于：**同一 Wi-Fi 下任何程序，`deviceId` 随便填一个没配对过的值、
+`secret` 留空，`GET /livehub/v1/pull?scope=credentials` 就能拿到 B 站和抖音的会话
+cookie**，还能 push 覆盖关注列表。
+
+这与 `SyncModels.kt` 的注释（"服务端在读到 payload 之前就用配对密钥校验过请求"）和
+README 的"只发给已配对设备"直接冲突。
+
+**为什么现有测试抓不到**：`pull rejects an unpaired peer` 用的是 `secret = "wrong"`——
+非空，恰好绕开了唯一有洞的那条路径。
+
+改法：`handlePull` / `handlePush` 一律 `authenticate(envelope) ?: 403`，删掉
+`acceptsUnpaired`。新增两条测试用 `secret = ""`（正是漏掉的那个输入），并且不只断言
+403，还断言 `pullCalls` / `pushCalls` 仍为 0——一个"先构造 payload 再回 403"的服务端
+照样把数据泄进了响应体。
+
+顺带删掉 `SyncHttpServer` 的 `localSecret` 构造参数：它**从头到尾没有被读过**，正是这个
+洞的历史来源。
+
+### 顺带清理
+
+审计还查出七个声明了但零引用的依赖。全仓库 import 计数：
+
+| 依赖 | 引用数 | 说明 |
+| --- | --- | --- |
+| `androidx.navigation:navigation-compose` | 0 | 导航是 `UiState.screen` 枚举，没有 NavHost |
+| `media3-exoplayer-dash` | 0 | `LivePlayer` 只在 HLS 与 progressive 之间选 |
+| `media3-datasource-okhttp` | 0 | 用的是 `DefaultHttpDataSource`（要自定义 Referer） |
+| `org.bouncycastle:bcprov` | 0 | 签名全是手写 MD5/RC4/WBI/a_bogus，四个平台模块都声明了 |
+| `org.jmdns:jmdns` | 0 | 发现走 Android `NsdManager`，`proguard-rules.pro` 里还留着它的 `-keep` |
+| `io.mockk` | 0 | 测试一个都没用 |
+| `app.cash.turbine` | 0 | 同上 |
+
+另外 `core/data`、`core/sync` 与四个 `platform:*` 的 `build.gradle.kts` 里
+`testImplementation(libs.kotlinx.coroutines.test)` 都写了两遍。
+
+`AppContainer.mediaClient` 与它唯一的用途 `HttpClients.mediaBuilder()` 也是死的
+（`LivePlayer` 自己建 `DefaultHttpDataSource`），一并删掉；顺手把 `webSocketClient` 那段
+内联配置收成 `HttpClients.webSocketBuilder()`，让"为什么 readTimeout 是 0"有个能写注释的
+地方。
+
+文档纠偏三处：README 的 `compileSdk 37.2`（实际是 `37`）、"无限加载"（本轮之前是死的）、
+ITERATIONS 的"墓碑保留 30 天"（第三十二轮就删了按时间清理）。
+
+### 本轮踩的坑（都是我自己的错）
+
+第一次推送 CI 红了，两条编译错误：
+
+1. **断言参数顺序**。我按 runbook 里那条 Jupiter 规则把 `:app` 的测试"统一"成
+   `assertTrue(cond, "msg")`。但 `:app` 用的是 `org.junit.Assert`（JUnit 4），
+   message 在**第一位**——方向改反了。runbook 那条规则本身没错，漏掉的前提是
+   **同一个仓库里两套 API 顺序相反**，判断依据只能是文件顶部的 import。已把这条补进
+   runbook 第四节，并写明"不是看仓库里大多数人怎么写"。
+2. **`"$prefix主播$index"`**。中文字符是合法的 Kotlin 标识符字符，模板把 `prefix主播`
+   解析成一个标识符，报 `Unresolved reference`。改成 `"${prefix}主播$index"`。
+   全仓库扫了一遍 `"$ident<CJK>` 这个形态，没有第二处。
+
+两条都该在推送前用 `Select-String` 扫出来，而不是等 CI。runbook 的"改完一批断言后整体
+扫一遍"那条我照做了，但扫描的正则只找"首参是字符串字面量"，而我把字面量写到了第二位，
+于是扫不到。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `679d745` 三个 job 全绿 |
+
+### 下一轮
+
+审计里还有这些没做（按我判断的优先级）：
+
+- **`MainViewModel` 从不 `onCleared`**：`MainActivity` 直接 `MainViewModel(container)` 而
+  不是走 `ViewModelStore`，所以 `onCleared()` 里的 `syncController.stop()` 一次都不会执行。
+  后果是 `SyncHttpServer` 从打开同步页起一直监听端口，且那个六位匹配码在界面上早已不可见
+  之后仍然有效（`PairingWindow` 的注释明确说"an open code must not outlive the page"）。
+- **主线程 `runBlocking` 读盘**：`UserPreferences.deviceId` 没有缓存，每点一次关注星标都是
+  一次主线程 `dataStore.data.first()` 加一次主线程 `edit`。
+- **弹幕连不上时永远显示"正在连接弹幕…"**：`MainViewModel.startDanmaku` 用
+  `runCatching { collect { ... else -> Unit } }` 把 `Failed`/`Disconnected` 全吞了，
+  四个适配器都发了这些事件，没有一处被消费。
+- **`LivePlayer.retriedRef` / `hasFirstFrame` 不随 URL 重置**：换清晰度后新 URL 一次都不
+  自动重试。
+- **界面项**：搜索页没有平台切换器、平板只有两列、关注页筛选行在单平台时整行消失、
+  卡片星标 32dp 小于 48dp 触控目标、设置页没有版本号、深色主题零截图覆盖。
+
