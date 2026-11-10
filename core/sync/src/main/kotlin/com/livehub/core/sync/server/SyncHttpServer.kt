@@ -28,7 +28,6 @@ import kotlin.concurrent.thread
 class SyncHttpServer(
   private val deviceId: Long,
   private val deviceName: String,
-  private val localSecret: String,
   private val handler: Handler,
 ) {
   /** Implemented by the app to serve payloads from the sync engine. */
@@ -192,10 +191,13 @@ class SyncHttpServer(
 
   private fun handlePull(request: Request): Response {
     val envelope = decode(request.body) ?: return Response(400, errorBody("bad envelope"))
-    val peer = authenticate(envelope)
-    if (peer == null && !acceptsUnpaired(envelope)) {
-      return Response(403, errorBody("未配对"))
-    }
+    // **Paired only.** `acceptsUnpaired` must never be consulted here: it answers "yes" for any
+    // request that omits the secret entirely, so honouring it on the data paths let any program
+    // on the same Wi-Fi pull the follow list and the Bilibili/Douyin session cookies by sending
+    // `secret: ""` under a device id this installation has never seen. The pairing endpoint is
+    // the only unauthenticated one, and it is unauthenticated because the six digit code *is*
+    // its credential.
+    val peer = authenticate(envelope) ?: return Response(403, errorBody("未配对"))
     val scope = request.query["scope"]?.let { SyncScope.fromWireName(it) }
       ?: return Response(400, errorBody("bad scope"))
     // A scope larger than one payload is fetched piecewise: the caller passes `chunk`, gets
@@ -229,10 +231,9 @@ class SyncHttpServer(
   private fun handlePush(request: Request): Response {
     val envelope = decode(request.body) ?: return Response(400, errorBody("bad envelope"))
     val payload = envelope.payload ?: return Response(400, errorBody("missing payload"))
-    val peer = authenticate(envelope)
-    if (peer == null && !acceptsUnpaired(envelope)) {
-      return Response(403, errorBody("未配对"))
-    }
+    // Paired only, for the same reason as [handlePull] — and here the stake is worse: an
+    // anonymous push could overwrite the follow list or plant a session cookie.
+    val peer = authenticate(envelope) ?: return Response(403, errorBody("未配对"))
     // Writers and settings look different from here, so the decision belongs to the handler.
     // What matters is that a refusal is *not* an error response: nothing failed.
     val response = try {
@@ -275,13 +276,6 @@ class SyncHttpServer(
     val peer = handler.peerById(envelope.deviceId) ?: return null
     return if (peer.sharedSecret == envelope.secret) peer else null
   }
-
-  /**
-   * Pairing itself is unauthenticated by design — the six digit code *is* the
-   * credential and it expires after a few minutes.
-   */
-  private fun acceptsUnpaired(envelope: SyncEnvelope): Boolean =
-    envelope.secret.isBlank() && handler.peerById(envelope.deviceId) == null
 
   private fun decode(body: String): SyncEnvelope? =
     runCatching { SyncEnvelope.decode(body) }.getOrNull()

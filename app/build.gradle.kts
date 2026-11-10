@@ -124,7 +124,6 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
     // Douyu signs playback requests by running the site's own JS; the signature
     // algorithm changes without notice, so the script is evaluated rather than
@@ -138,18 +137,28 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
 
+    // HLS only. DASH was never wired up — `LivePlayer` picks between `HlsMediaSource` and
+    // `ProgressiveMediaSource`, and no platform adapter serves a DASH manifest — so the module
+    // was pure APK weight. The OkHttp data source is absent for the same reason: playback uses
+    // `DefaultHttpDataSource`, because the CDNs need custom `Referer` headers and cross-protocol
+    // redirects that the OkHttp one handles less predictably.
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
-    implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui)
-    implementation(libs.media3.datasource.okhttp)
 
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
     implementation(libs.zxing.core)
-    implementation(libs.jmdns)
-    implementation(libs.bouncycastle)
+
+    // Deliberately absent:
+    //  * `navigation-compose` — navigation is the `Screen` enum in `UiState`, driven by the
+    //    ViewModel; a NavHost would be a second source of truth.
+    //  * `jmdns` — LAN discovery goes through Android's own `NsdManager`
+    //    (`NsdPeerDiscovery`), so the library was never referenced (its `-keep` rule in
+    //    proguard-rules.pro went with it).
+    //  * `bouncycastle` — every signature in this app is hand-written (MD5/RC4/WBI/a_bogus);
+    //    no `Security.addProvider`, `Cipher` or `X509` call exists anywhere.
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
@@ -161,8 +170,6 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.kotlin.test.junit5)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.mockk)
-    testImplementation(libs.turbine)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.test.ext.junit)

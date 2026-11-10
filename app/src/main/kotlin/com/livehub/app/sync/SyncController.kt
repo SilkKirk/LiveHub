@@ -128,7 +128,6 @@ class SyncController(
     val httpServer = SyncHttpServer(
       deviceId = deviceId,
       deviceName = deviceName,
-      localSecret = CURRENT_SECRET,
       handler = object : SyncHttpServer.Handler {
         override fun onPair(envelope: SyncEnvelope, remoteAddress: String): PairingOutcome {
           // The typed code is the whole credential here, and it is checked against the
@@ -475,11 +474,5 @@ class SyncController(
      * with nothing behind it, and waiting longer would only stall a 254 address sweep.
      */
     private const val LOCATE_ATTEMPT_TIMEOUT_MILLIS = 350
-
-    /**
-     * Secret used for the very first exchange. Pairing replaces it with a per-peer
-     * random value, so this constant never protects real data.
-     */
-    private const val CURRENT_SECRET = "livehub-pairing"
   }
 }

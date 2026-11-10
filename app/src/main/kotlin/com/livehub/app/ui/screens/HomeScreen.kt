@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -198,15 +199,27 @@ private fun PlatformPage(
   val gridState = rememberLazyGridState()
   val followedKeys = remember(state.followed) { state.followed.map { it.key }.toSet() }
   val refreshing = state.refreshing
+  /**
+   * The state as of *this* recomposition, for the derived value below.
+   *
+   * [UiState] is an immutable data class, not a snapshot state object: a `derivedStateOf` that
+   * closed over the `state` parameter would only recompute when `gridState` changed, and would
+   * then read whichever instance it captured. `remember` with no key captures the **first** one,
+   * which on a cold start is `rooms = emptyList(), hasNextPage = false` — so `hasMore` stayed
+   * false for the lifetime of the page and 加载更多 was never dispatched. It appeared to work
+   * after visiting another tab only because that destroys and re-creates this composable, so the
+   * `remember` captured a state that already had rooms in it.
+   */
+  val current by rememberUpdatedState(state)
   // Only ask for another page when the platform actually reports one. Douyin's feed and Douyu's
   // directory both serve a single page, and without this guard the grid kept requesting "more" on
   // every scroll to the bottom.
   val shouldLoadMore by remember {
     derivedStateOf {
       val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-      state.hasMore &&
-        last >= state.rooms.size - 4 &&
-        state.rooms.isNotEmpty()
+      current.hasMore &&
+        last >= current.rooms.size - 4 &&
+        current.rooms.isNotEmpty()
     }
   }
   // Which group the partition row is showing. Kept per platform so a switch back restores the tree

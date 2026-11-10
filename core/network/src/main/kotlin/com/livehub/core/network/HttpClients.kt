@@ -13,9 +13,14 @@ import java.util.concurrent.ConcurrentHashMap
  * Platform endpoints are extremely picky about TLS fingerprints, HTTP/2 and cookie
  * handling, so the app keeps two clients:
  *
- * * [main] — JSON APIs, HTTP/2 enabled, aggressive connection reuse.
- * * [media] — stream manifests and segments, HTTP/2 disabled because several CDNs
- *   break on h2 upgrade, plus a much larger read timeout.
+ * * [mainBuilder] — JSON APIs, aggressive connection reuse.
+ * * [webSocketBuilder] — the danmaku sockets, which must never time out a read and need
+ *   keep-alive pings.
+ *
+ * There used to be a third, `mediaBuilder`, for stream manifests. It was never instantiated:
+ * `LivePlayer` builds its own `DefaultHttpDataSource` because the CDNs need per-platform
+ * `Referer` headers and cross-protocol redirects. It has been removed rather than left as a
+ * plausible-looking entry point that nothing calls.
  */
 object HttpClients {
   val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -54,21 +59,21 @@ object HttpClients {
         }
       }
 
-  fun mediaBuilder(): OkHttpClient.Builder =
-    OkHttpClient.Builder()
-      .followRedirects(true)
-      .followSslRedirects(true)
-      .retryOnConnectionFailure(true)
-      .connectTimeout(DEFAULT_CONNECT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-      .readTimeout(READ_STREAM_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-      .writeTimeout(DEFAULT_WRITE_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-      // Many stream CDNs return 302 to hosts that break on HTTP/2 upgrades.
-      .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+  /**
+   * Client for the danmaku WebSockets.
+   *
+   * `readTimeout(0)` because a quiet room can go minutes without a frame and a read timeout
+   * would tear down a healthy connection; the ping keeps NAT mappings and the platform's own
+   * idle reaper happy instead.
+   */
+  fun webSocketBuilder(debugLogging: Boolean = false): OkHttpClient.Builder =
+    mainBuilder(debugLogging)
+      .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+      .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
 
   private const val DEFAULT_CONNECT_SECONDS = 15L
   private const val DEFAULT_READ_SECONDS = 20L
   private const val DEFAULT_WRITE_SECONDS = 20L
-  private const val READ_STREAM_SECONDS = 60L
 }
 
 /**

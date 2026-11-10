@@ -17,10 +17,6 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 
-# JmDNS needs its service type classes
--keep class javax.jmdns.** { *; }
--dontwarn javax.jmdns.**
-
 # Media3
 -dontwarn androidx.media3.**
 

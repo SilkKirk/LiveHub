@@ -59,7 +59,6 @@ class CrossDeviceSyncTest {
       server = com.livehub.core.sync.server.SyncHttpServer(
         deviceId = id,
         deviceName = name,
-        localSecret = selfSecret,
         handler = object : com.livehub.core.sync.server.SyncHttpServer.Handler {
           override fun onPair(
             envelope: SyncEnvelope,

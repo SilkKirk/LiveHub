@@ -59,15 +59,8 @@ class AppContainer(
     HttpClients.mainBuilder(debugLogging).build()
   }
 
-  val mediaClient: OkHttpClient by lazy {
-    HttpClients.mediaBuilder().build()
-  }
-
   val webSocketClient: OkHttpClient by lazy {
-    HttpClients.mainBuilder(debugLogging)
-      .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
-      .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
-      .build()
+    HttpClients.webSocketBuilder(debugLogging).build()
   }
 
   val httpClient: HttpClient by lazy { OkHttpHttpClient(jsonClient) }

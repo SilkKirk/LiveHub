@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -61,10 +62,23 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val followedKeys = remember(state.followed) { state.followed.map { it.key }.toSet() }
   val listState = rememberLazyListState()
 
+  /**
+   * The state as of *this* recomposition, for the derived value below.
+   *
+   * Same defect as the home grid: [UiState] is an immutable data class, so a `derivedStateOf`
+   * closing over the `state` parameter recomputes only when `listState` changes and then reads
+   * whichever instance it captured — and `remember` with no key captures the first one. On this
+   * screen that first instance is always `searchResults = emptyList(), searchHasMore = false`,
+   * because the page is entered before anything has been searched. 加载更多 therefore never
+   * fired and a keyword search was stuck on its first page forever.
+   */
+  val current by rememberUpdatedState(state)
   val shouldLoadMore by remember {
     derivedStateOf {
       val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-      state.searchHasMore && last >= state.searchResults.size - 3 && state.searchResults.isNotEmpty()
+      current.searchHasMore &&
+        last >= current.searchResults.size - 3 &&
+        current.searchResults.isNotEmpty()
     }
   }
 

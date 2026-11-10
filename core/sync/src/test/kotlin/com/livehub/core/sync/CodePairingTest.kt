@@ -52,7 +52,6 @@ class CodePairingTest {
     val server = SyncHttpServer(
       deviceId = hostDeviceId,
       deviceName = "小米平板 6",
-      localSecret = hostSecret,
       handler = object : SyncHttpServer.Handler {
         override fun onPair(envelope: SyncEnvelope, remoteAddress: String): PairingOutcome {
           // Validated through the same window the UI drives, so expiry and the per-source

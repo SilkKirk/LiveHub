@@ -40,7 +40,6 @@ class SyncHttpServerTest {
     server = SyncHttpServer(
       deviceId = 1,
       deviceName = "phone",
-      localSecret = "local-secret",
       handler = object : SyncHttpServer.Handler {
         override fun onPair(envelope: SyncEnvelope, remoteAddress: String): PairingOutcome {
           val expected = expectedPairCode ?: return PairingOutcome.Rejected("本机尚未生成配对码")
@@ -118,6 +117,55 @@ class SyncHttpServerTest {
     )
     assertEquals(403, response.status)
   }
+
+  /**
+   * The hole the test above could not see: an **empty** secret.
+   *
+   * `acceptsUnpaired` used to be consulted on the data paths as well as on pairing, and its
+   * whole condition was `secret.isBlank() && peerById(deviceId) == null`. So a request that
+   * simply omitted the secret — from a device id this installation had never heard of — was
+   * waved through, and `GET /livehub/v1/pull?scope=credentials` returned the Bilibili and
+   * Douyin session cookies to anything on the same Wi-Fi. The test above passes `"wrong"`,
+   * which is non-blank, so it exercised the one branch that was already safe.
+   *
+   * Both halves are asserted: the status, and that the handler was never reached. A server
+   * that returned 403 *after* building a payload would still have leaked it into a response.
+   */
+  @Test
+  fun `pull rejects an unknown device that omits the secret`() {
+    val response = post(
+      "${SyncEnvelope.PATH_PULL}?scope=credentials",
+      SyncEnvelope.encode(SyncEnvelope(deviceId = 99, deviceName = "stranger", secret = "")),
+    )
+
+    assertEquals(403, response.status)
+    assertEquals(0, pullCalls, "an unpaired pull must not reach the handler")
+  }
+
+  @Test
+  fun `push rejects an unknown device that omits the secret`() {
+    val payload = SyncPayload(
+      scope = "credentials",
+      sourceDeviceId = 99,
+      sequence = 1,
+      createdAt = 0,
+      entries = """[{"key":"login:douyin","deleted":false,"hlc":"1-0","deviceId":99,"updatedAt":1}]""",
+    )
+    val response = post(
+      SyncEnvelope.PATH_PUSH,
+      SyncEnvelope.encode(
+        SyncEnvelope(deviceId = 99, deviceName = "stranger", secret = "", payload = payload),
+      ),
+    )
+
+    assertEquals(403, response.status)
+    assertEquals(0, pushCalls, "an unpaired push must not reach the handler")
+  }
+
+  // Pairing stays unauthenticated — that is what the six digit code is for. Covered by
+  // `pairing succeeds with the correct code` below, which sends `secret = ""`. It is called out
+  // here because the two tests above could otherwise be "fixed" by requiring a secret
+  // everywhere, which would break the only flow that has no secret to present yet.
 
   @Test
   fun `pull accepts a paired peer and returns a payload`() {
