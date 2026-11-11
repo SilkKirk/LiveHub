@@ -625,10 +625,16 @@ private fun PartitionChip(
   )
 }
 
-/** The chevron that swaps between the one-line row and the wrapped tree. */
+/**
+ * The chevron that swaps between the one-line row and the wrapped tree.
+ *
+ * 48dp, not 36dp. `IconButton` applies Material's minimum touch target only when it is not given an
+ * explicit size, so `size(36.dp)` shrank the *tap* area to 36dp as well — on a screen whose whole
+ * point is dense chips, that made the one control that expands the tree the hardest thing to hit.
+ */
 @Composable
 private fun ChevronButton(expanded: Boolean, onClick: () -> Unit) {
-  IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+  IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
     Icon(
       imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
       contentDescription = if (expanded) "收起分类" else "展开分类",

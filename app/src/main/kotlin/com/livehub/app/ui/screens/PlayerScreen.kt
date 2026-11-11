@@ -656,19 +656,30 @@ private fun ControlFab(
   description: String,
   onClick: () -> Unit,
 ) {
-  Surface(
-    modifier = Modifier.size(38.dp).clip(CircleShape).clickable(onClick = onClick),
-    shape = CircleShape,
-    color = Color.White.copy(alpha = 0.10f),
-    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+  // 48dp touch target around a 38dp disc.
+  //
+  // The `Surface` used to be the clickable node at 38dp, which is below the 48dp minimum. These
+  // float over the video, so a miss does not just fail to open the sheet — it toggles the chrome
+  // (the tap-to-show-controls layer underneath) and the buttons disappear, which reads as a
+  // broken control rather than as a missed tap.
+  Box(
+    modifier = Modifier.size(48.dp).clip(CircleShape).clickable(onClick = onClick),
+    contentAlignment = Alignment.Center,
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(
-        imageVector = icon,
-        contentDescription = description,
-        tint = Color.White.copy(alpha = 0.92f),
-        modifier = Modifier.size(20.dp),
-      )
+    Surface(
+      modifier = Modifier.size(38.dp),
+      shape = CircleShape,
+      color = Color.White.copy(alpha = 0.10f),
+      border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(
+          imageVector = icon,
+          contentDescription = description,
+          tint = Color.White.copy(alpha = 0.92f),
+          modifier = Modifier.size(20.dp),
+        )
+      }
     }
   }
 }
@@ -723,11 +734,27 @@ private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
         onClick = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
       )
       Spacer(Modifier.weight(1f))
-      Text(
-        text = "弹幕 ${state.danmaku.size}",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+      // A section label, not a count.
+      //
+      // This read "弹幕 37" and the number was `state.danmaku.size` — the *render buffer*, capped at
+      // 200 (`MAX_DANMAKU_BUFFER`). So it climbed while a room was watched, pinned at 200, and
+      // reset whenever the player closed: a live number that answered no question anyone asks
+      // (it is not "messages so far", not "viewers", not "unread"). The panel underneath already
+      // says whether the socket is connecting or failed, which is the only thing worth stating
+      // here.
+      if (state.danmakuEnabled) {
+        Text(
+          text = "弹幕",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      } else {
+        Text(
+          text = "弹幕已关闭",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
     }
   }
 }
