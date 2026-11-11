@@ -132,7 +132,9 @@ fun StreamerGridSkeleton(
   itemCount: Int = 6,
 ) {
   LazyVerticalGrid(
-    columns = GridCells.Fixed(2),
+    // Must match the real grid in HomeScreen/FollowScreen exactly, or the column count changes the
+    // moment the first page arrives and every tile jumps sideways. Both use [CardMinWidth].
+    columns = GridCells.Adaptive(minSize = CardMinWidth),
     modifier = modifier.fillMaxSize(),
     contentPadding = PaddingValues(12.dp),
     horizontalArrangement = Arrangement.spacedBy(10.dp),

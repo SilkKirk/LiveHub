@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -41,6 +42,20 @@ import com.livehub.core.model.Streamer
 
 /** Card corner radius. 16dp reads as "tile" rather than "button" at 2-column widths. */
 private val CardShape = RoundedCornerShape(16.dp)
+
+/**
+ * Narrowest a room tile may get before the grid adds a column.
+ *
+ * 140dp, and the number is derived rather than picked. `GridCells.Adaptive` takes the largest `n`
+ * with `n * minSize + (n - 1) * spacing <= width - 2 * contentPadding`, and the grids use 12dp of
+ * padding with 10dp between tiles. At the 320dp phone width the app already ships on, that leaves
+ * 296dp, so `minSize` must be **at most 143dp** for two columns to fit — 156dp, the first value
+ * tried here, silently collapsed the phone grid to a single column. At 640dp this resolves to four.
+ *
+ * Shared by the real grids and by the loading skeleton so the column count cannot change when the
+ * first page arrives.
+ */
+internal val CardMinWidth: Dp = 140.dp
 
 /** The cover is inset inside the card, so its radius is the card's minus the inset. */
 private val CoverShape = RoundedCornerShape(12.dp)
@@ -188,9 +203,19 @@ fun StreamerCard(
           }
         }
 
+        // The tap target is 48dp even though the star draws at 32dp.
+        //
+        // `size(32.dp)` on the `IconButton` used to shrink the *touch* area too, and 32dp is
+        // below the 48dp minimum both Material and the platform accessibility guidance call for:
+        // on a 320dp-wide screen the star is a 6dp-radius circle squeezed into a corner, and
+        // missing it opens the room instead of following it. The disc stays 32dp so the card looks
+        // the same; the padding is what the finger gets.
         IconButton(
           onClick = onToggleFollow,
-          modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).size(32.dp),
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .size(48.dp)
+            .padding(8.dp),
         ) {
           Icon(
             imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,

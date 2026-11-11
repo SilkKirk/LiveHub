@@ -11,6 +11,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -105,8 +106,17 @@ fun LivePlayer(
 
   // Aspect + first-frame detection share one listener so the overlay cannot turn on
   // before the decoder has actually sized the picture.
-  var hasFirstFrame by remember { mutableStateOf(false) }
-  var retriedRef = remember { mutableStateOf(false) }
+  //
+  // Keyed on `url`: switching quality or line is a new stream, so the retry budget and the
+  // first-frame flag have to start over. With no key they were captured on first composition and
+  // never reset — after one automatic retry on the opening stream, no later URL was ever retried,
+  // and the loading scrim could never come back. See [PlaybackAttempt].
+  var attempt by remember(url) { mutableStateOf(PlaybackAttempt(url = url)) }
+
+  // The listener below is registered once (`LaunchedEffect(player)`) and must judge failures
+  // against the URL that is *currently* playing, not the one the composition started with.
+  // `rememberUpdatedState` is what makes that possible without re-registering the listener.
+  val currentAttempt by rememberUpdatedState(attempt)
 
   LaunchedEffect(player) {
     val listener = object : Player.Listener {
@@ -116,21 +126,24 @@ fun LivePlayer(
         val idnFailure = generateSequence(error.cause) { it.cause }
           .mapNotNull { it.message }
           .any { it.contains("toASCII", ignoreCase = true) }
-        if (idnFailure && url.startsWith("https://")) {
-          onFatalError?.invoke(url.replaceFirst("https://", "http://"))
-          return
-        }
 
-        // A live CDN dropping the stream is routine; retry once after a short pause.
-        if (!retriedRef.value) {
-          retriedRef.value = true
-          scope.launch {
-            delay(RETRY_DELAY_MILLIS)
-            player.prepare()
-            player.play()
+        val decision = decideRecovery(
+          attempt = currentAttempt,
+          error = PlaybackError(url = currentAttempt.url, message = error.message),
+          isIdnFailure = idnFailure,
+          fallbackMessage = "播放器错误: ${error.errorCodeName}",
+        )
+        when (decision) {
+          is PlaybackRecovery.DowngradeToHttp -> onFatalError?.invoke(decision.url)
+          is PlaybackRecovery.Retry -> {
+            attempt = decision.attempt
+            scope.launch {
+              delay(RETRY_DELAY_MILLIS)
+              player.prepare()
+              player.play()
+            }
           }
-        } else {
-          onFatalError?.invoke(error.message ?: "播放器错误: ${error.errorCodeName}")
+          is PlaybackRecovery.Fatal -> onFatalError?.invoke(decision.message)
         }
       }
 
@@ -147,11 +160,13 @@ fun LivePlayer(
       }
 
       override fun onRenderedFirstFrame() {
-        hasFirstFrame = true
+        attempt = currentAttempt.afterFirstFrame()
       }
 
       override fun onPlaybackStateChanged(playbackState: Int) {
-        if (playbackState == Player.STATE_READY) hasFirstFrame = true
+        if (playbackState == Player.STATE_READY) {
+          attempt = currentAttempt.afterFirstFrame()
+        }
       }
     }
     player.addListener(listener)
@@ -196,7 +211,7 @@ fun LivePlayer(
 
     // Until the first frame arrives PlayerView draws solid black, which reads as a
     // broken screen. Show the room's identity instead.
-    if (!hasFirstFrame) {
+    if (attempt.showLoadingScrim) {
       LoadingScrim(modifier = Modifier.fillMaxSize())
     }
   }

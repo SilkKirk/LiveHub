@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.livehub.app.BuildConfig
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 
@@ -158,7 +159,25 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
       SectionTitle("关于")
       Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text("LiveHub", style = MaterialTheme.typography.titleMedium)
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "LiveHub",
+              style = MaterialTheme.typography.titleMedium,
+              modifier = Modifier.weight(1f),
+            )
+            // The version is the first thing anyone reporting a bug is asked for, and the About
+            // card used to carry only the product name — so "which build are you on?" could not be
+            // answered from inside the app at all. `versionName` is what the release workflow
+            // derives from the git tag, so it identifies the build exactly.
+            Text(
+              text = "v${BuildConfig.VERSION_NAME}",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
           Text(
             text = "聚合直播客户端，支持斗鱼、虎牙、抖音与哔哩哔哩。仅用于学习交流。",
             style = MaterialTheme.typography.bodySmall,

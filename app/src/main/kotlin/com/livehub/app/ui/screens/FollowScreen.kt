@@ -50,6 +50,7 @@ import com.livehub.app.di.FollowOrdering
 import com.livehub.app.ui.FollowLiveFilter
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.app.ui.components.CardMinWidth
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.SpecialFollowRow
@@ -317,7 +318,8 @@ private fun FollowGrid(
 ) {
   val gridState = rememberLazyGridState()
   LazyVerticalGrid(
-    columns = GridCells.Fixed(2),
+    // Same adaptive rule as the home grid; see CardMinWidth.
+    columns = GridCells.Adaptive(minSize = CardMinWidth),
     state = gridState,
     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
     horizontalArrangement = Arrangement.spacedBy(10.dp),
