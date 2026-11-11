@@ -5669,3 +5669,147 @@ ITERATIONS 的"墓碑保留 30 天"（第三十二轮就删了按时间清理）
 - **界面项**：搜索页没有平台切换器、平板只有两列、关注页筛选行在单平台时整行消失、
   卡片星标 32dp 小于 48dp 触控目标、设置页没有版本号、深色主题零截图覆盖。
 
+
+---
+
+## 第六十轮迭代：生命周期没接上、主线程读盘、以及被吞掉的弹幕失败
+
+第五十九轮审计里剩下的三条 app 层问题，一次做完。三条都属于同一个家族：**逻辑写对了，
+但没有人调用它**。
+
+### 缺陷一：`MainViewModel.onCleared()` 一次都没执行过
+
+`MainActivity` 直接构造：
+
+```kotlin
+val viewModel = MainViewModel(container)
+```
+
+`onCleared()` 只由 `ViewModelStore.clear()` 调用，而这个实例根本没进 store。于是它里面的
+`syncController.stop()` 从来没跑过：
+
+- `SyncHttpServer` 从第一次打开同步页起**一直监听端口**，直到进程被杀。`SyncController`
+  自己的 KDoc 写着 "server runs only while the sync screen is open, which keeps the battery
+  and the attack surface small"——实际不是。
+- `stop()` 同时是 `PairingWindow.cancel()` 的唯一调用点，所以那个六位匹配码在界面上早已
+  滚出视野之后**仍然有效**。`PairingWindow` 的注释明确写着 "an open code must not outlive
+  the page it was shown on"。
+
+改法两层：
+
+1. `MainActivity` 改用 `ViewModelProvider(this, factory).get(...)`，真正进入 `ViewModelStore`。
+   `onCleared` 从此会被调用，顺带补上漏掉的 `playbackJob` 与 `discoveryJob` 取消。
+2. **离开同步页就停**，而不是等进程结束。`navigate()` 到别的 tab、或按返回键，都调
+   `stopSyncServer()`，同时清空 `pairingCode` / `localAddress` / `discoveredPeers`。留着的话
+   下次进页面会在 `beginPairing()` 之前先渲染上一轮的码，而"我的设备"卡片会显示一个没人
+   监听的端口。
+
+`SyncServerLifecycleTest` 四条：服务在页面打开时确实在监听、离开后停、匹配码失效、返回键
+同样处理、再次进入能重新起来。
+
+**这条测试我写错了两版，都被 CI 抓到，而且都撞在同一件事上。**
+
+1. 断言"`stop()` 后能重新 bind 同一端口" → `BindException: Address already in use`。
+   `ServerSocket.close()` 让端口在 Linux 上进入 `TIME_WAIT`，`SO_REUSEADDR` 对"曾经 accept
+   过连接"的 socket 不覆盖这一点。
+2. 改成"连一下、期望被拒"并放进仪器测试 → `nothing may accept a connection after stop()`
+   失败。**listening socket 关了，但 backlog 里已排队的连接、以及探测与关闭之间的竞态，仍然
+   会让 connect 完成。**
+
+两次都不是 `stop()` 的 bug，是"端口层面"根本不是能用来证明"服务已停"的判据。`stop()` 真正
+保证的是 accept 循环退出、transport 与 server 引用清空、配对码取消，所以测试改成断言这些
+（`isRunning` 读的正是 accept 循环检查的那个 `AtomicBoolean`）。两版失败都写进了测试注释，
+免得下一轮有人再试一遍。
+
+### 缺陷二：`UserPreferences` 在 UI 线程上 `runBlocking` 读写盘
+
+两处：
+
+- `deviceId` 每次访问都 `runBlocking { dataStore.data.first() }`，**没有缓存**。而每一次
+  关注、取关、拖拽排序、特别关注、清晰度记忆、同步交换都要读它——点一下星标就是一次主线程
+  阻塞读盘。现在用双重检查锁定缓存，只在首次解析时读盘。
+- `update()` 是 `runBlocking { dataStore.edit { ... } }`，调用方全是 Compose 点击回调：
+  每点一次主题 chip、每拖一次弹幕滑块都阻塞主线程一次文件写。现在落盘挪到单线程
+  `writeScope`，返回 `Job`；`cached` 在交出去**之前**就更新，所以进程内读取立即一致
+  （`UiState` 是从 `preferences.settings` 同步构建的，这条不变量必须保住）。
+
+**写入必须串行**：`update` 是对整条 settings 记录的读-改-写，两个写并发会乱序、让旧值覆盖
+新值。单线程 dispatcher 保证按调用顺序落盘。
+
+新增 `awaitWrites()` 作为测试缝：跨实例读回的用例（`PeerAddressPersistenceTest` 建了第二个
+`UserPreferences` 读文件）必须先等写入落盘。生产不调用它——DataStore 自己会 flush。
+
+顺带把 `setThemeMode` / `setLastPlatform` / `setDanmakuEnabled` / `setBlockedKeywords` /
+`clearSearchHistory` / `setPreferredQuality` 从表达式体改成块体，否则它们会跟着把内部的
+`Job` 泄漏到公开 API。
+
+### 缺陷三：弹幕连不上时永远显示"正在连接弹幕…"
+
+```kotlin
+runCatching {
+  ...collect { event ->
+    when (event) {
+      is DanmakuEvent.Message -> ...
+      else -> Unit          // ← 其余三个事件全部丢掉
+    }
+  }
+}
+```
+
+四个适配器都发了 `Failed` 与 `Disconnected`，还带了平台自己给的原因，**一个都没被消费**。
+于是"握手被拒绝"和"房间里没人说话"在界面上完全一样：一个带 spinner 的"正在连接弹幕…"，
+永不结束。
+
+`runCatching` 还连 `CancellationException` 一起吞了，所以每次关闭房间取消 `danmakuJob` 都被
+当成一次失败。
+
+改法：新增 `UiState.danmakuStatus`（`Connecting` / `Connected` / `Reconnecting` / `Failed`，
+sealed interface）。`startDanmaku` 处理全部四个事件；`collect` 正常返回（适配器放弃重试）
+也记为失败，否则又是一个永久 spinner。面板按状态分支：
+
+| 状态 | 文案 |
+| --- | --- |
+| `Failed(reason)` | 弹幕连接失败：`<平台给的原因>` |
+| `Reconnecting(reason)` | 弹幕正在重连…（带 spinner，但不报错） |
+| `Connected` 且无消息 | 还没有人说话 |
+| `Connecting` | 正在连接弹幕…（带 spinner） |
+
+已有弹幕时状态不参与渲染——连接中途断开不该把用户正在看的列表清空。`openRoom` /
+`closePlayer` / `back` 都重置为 `Connecting`，否则下一个房间会先渲染上一个房间的失败横幅。
+
+### 本地验证
+
+本机不跑 Gradle（runbook 硬约束一），所以两处并发模型与弹幕状态机都用 Python 等价跑了一遍：
+
+```
+deviceId 竞态下只读盘一次          ok     六个事件变体在四种起始状态下全部被处理   ok
+写入前新值已可见                   ok     终态失败后不再渲染 spinner               ok
+写入按发出顺序落盘                 ok     握手失败的原因上屏                       ok
+排队写入不丢更新（4 线程 x25 次）   ok     collect 正常结束也算失败                 ok
+                                          已有弹幕优先于状态                       ok
+                                          重连中不报"失败"                         ok
+```
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `8674ba9` 三个 job 全绿 |
+
+五次推送。三处产品代码改动（生命周期、读盘、弹幕）都是一次过；红的两次**都是我自己写的
+测试断言错**，不是产品缺陷——这轮的教训全在测试侧，已写进上面那一段和测试注释里。
+
+### 下一轮
+
+- **`LivePlayer.retriedRef` / `hasFirstFrame` 不随 URL 重置**：换清晰度后新 URL 一次都不会
+  自动重试。改动很小，但需要一条能观察到"重试次数"的测试。
+- **界面项**（审计里列的，都还没做）：搜索页没有平台切换器、平板只有两列（`GridCells.Fixed(2)`
+  三处）、关注页筛选行在单平台时整行消失、卡片星标 32dp 小于 48dp 触控目标、设置页没有
+  版本号、深色主题零截图覆盖、竖屏播放页状态栏压画面。
+- **`docs/ITERATIONS.md` 已经 4300 行**，每轮还在末尾追加。建议按 20 轮一段拆成
+  `docs/rounds/`，主文件只留目录与最新三轮——否则下一轮读文档就要花掉半个上下文。
+
