@@ -92,9 +92,6 @@ class SyncController(
   val serverAddress: String?
     get() = PeerAddressBook.preferredLocalAddress()?.let { "$it:$listeningPort" }
 
-  /** Observers get every peer seen by discovery. */
-  var onPeerDiscovered: ((DiscoveredPeer) -> Unit)? = null
-
   /**
    * Peers currently visible on the LAN, newest first.
    *
@@ -220,7 +217,6 @@ class SyncController(
       discovery.discover().collect { peer ->
         addressBook.remember(peer)
         discovered[peer.deviceId] = peer
-        onPeerDiscovered?.invoke(peer)
       }
     }
   }
@@ -237,11 +233,6 @@ class SyncController(
     pairingWindow.cancel()
   }
 
-  fun dispose() {
-    stop()
-    scope.cancel()
-  }
-
   /**
    * Issues the code this device shows.
    *
@@ -249,11 +240,6 @@ class SyncController(
    * device types, so replacing it behind the user's back would strand them mid-entry.
    */
   fun beginPairing(): String = pairingWindow.issue().code
-
-  /** Registers a peer discovered automatically so it can be reached later. */
-  fun rememberPeer(peer: DiscoveredPeer) {
-    addressBook.remember(peer)
-  }
 
   /**
    * Pairs with the device that is showing [code], without being told any address.
@@ -429,15 +415,6 @@ class SyncController(
     val address = found.copy(deviceId = peer.deviceId, deviceName = peer.deviceName)
     addressBook.remember(address)
     return address
-  }
-
-  /** Probes every paired peer so the UI can show who is online. */
-  suspend fun onlinePeers(): Set<Long> = withContext(Dispatchers.IO) {
-    val currentTransport = transport ?: return@withContext emptySet()
-    preferences.trustedPeers()
-      .filter { currentTransport.probe(it) }
-      .map { it.deviceId }
-      .toSet()
   }
 
   data class SyncSummary(val pulled: Int, val pushed: Int, val message: String)

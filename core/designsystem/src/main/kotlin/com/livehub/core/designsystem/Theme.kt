@@ -1,16 +1,12 @@
 package com.livehub.core.designsystem
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 
 /** Which palette the user selected in settings. */
 enum class ThemeMode { System, Light, Dark }
@@ -94,41 +90,34 @@ private val DarkScheme: ColorScheme = darkColorScheme(
 /** Colour used for the "LIVE" badge regardless of theme. */
 val LiveBadgeColor: Color = LiveRed
 
-/** Resolves the colour scheme for [mode] honouring Android 12+ dynamic colour. */
+/**
+ * Resolves the colour scheme for [mode].
+ *
+ * Material You (dynamic colour) used to be a parameter here, threaded from a `dynamicColor` field
+ * in `UserSettings` that **nothing ever read**: the setting existed, defaulted to `true`, and the
+ * whole pipeline was unreachable because `LiveHubTheme` was only ever called with `mode`. Both are
+ * gone rather than left as a switch nobody can flip — and the brand palette is deliberate anyway
+ * (the comment in the old parameter said wallpaper-derived colours made covers and chips look
+ * washed out).
+ */
 @Composable
-fun liveHubColorScheme(
-  mode: ThemeMode,
-  /**
-   * Material You. Off by default: the brand pink/teal is part of the identity and
-   * wallpaper-derived colours made the covers and chips look washed out.
-   */
-  dynamicColor: Boolean = false,
-): ColorScheme {
+fun liveHubColorScheme(mode: ThemeMode): ColorScheme {
   val dark = when (mode) {
     ThemeMode.System -> isSystemInDarkTheme()
     ThemeMode.Light -> false
     ThemeMode.Dark -> true
   }
-  val supportsDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-  return when {
-    dynamicColor && supportsDynamic && dark ->
-      dynamicDarkColorScheme(LocalContext.current)
-    dynamicColor && supportsDynamic ->
-      dynamicLightColorScheme(LocalContext.current)
-    dark -> DarkScheme
-    else -> LightScheme
-  }
+  return if (dark) DarkScheme else LightScheme
 }
 
 /** Root theme wrapper. */
 @Composable
 fun LiveHubTheme(
   mode: ThemeMode = ThemeMode.System,
-  dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   MaterialTheme(
-    colorScheme = liveHubColorScheme(mode, dynamicColor),
+    colorScheme = liveHubColorScheme(mode),
     typography = LiveHubTypography,
     content = content,
   )

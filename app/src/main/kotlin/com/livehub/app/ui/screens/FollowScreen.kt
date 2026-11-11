@@ -374,8 +374,15 @@ private fun FollowHeader(
       onAdd = onAddSpecial,
     )
 
-    // The state/platform row only earns its space when it can actually narrow something.
-    if (filter != FollowLiveFilter.ALL || platforms.size > 1) {
+    // The state/platform row appears when it can narrow *something*.
+    //
+    // The old condition was `filter != ALL || platforms.size > 1`, which hid the row on the most
+    // common shape of all — a single-platform follow list nobody has filtered yet — and took the
+    // 直播中 / 未开播 chips with it, so the feature was undiscoverable until the user happened to
+    // follow a second platform. The live filter narrows whenever there are both live and offline
+    // rooms, which is exactly `liveCount in 1 until total`.
+    val canNarrowByLive = liveCount in 1 until total
+    if (filter != FollowLiveFilter.ALL || platformFilter != null || platforms.size > 1 || canNarrowByLive) {
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),

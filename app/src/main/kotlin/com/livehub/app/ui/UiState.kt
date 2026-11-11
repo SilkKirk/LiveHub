@@ -8,8 +8,15 @@ import com.livehub.core.model.Streamer
 import com.livehub.core.sync.SyncLogEntry
 import com.livehub.core.sync.TrustedPeer
 
-/** Top level destinations of the single-activity app. */
-enum class Screen { Home, Category, Search, Follow, Sync, Settings, Player }
+/**
+ * Top level destinations of the single-activity app.
+ *
+ * There used to be a `Category` entry. Nothing ever set `screen = Screen.Category` — the category
+ * tree lives inline on `Home` — so the only reference to it was a `screen == Screen.Category`
+ * check that could never be true, and the bottom bar carried a `Dock.HOME` exemption for a state
+ * that could not exist. Removed rather than left as a plausible-looking destination.
+ */
+enum class Screen { Home, Search, Follow, Sync, Settings, Player }
 
 /**
  * The live-state filter on the follow screen.
@@ -171,13 +178,14 @@ data class UiState(
    */
   val playerError: String? = null,
   val message: String? = null,
-  val darkTheme: Boolean = false,
   /**
-   * The user's theme choice.
+   * The user's theme choice, and the only thing the theme depends on.
    *
-   * Kept as the three-state preference rather than as [darkTheme] alone: "follow the
-   * system" is a real option that a boolean cannot express, and it is what a fresh
-   * install should use.
+   * Two fields used to describe the theme: this one and a `darkTheme: Boolean`. The boolean was
+   * written next to it on every change and read by nothing except two assertions in
+   * `MainViewModelTest`, which meant "is it dark right now" could disagree with the actual choice
+   * (a `System` mode on a dark system reported `darkTheme = false`). A derived value nobody reads
+   * is worse than no value; the tests now assert on [themeMode] itself.
    */
   val themeMode: com.livehub.core.designsystem.ThemeMode = com.livehub.core.designsystem.ThemeMode.System,
   val bilibiliLogin: com.livehub.app.ui.components.BiliLoginUi = com.livehub.app.ui.components.BiliLoginUi(),

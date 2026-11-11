@@ -122,11 +122,6 @@ class InMemoryCookieJar : CookieJar {
     }
   }
 
-  /** Serialises all cookies as a `k=v; k=v` header value for [host]. */
-  fun headerFor(host: String): String = store[host]
-    ?.joinToString("; ") { "${it.name}=${it.value}" }
-    .orEmpty()
-
   fun clear() = store.clear()
 
   private fun isManagedExternally(host: String): Boolean =

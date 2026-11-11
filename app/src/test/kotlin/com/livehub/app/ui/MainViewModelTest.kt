@@ -471,13 +471,11 @@ class MainViewModelTest {
     idle()
     assertEquals(com.livehub.core.designsystem.ThemeMode.Dark, state.themeMode)
     assertEquals("dark", container.preferences.settings.themeMode)
-    assertTrue(state.darkTheme)
 
     viewModel.onAction(UiAction.ToggleTheme)
     idle()
     assertEquals(com.livehub.core.designsystem.ThemeMode.Light, state.themeMode)
     assertEquals("light", container.preferences.settings.themeMode)
-    assertTrue("light mode must not report dark", !state.darkTheme)
 
     viewModel.onAction(UiAction.ToggleTheme)
     idle()

@@ -53,7 +53,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       it.copy(
         platform = platform,
         themeMode = themeMode,
-        darkTheme = themeMode == com.livehub.core.designsystem.ThemeMode.Dark,
         danmakuEnabled = settings.danmakuEnabled,
         danmakuOpacity = settings.danmakuOpacity,
         danmakuFontScale = settings.danmakuFontScale,
@@ -967,14 +966,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         com.livehub.core.designsystem.ThemeMode.Light -> "light"
       },
     )
-    _state.update {
-      it.copy(
-        themeMode = mode,
-        // Kept in sync for callers that only know "is it dark right now"; the theme
-        // itself is driven by `themeMode` because System is a third state.
-        darkTheme = mode == com.livehub.core.designsystem.ThemeMode.Dark,
-      )
-    }
+    _state.update { it.copy(themeMode = mode) }
   }
 
   /** Danmaku area and font scale are persisted so the choice survives a restart. */
@@ -1317,9 +1309,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       }
     }
   }
-
-  /** Convenience for the UI: the currently selected category's display name. */
-  fun categoryTitle(category: Category?): String = category?.name.orEmpty()
 
   /**
    * Tears down everything the process should not keep after the UI is gone.

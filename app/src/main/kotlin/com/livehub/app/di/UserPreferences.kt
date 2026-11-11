@@ -25,11 +25,18 @@ import java.util.UUID
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "livehub_settings")
 
-/** User facing settings persisted with DataStore. */
+/**
+ * User facing settings persisted with DataStore.
+ *
+ * Two fields were removed rather than wired up: `dynamicColor` (Material You — the theme never
+ * received it, so it was a switch with nothing behind it) and `autoRefreshFollows` (nothing read
+ * it; the refresh worker is scheduled unconditionally at startup). Decoding is lenient
+ * (`ignoreUnknownKeys`), so an installation that still has them in its stored JSON simply drops
+ * them on the next write.
+ */
 @Serializable
 data class UserSettings(
   val themeMode: String = "system",
-  val dynamicColor: Boolean = true,
   val danmakuEnabled: Boolean = true,
   val danmakuOpacity: Float = 1.0f,
   val danmakuFontScale: Float = 1.0f,
@@ -38,7 +45,6 @@ data class UserSettings(
   val landscapeDanmakuFontScale: Float = 1.15f,
   val blockedKeywords: List<String> = emptyList(),
   val preferredQuality: Map<String, Int> = emptyMap(),
-  val autoRefreshFollows: Boolean = true,
   val lastPlatform: String = Platform.DOUYU.id,
   /** Keywords the search screen shows, newest first. Local only — never synchronised. */
   val searchHistory: List<String> = emptyList(),

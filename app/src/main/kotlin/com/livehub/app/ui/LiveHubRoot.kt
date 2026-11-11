@@ -198,8 +198,9 @@ private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
       tonalElevation = 0.dp,
     ) {
       Dock.entries.forEach { dock ->
-        val selected = state.screen == dock.screen ||
-          (dock == Dock.HOME && state.screen == Screen.Category)
+        // No extra clause for the home tab: `Screen.Category` used to be OR-ed in here, but nothing
+        // ever set it, so the check was dead. See the `Screen` declaration.
+        val selected = state.screen == dock.screen
         NavigationBarItem(
           selected = selected,
           onClick = { onAction(UiAction.Navigate(dock.screen)) },

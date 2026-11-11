@@ -176,14 +176,24 @@ data class PlaybackSource(
   val isEmpty: Boolean get() = variants.isEmpty()
 }
 
-/** A danmaku (bullet chat) message normalised across platforms. */
+/**
+ * A danmaku (bullet chat) message normalised across platforms.
+ *
+ * Two fields were removed: `userLevel` and `fansClubLevel`. Neither was ever written by any adapter
+ * nor read by any surface — they existed because the reference client *decodes* them, but it does
+ * not render them either (the same conclusion round 23 reached about Douyu's `col`). A field that
+ * is always 0 on every message is not a capability, and it carried a per-message allocation on the
+ * hottest path in the app: every danmaku in every room.
+ *
+ * [color] stays because it **is** read (`DanmakuOverlay` tints the label with it), even though no
+ * adapter fills it yet — so today every danmaku draws white. Wiring it up needs each platform's
+ * own encoding validated against a real capture first; see the note in `DanmakuOverlay`.
+ */
 data class DanmakuMessage(
   val roomKey: String,
   val userName: String,
   val text: String,
   val color: Int? = null,
-  val userLevel: Int = 0,
-  val fansClubLevel: Int = 0,
   val receivedAt: Long = 0,
 )
 

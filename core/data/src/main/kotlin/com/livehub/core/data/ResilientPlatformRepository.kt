@@ -93,9 +93,6 @@ class ResilientPlatformRepository(
     else -> false
   }
 
-  /** Test seam: lets tests control how many attempts are made. */
-  var maxAttempts: Int = MAX_ATTEMPTS
-
   /** Wrapper so a null result can be cached as well. */
   data class StreamerSnapshot(val value: Streamer?)
 
