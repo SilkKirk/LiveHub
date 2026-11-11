@@ -78,6 +78,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   fun onAction(action: UiAction) {
     when (action) {
       is UiAction.SelectPlatform -> selectPlatform(action.platform)
+      is UiAction.SelectSearchPlatform -> selectSearchPlatform(action.platform)
       is UiAction.SelectCategory -> selectCategory(action.category)
       is UiAction.SelectSubCategory -> selectSubCategory(action.category)
       is UiAction.SetFollowOrder -> setFollowOrder(action.keys)
@@ -291,6 +292,51 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
     nextCursor = null
     loadCategories(platform)
+  }
+
+  /**
+   * Switches platform from the search screen, staying on it.
+   *
+   * The browse state is left alone on purpose: the category tree and the room grid belong to the
+   * home tab, which is not on screen, and [loadCategories] would fetch a catalogue the user is not
+   * looking at. What does have to go is everything derived from the previous platform's search —
+   * the results, the cursor and the "searched with" keyword — because those rooms belong to a
+   * different platform.
+   *
+   * The keyword itself survives: it is what the user typed, and re-running it on the new platform
+   * is the entire point of putting a switcher here.
+   */
+  private fun selectSearchPlatform(platform: Platform) {
+    if (platform == _state.value.platform) return
+    container.preferences.setLastPlatform(platform)
+    searchJob?.cancel()
+    searchCursor = null
+    // Read before clearing. The field is preferred, but it is legitimately empty while results are
+    // on screen — 清空 only clears the field and ends the search, so a user can be looking at
+    // results whose keyword is no longer in the box. `lastSearchQuery` is the keyword those
+    // results actually answer, and that is the one worth re-running.
+    val keyword = _state.value.searchQuery.trim().ifBlank { _state.value.lastSearchQuery.trim() }
+    _state.update {
+      it.copy(
+        platform = platform,
+        searchResults = emptyList(),
+        searchHasMore = false,
+        lastSearchQuery = "",
+        loading = false,
+        loadingMore = false,
+        refreshing = false,
+        error = null,
+        // Put the keyword back into the field, not just into the search call. `submitSearch` reads
+        // `searchQuery`, so a switch made after the field was cleared would otherwise re-run
+        // *nothing* and pop "请输入要搜索的主播或直播间名称" — a scolding for tapping a chip. Writing
+        // it back also keeps the box and the results describing the same search, which is the
+        // invariant this screen has broken before.
+        searchQuery = if (keyword.isNotEmpty()) keyword else it.searchQuery,
+      )
+    }
+    // A switch with nothing to search is not an error: it lands on the search screen with an empty
+    // state, which is exactly where the user was.
+    if (keyword.isNotEmpty()) submitSearch()
   }
 
   private fun loadCategories(platform: Platform) {

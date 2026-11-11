@@ -624,6 +624,59 @@ class ScreenshotTest {
     baseState().copy(screen = Screen.Settings, bilibiliLogin = BiliLoginUi(loggedIn = true)),
   )
 
+  // ------------------------------------------------------------------ dark theme ---
+  //
+  // Every one of the renders above is the light scheme, because `baseState()` leaves
+  // `themeMode = System` and the emulator reports light. Dark is a real choice in 设置, and it
+  // had **zero** visual coverage — a colour that only reads badly on a dark background (a
+  // `surfaceVariant` chip on a `surface` card, the LIVE badge over a dark cover) could not show
+  // up in any artifact.
+  //
+  // Only the screens that go through `LiveHubRoot` are captured: that is the only place
+  // `LiveHubTheme` is applied, and `PlayerContent` — the branch a `Screen.Player` state takes
+  // here — is composed *outside* it. A dark player render would therefore be the light scheme
+  // with a black video box, which is exactly the kind of screenshot that looks like coverage
+  // without being any.
+  @Test
+  fun homeDark() = capture(
+    "23-home-dark",
+    baseState().copy(themeMode = com.livehub.core.designsystem.ThemeMode.Dark),
+  )
+
+  @Test
+  fun settingsDark() = capture(
+    "23b-settings-dark",
+    settingsState().copy(themeMode = com.livehub.core.designsystem.ThemeMode.Dark),
+  )
+
+  @Test
+  fun syncDark() = capture(
+    "23c-sync-dark",
+    baseState().copy(
+      screen = Screen.Sync,
+      themeMode = com.livehub.core.designsystem.ThemeMode.Dark,
+    ),
+  )
+
+  /**
+   * The platform switcher on the search screen.
+   *
+   * The row is new this round; without a render the only evidence it exists is the source. It is
+   * also the one place four chips have to fit on one 320dp line, which is exactly the kind of
+   * thing that renders as vertically-stacked single characters when it does not (see the 同步页
+   * chip bug from round 13).
+   */
+  @Test
+  fun searchPlatformRow() = capture(
+    "09b-search-platforms",
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "英雄联盟",
+      lastSearchQuery = "英雄联盟",
+      searchResults = douyuRooms.take(3),
+    ),
+  )
+
   @Test
   fun player() = capture("17-player", playerState())
 

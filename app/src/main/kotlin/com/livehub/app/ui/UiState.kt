@@ -197,6 +197,21 @@ data class UiState(
 sealed interface UiAction {
   data class SelectPlatform(val platform: Platform) : UiAction
 
+  /**
+   * Switches the platform **without leaving the search screen**.
+   *
+   * Distinct from [SelectPlatform], which is the home screen's switcher: that one resets the
+   * browse state and navigates to `Screen.Home`, because a platform change invalidates the
+   * category tree and the room grid. On the search screen neither exists, so doing that would
+   * throw the user back to the home tab and erase the keyword they were searching for — which is
+   * exactly why the search page had no platform control at all, and why changing platform meant
+   * going back to 首页 first.
+   *
+   * This one keeps [UiState.searchQuery] and re-runs the search when a keyword has already been
+   * submitted, so comparing "the same streamer on 斗鱼 and 虎牙" is two taps.
+   */
+  data class SelectSearchPlatform(val platform: Platform) : UiAction
+
   data class SelectCategory(val category: Category) : UiAction
 
   /**

@@ -3,6 +3,8 @@ package com.livehub.app.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -187,33 +190,66 @@ private val SEARCH_LABELS = mapOf(
 
 @Composable
 private fun SearchField(state: UiState, onAction: (UiAction) -> Unit) {
-  OutlinedTextField(
-    value = state.searchQuery,
-    onValueChange = { onAction(UiAction.UpdateQuery(it)) },
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-    label = {
-      Text(SEARCH_LABELS[state.platform] ?: "搜索 ${state.platform.displayName} 主播 / 直播间")
-    },
-    singleLine = true,
-    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-    trailingIcon = {
-      if (state.searchQuery.isNotEmpty()) {
-        IconButton(onClick = { onAction(UiAction.UpdateQuery("")) }) {
-          Icon(Icons.Filled.Clear, contentDescription = "清空")
+  Column(modifier = Modifier.fillMaxWidth()) {
+    OutlinedTextField(
+      value = state.searchQuery,
+      onValueChange = { onAction(UiAction.UpdateQuery(it)) },
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+      label = {
+        Text(SEARCH_LABELS[state.platform] ?: "搜索 ${state.platform.displayName} 主播 / 直播间")
+      },
+      singleLine = true,
+      leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+      trailingIcon = {
+        if (state.searchQuery.isNotEmpty()) {
+          IconButton(onClick = { onAction(UiAction.UpdateQuery("")) }) {
+            Icon(Icons.Filled.Clear, contentDescription = "清空")
+          }
+        } else {
+          IconButton(
+            onClick = { onAction(UiAction.SubmitSearch) },
+            enabled = state.searchQuery.isNotBlank(),
+          ) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardReturn, contentDescription = "搜索")
+          }
         }
-      } else {
-        IconButton(
-          onClick = { onAction(UiAction.SubmitSearch) },
-          enabled = state.searchQuery.isNotBlank(),
-        ) {
-          Icon(Icons.AutoMirrored.Filled.KeyboardReturn, contentDescription = "搜索")
-        }
-      }
-    },
-    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-    keyboardActions = KeyboardActions(onSearch = { onAction(UiAction.SubmitSearch) }),
-  )
+      },
+      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+      keyboardActions = KeyboardActions(onSearch = { onAction(UiAction.SubmitSearch) }),
+    )
+    PlatformFilterRow(state = state, onAction = onAction)
+  }
 }
+
+/**
+ * The platform switcher, on the search screen itself.
+ *
+ * Without it the field's own label ("搜索 斗鱼 主播 / 直播间") named a platform the user could not
+ * change without going back to 首页 — so comparing the same streamer across platforms, which is
+ * the main reason to search at all in an aggregator, meant four taps and losing the keyword.
+ *
+ * It emits [UiAction.SelectSearchPlatform], **not** `SelectPlatform`: the latter is the home
+ * screen's switcher and resets the browse state and navigates to `Screen.Home`, which would throw
+ * the user out of search.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
+  FlowRow(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Platform.entries.forEach { platform ->
+      FilterChip(
+        selected = platform == state.platform,
+        onClick = { onAction(UiAction.SelectSearchPlatform(platform)) },
+        label = { Text(platform.displayName, maxLines = 1, softWrap = false) },
+      )
+    }
+  }
+}
+
 
 @Composable
 private fun RecentSearches(
