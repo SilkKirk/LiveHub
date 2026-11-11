@@ -154,4 +154,32 @@ class SyncOffMainThreadTest {
     assertTrue(summary.pulled == 0 && summary.pushed == 0)
     assertTrue(summary.message, summary.message.contains("尚未配对"))
   }
+
+  /**
+   * `stop()` really releases the port, proven with a real socket.
+   *
+   * This belongs here rather than in the Robolectric `SyncServerLifecycleTest`: the flag
+   * `isRunning` only says the accept loop will exit, and a real bind is the only way to show the
+   * listener is gone. It was attempted under Robolectric first and failed on CI with
+   * `BindException: Address already in use` — `close()` leaves the port in `TIME_WAIT`, so the
+   * assertion has to tolerate that and instead prove that **nothing accepts a connection**.
+   */
+  @Test
+  fun stoppingReleasesTheListeningPort() {
+    val port = controller.listeningPort
+    assertTrue("the server must be listening to begin with", port > 0)
+    assertTrue("something must accept a connection while running", acceptsConnections(port))
+
+    controller.stop()
+
+    assertFalse("nothing may accept a connection after stop()", acceptsConnections(port))
+  }
+
+  /** True when a TCP connect to [port] on loopback succeeds. */
+  private fun acceptsConnections(port: Int): Boolean = try {
+    Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 500) }
+    true
+  } catch (refused: java.io.IOException) {
+    false
+  }
 }
