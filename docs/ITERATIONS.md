@@ -5813,3 +5813,107 @@ deviceId 竞态下只读盘一次          ok     六个事件变体在四种起
 - **`docs/ITERATIONS.md` 已经 4300 行**，每轮还在末尾追加。建议按 20 轮一段拆成
   `docs/rounds/`，主文件只留目录与最新三轮——否则下一轮读文档就要花掉半个上下文。
 
+
+---
+
+## 第六十一轮迭代：换清晰度后新 URL 一次都不会重试，以及一次网格列数算错的自救
+
+### 缺陷：三个状态没跟着 URL 重置
+
+`LivePlayer` 里两个状态用了无 key 的 `remember`：
+
+```kotlin
+var hasFirstFrame by remember { mutableStateOf(false) }
+var retriedRef  = remember { mutableStateOf(false) }
+```
+
+和第五十九轮那个分页 bug 同一个形状——值在首次组合时被捕获，之后永不重置。这里的后果更重：
+
+- **`retriedRef` 不重置**：屏幕上第一次流重试一次之后，整个会话的重试额度就用光了。切清晰度
+  或线路产生的新 URL **一次都不会自动重试**，一次例行的 CDN 抖动就变成永久的「无法播放」。
+- **`hasFirstFrame` 不重置**：遮罩再也回不来，重新解析到新 URL 时看到的是纯黑方块，而不是
+  「正在连接直播流…」。
+
+第三个缺陷在同一个函数里：`Player.Listener` 注册在 `LaunchedEffect(player)` 中，那个 effect
+只在 `player` 变化时重跑，所以 listener 闭包捕获的是**首次组合的 `url`**。IDN 降级和重试判断
+都在拿旧 URL 做决定——换清晰度之后，降级会把用户送回上一个流。
+
+### 改法：把规则抽成纯数据 + 纯函数
+
+新增 `PlaybackAttempt.kt`：
+
+- `PlaybackAttempt(url, retriesUsed, sawFirstFrame)`，`forUrl()` 在 URL 变化时整体重置。
+- `decideRecovery()` 返回 `Retry` / `DowngradeToHttp` / `Fatal`。IDN 降级优先且**不消耗**
+  重试额度，因为对一个名字过不了 SNI 校验的主机重试是必然失败的。
+- listener 用 `rememberUpdatedState` 读当前 attempt，判断永远针对正在播的 URL。
+
+抽成纯逻辑的理由和第三轮、第五十九轮一样：这两个缺陷都需要"先后两个 URL"才能观察到，
+截图看不出来，模拟器上复现需要真解码器。`PlaybackAttemptTest` 十条直接在 JVM 上钉住。
+
+### 一次差点推上去的错误
+
+同一轮里把三处 `GridCells.Fixed(2)` 改成 `GridCells.Adaptive(minSize = CardMinWidth)`，
+好让平板拿到四列而不是两个被拉满的巨块。我第一次写的是 `156.dp`——看起来合理，实际会让
+**320dp 的手机掉到一列**。
+
+`Adaptive` 取满足 `n * minSize + (n - 1) * spacing <= width - 2 * padding` 的最大 n。320dp
+减去两侧各 12dp 内边距，可用 296dp；两列需要 `2 * minSize + 10 <= 296`，也就是
+`minSize <= 143dp`。156dp 显然过不去。本地用 Python 把候选值全算了一遍：
+
+| minSize | 320dp | 360dp | 412dp | 640dp | 800dp |
+| --- | --- | --- | --- | --- | --- |
+| 156 | **1** | 2 | 2 | 3 | 4 |
+| 148 | **1** | 2 | 2 | 3 | 4 |
+| **140** | 2 | 2 | 2 | 4 | 5 |
+| 120 | 2 | 2 | 3 | 4 | 6 |
+
+140dp 是既保住手机两列、又给平板四列的最大值。**这类"看起来合理"的尺寸如果直接推上去，
+会让所有布局测试和 39 张截图一起变**，而且失败原因（列数）与改动意图（平板布局）看起来毫不
+相关。
+
+### 顺带两处界面
+
+- **卡片星标**：`IconButton` 的 `size(32.dp)` 把触控区也缩到 32dp，低于 48dp 最低标准。在
+  320dp 屏上很容易点到卡片本体（打开房间）而不是关注。改成 48dp 容器 + 8dp 内边距，视觉上的
+  圆盘仍是 32dp，卡片看起来不变。
+- **设置页版本号**：报 bug 时第一个被问的就是版本，而「关于」卡片原来只有产品名。加
+  `BuildConfig.VERSION_NAME`。
+
+审计里那条「竖屏状态栏压画面」**是我判断错了，没改**：普通竖屏布局有
+`windowInsetsPadding(WindowInsets.statusBars)`，满幅竖屏视频有 `StreamerLine` 的渐变，
+两条路径都覆盖了。
+
+### 推送通道：代理与直连都失效，SSH 可用
+
+这一轮 `git push` 连续失败，排查过程值得记进 runbook（已补）：
+
+| 检测 | 结果 |
+| --- | --- |
+| `ProxyEnable` | `0`，代理已退出（`ProxyServer` 仍残留） |
+| `Invoke-WebRequest https://api.github.com/zen`（直连） | **200** |
+| `TcpClient.Connect(20.205.243.166, 443/80/22)` | **全部成功** |
+| `git push`（`schannel` 与 `openssl` 都试过） | `Failed to connect ... after 21s` |
+
+`GIT_TRACE=1` 给出决定性一句：git 的 libcurl 从 `0.0.0.0:65419` 发起连接并超时，而
+PowerShell 的 `TcpClient` 从真实网卡地址发起。**同一目标端口，一个通一个不通——"端口能连"
+不能证明 git 能推。** 最后改用 `git push git@github.com:SilkKirk/LiveHub.git main` 一次成功。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ |
+| JVM 单元测试 | ✅ failures=0 errors=0 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `b8770a2` 三个 job 全绿 |
+
+一次推送一次过。
+
+### 下一轮
+
+- **界面项**（审计里剩下的）：搜索页没有平台切换器、关注页筛选行在单平台时整行消失、
+  深色主题零截图覆盖、平板列数改动需要在 640dp 下补一张截图（当前 39 张全是 320dp）。
+- **`docs/ITERATIONS.md` 已 4500 行**，建议按 20 轮拆到 `docs/rounds/`。
+- 第五十九、六十轮修的三处（分页、同步认证、生命周期）都还没有真机验证，只在 CI 上跑过。
+
