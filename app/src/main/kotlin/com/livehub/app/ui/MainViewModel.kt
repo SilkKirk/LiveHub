@@ -257,6 +257,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         variants = emptyList(),
         selectedVariant = null,
         danmaku = if (current == Screen.Player) emptyList() else it.danmaku,
+        // Leaving the room ends the socket, so the status has to go back to "opening" — otherwise
+        // the next room would inherit the previous one's failure banner before its own socket had
+        // a chance to say anything.
+        danmakuStatus = if (current == Screen.Player) DanmakuStatus.Connecting else it.danmakuStatus,
       )
     }
   }
@@ -659,6 +663,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         // which is only valid for the URL it was raised against.
         error = null,
         playerError = null,
+        // And the same for the danmaku socket: opening a room starts a new subscription, so the
+        // previous room's failure must not be shown while the new one is still connecting.
+        danmakuStatus = DanmakuStatus.Connecting,
       )
     }
     playbackJob = viewModelScope.launch {
@@ -778,6 +785,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         lines = emptyList(),
         selectedLine = null,
         danmaku = emptyList(),
+        danmakuStatus = DanmakuStatus.Connecting,
         playerError = null,
       )
     }
@@ -806,19 +814,68 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    *
    * Messages are capped so a very busy room cannot grow the state without bound; the
    * overlay only needs the most recent window to animate.
+   *
+   * Every event is handled. The previous version matched [DanmakuEvent.Message] and sent
+   * everything else to `else -> Unit`, so a socket that never connected produced the same UI as a
+   * room where nobody was typing: the panel sat on "正在连接弹幕…" forever, with the reason (a
+   * handshake rejection, a 403, an unsupported platform) dropped on the floor. All four adapters
+   * already emit [DanmakuEvent.Failed] and [DanmakuEvent.Disconnected]; nothing consumed them.
+   *
+   * `runCatching` is gone too. It swallowed `CancellationException`, so cancelling this job — which
+   * happens on every room close — was treated as a failure and the collect could outlive the
+   * screen it belonged to.
    */
   private fun startDanmaku(streamer: Streamer) {
     danmakuJob?.cancel()
     danmakuJob = viewModelScope.launch {
-      runCatching {
+      _state.update { it.copy(danmakuStatus = DanmakuStatus.Connecting) }
+      try {
         container.platformGateway.danmaku(streamer.platform, streamer.roomId).collect { event ->
           when (event) {
             is com.livehub.platform.api.DanmakuEvent.Message -> _state.update { current ->
               val next = (current.danmaku + event.message).takeLast(MAX_DANMAKU_BUFFER)
-              current.copy(danmaku = next)
+              current.copy(
+                danmaku = next,
+                // A message is proof the socket works, whatever the last status said.
+                danmakuStatus = DanmakuStatus.Connected,
+              )
             }
-            else -> Unit
+            com.livehub.platform.api.DanmakuEvent.Connected -> _state.update {
+              it.copy(danmakuStatus = DanmakuStatus.Connected)
+            }
+            is com.livehub.platform.api.DanmakuEvent.Disconnected -> _state.update {
+              it.copy(
+                danmakuStatus = if (event.willRetry) {
+                  DanmakuStatus.Reconnecting(event.reason)
+                } else {
+                  DanmakuStatus.Failed(event.reason.ifBlank { "弹幕连接已断开" })
+                },
+              )
+            }
+            is com.livehub.platform.api.DanmakuEvent.Failed -> _state.update {
+              it.copy(
+                danmakuStatus = DanmakuStatus.Failed(
+                  event.error.message?.ifBlank { null } ?: "弹幕连接失败",
+                ),
+              )
+            }
           }
+        }
+        // The flow completing means the adapter gave up for good; a retry loop would not have
+        // returned. Saying so beats a spinner that implies "still trying".
+        _state.update {
+          if (it.danmakuStatus is DanmakuStatus.Failed) {
+            it
+          } else {
+            it.copy(danmakuStatus = DanmakuStatus.Failed("弹幕连接已结束"))
+          }
+        }
+      } catch (cancelled: CancellationException) {
+        // Leaving the room is not a failure: the panel is gone with the screen.
+        throw cancelled
+      } catch (error: Exception) {
+        _state.update {
+          it.copy(danmakuStatus = DanmakuStatus.Failed(error.message ?: "弹幕连接失败"))
         }
       }
     }

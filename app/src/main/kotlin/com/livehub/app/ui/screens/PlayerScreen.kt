@@ -74,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.livehub.app.ui.DanmakuStatus
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.player.DanmakuOverlay
@@ -925,11 +926,39 @@ internal fun DanmakuPanel(state: UiState, modifier: Modifier = Modifier) {
 
     // An empty list after filtering means the stream is alive but everything in it was
     // blocked; saying so is clearer than an endless "connecting" spinner.
-    state.danmaku.isEmpty() -> CenteredNotice(
-      modifier = modifier,
-      text = "正在连接弹幕…",
-      showSpinner = true,
-    )
+    state.danmaku.isEmpty() -> {
+      // An empty list is ambiguous on its own — "nothing said yet" and "never connected" look
+      // identical — so the status decides which of the two the user is looking at. Before this
+      // every failure rendered as an endless "正在连接弹幕…", with the platform's own reason
+      // discarded in the ViewModel.
+      when (val status = state.danmakuStatus) {
+        is DanmakuStatus.Failed -> CenteredNotice(
+          modifier = modifier,
+          icon = Icons.Outlined.ChatBubbleOutline,
+          text = "弹幕连接失败：${status.reason}",
+        )
+
+        // Quiet on purpose: the adapter is already retrying, and a red line over a stream that
+        // reconnects by itself is worse than no line at all.
+        is DanmakuStatus.Reconnecting -> CenteredNotice(
+          modifier = modifier,
+          text = "弹幕正在重连…",
+          showSpinner = true,
+        )
+
+        DanmakuStatus.Connected -> CenteredNotice(
+          modifier = modifier,
+          icon = Icons.Outlined.ChatBubbleOutline,
+          text = "还没有人说话",
+        )
+
+        DanmakuStatus.Connecting -> CenteredNotice(
+          modifier = modifier,
+          text = "正在连接弹幕…",
+          showSpinner = true,
+        )
+      }
+    }
 
     visible.isEmpty() -> CenteredNotice(
       modifier = modifier,

@@ -31,6 +31,33 @@ enum class FollowLiveFilter(val label: String) {
   }
 }
 
+/**
+ * What the danmaku socket is doing, so the player can say something other than "正在连接弹幕…".
+ *
+ * The panel used to have exactly two states — a list with messages, or a spinner — because the
+ * ViewModel threw away every [com.livehub.platform.api.DanmakuEvent] except `Message`. A room
+ * whose handshake was rejected therefore looked identical to a room that was merely quiet, and the
+ * spinner implied it was still trying.
+ */
+sealed interface DanmakuStatus {
+  /** Nothing has come back yet; the socket is being opened. */
+  data object Connecting : DanmakuStatus
+
+  /** The adapter reported a live connection, or a message arrived. */
+  data object Connected : DanmakuStatus
+
+  /**
+   * The connection dropped and the adapter is retrying on its own.
+   *
+   * Kept apart from [Failed] because the UI should stay quiet here: the list still holds what it
+   * had, and a red banner over a stream that reconnects in two seconds is worse than nothing.
+   */
+  data class Reconnecting(val reason: String) : DanmakuStatus
+
+  /** The adapter gave up. [reason] is what the platform said, and is safe to show. */
+  data class Failed(val reason: String) : DanmakuStatus
+}
+
 /** Everything the UI renders; produced by [MainViewModel]. */
 data class UiState(
   val screen: Screen = Screen.Home,
@@ -93,6 +120,13 @@ data class UiState(
   val switchingQuality: Boolean = false,
   val danmakuEnabled: Boolean = true,
   val danmaku: List<com.livehub.core.model.DanmakuMessage> = emptyList(),
+  /**
+   * What the danmaku socket is doing.
+   *
+   * Separate from [danmaku] because an empty list is ambiguous: it means "nothing said yet" on a
+   * healthy connection and "never connected" on a broken one. See [DanmakuStatus].
+   */
+  val danmakuStatus: DanmakuStatus = DanmakuStatus.Connecting,
   val danmakuOpacity: Float = 1f,
   val danmakuFontScale: Float = 1f,
   val danmakuAreaFraction: Float = 0.5f,
