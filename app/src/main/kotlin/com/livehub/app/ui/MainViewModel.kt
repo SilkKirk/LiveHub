@@ -311,10 +311,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     container.preferences.setLastPlatform(platform)
     searchJob?.cancel()
     searchCursor = null
-    // Read before clearing. The field is preferred, but it is legitimately empty while results are
-    // on screen — 清空 only clears the field and ends the search, so a user can be looking at
-    // results whose keyword is no longer in the box. `lastSearchQuery` is the keyword those
-    // results actually answer, and that is the one worth re-running.
+    // The field is the only source that can legitimately hold a keyword here. `lastSearchQuery` is
+    // kept as a fallback rather than as the primary: 清空 (`UpdateQuery("")`) clears it together
+    // with the results, so a cleared box means "nothing to search" and not "re-run the old one" —
+    // `SearchPagingTest` pins that. The fallback only covers the moment between a search
+    // completing and its keyword being written back into the field, which some paths do.
     val keyword = _state.value.searchQuery.trim().ifBlank { _state.value.lastSearchQuery.trim() }
     _state.update {
       it.copy(

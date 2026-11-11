@@ -177,33 +177,54 @@ class SearchPlatformSwitchViewModelTest {
   }
 
   /**
-   * A switch made after the field was cleared still re-runs the keyword the results answer.
+   * A keyword that was typed but never submitted is still what gets searched.
    *
-   * 清空 clears the field and ends the search, but the results of the previous search stay on
-   * screen until something replaces them — so the box can be empty while `lastSearchQuery` still
-   * names what the user was looking at. Re-running that keyword is right; re-running *nothing*
-   * would pop "请输入要搜索的主播或直播间名称" for tapping a platform chip, and this is the case the
-   * first version of `selectSearchPlatform` got wrong (found by the local Python model, not by
-   * CI).
+   * This is the real shape of the case I first got wrong. 清空 (`UpdateQuery("")`) does **not**
+   * leave a stale keyword behind — it clears `lastSearchQuery` and the results too, which is
+   * correct and pinned by `SearchPagingTest`. So "switch after clearing" has nothing to re-run and
+   * must stay silent. What can happen is the other way round: text sits in the box without having
+   * been submitted, and a platform switch should search it rather than ignore it.
    */
   @Test
-  fun `a switch after clearing the field re-runs the last searched keyword`() {
-    submit("英雄联盟")
-    // Clear the box the way the 清空 button does: this ends the search and empties the field.
-    viewModel.onAction(UiAction.UpdateQuery(""))
+  fun `a typed but unsubmitted keyword is searched after a switch`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Search))
+    idle()
+    viewModel.onAction(UiAction.UpdateQuery("户外"))
     idle()
     val before = urls.size
 
     viewModel.onAction(UiAction.SelectSearchPlatform(Platform.HUYA))
     awaitCondition { urls.size > before && !viewModel.state.value.loading }
 
-    assertNull("the switch must not scold the user for an empty field", viewModel.state.value.message)
     assertTrue(
-      "the last searched keyword must be re-run on the new platform, got ${urls.drop(before)}",
+      "the typed keyword must be searched on the new platform, got ${urls.drop(before)}",
       urls.drop(before).any { it.contains("huya", ignoreCase = true) },
     )
-    assertEquals("英雄联盟", viewModel.state.value.searchQuery)
-    assertEquals("英雄联盟", viewModel.state.value.lastSearchQuery)
+    assertEquals("户外", viewModel.state.value.lastSearchQuery)
+  }
+
+  /**
+   * Clearing the field and then switching is silent, because there is nothing to search.
+   *
+   * The first version of this test asserted the opposite and failed on CI: it assumed 清空 left
+   * `lastSearchQuery` behind, but `UpdateQuery("")` deliberately clears it together with the
+   * results. Asserting the real behaviour keeps the snackbar out of a reasonable tap without
+   * inventing a keyword the app has forgotten on purpose.
+   */
+  @Test
+  fun `switching after clearing the field searches nothing and says nothing`() {
+    submit("英雄联盟")
+    viewModel.onAction(UiAction.UpdateQuery(""))
+    idle()
+    val before = urls.size
+
+    viewModel.onAction(UiAction.SelectSearchPlatform(Platform.HUYA))
+    idle()
+
+    assertEquals("nothing to search means no request", before, urls.size)
+    assertNull("and no scolding for tapping a chip", viewModel.state.value.message)
+    assertEquals(Platform.HUYA, viewModel.state.value.platform)
+    assertEquals(Screen.Search, viewModel.state.value.screen)
   }
 }
 
