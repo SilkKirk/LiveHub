@@ -10,7 +10,13 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.livehub.core.model.Platform
 import com.livehub.core.sync.DiscoveredPeer
 import com.livehub.core.sync.TrustedPeer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -75,16 +81,39 @@ data class UserSettings(
  * Thin DataStore wrapper.
  *
  * Reads are synchronous on purpose: the app needs a few values during composition and
- * blocking on a cached value is cheaper than threading `Flow`s through every screen.
- * Writes are dispatched to the DataStore coroutine scope.
+ * blocking on a cached value is cheaper than threading `Flow`s through every screen. The first
+ * read of [settings] and of [deviceId] touches DataStore once and is then cached; every later
+ * read is a field access.
+ *
+ * Writes are **not** synchronous. They are serialised onto [writeScope] so a click handler never
+ * blocks on a file write; see [update]. `saveTrustedPeers` and `savePeerAddresses` still write on
+ * the caller's thread, because every caller of those is already on a background dispatcher
+ * (`SyncController` runs its whole exchange on `Dispatchers.IO`).
  */
 class UserPreferences(private val context: Context) {
   private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+  /**
+   * One worker thread, not a pool.
+   *
+   * [update] is a read-modify-write over the whole settings record, so concurrent writes could
+   * otherwise be applied out of order and let an older value win. Serialising them costs nothing:
+   * the writes are small and there is at most one per user gesture.
+   */
+  private val writeScope = CoroutineScope(
+    SupervisorJob() + java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+      Thread(runnable, "livehub-preferences-write").apply { isDaemon = true }
+    }.asCoroutineDispatcher(),
+  )
 
   private val keySettings = stringPreferencesKey("settings_json")
   private val keyDeviceId = longPreferencesKey("sync_device_id")
   private val keyPeers = stringPreferencesKey("sync_peers_json")
   private val keyAddresses = stringPreferencesKey("sync_addresses_json")
+
+  /** Writes that have been issued and have not reached disk yet; see [awaitWrites]. */
+  private val pendingWrites: MutableSet<Job> =
+    java.util.concurrent.ConcurrentHashMap.newKeySet()
 
   @Volatile private var cached: UserSettings? = null
 
@@ -99,21 +128,80 @@ class UserPreferences(private val context: Context) {
   private fun decode(raw: String): UserSettings =
     runCatching { json.decodeFromString(UserSettings.serializer(), raw) }.getOrDefault(UserSettings())
 
-  fun update(transform: (UserSettings) -> UserSettings) {
+  /**
+   * Applies [transform] and persists the result.
+   *
+   * The new value is published to [cached] **before** the write is handed off, so every reader in
+   * this process sees it immediately — which is what the whole app depends on (`UiState` is built
+   * from `preferences.settings` synchronously).
+   *
+   * The disk write itself no longer runs on the calling thread. It used to be a `runBlocking {
+   * dataStore.edit { … } }`, and the callers are Compose click handlers: every star tap, every
+   * theme chip, every danmaku slider blocked the main thread on a file write. The write is now
+   * serialised onto a single-threaded IO dispatcher instead.
+   *
+   * **Serialisation matters.** `update` is read-modify-write over the *whole* settings record, so
+   * two overlapping writes could otherwise land out of order and resurrect the older value. One
+   * worker thread means the writes are applied in the order the calls were made.
+   *
+   * @return a job that completes once this write has reached disk. Callers that only need the new
+   *   value to be visible (every UI path) ignore it; tests that construct a second
+   *   [UserPreferences] over the same DataStore file must `join()` it, because that instance reads
+   *   the file rather than this object's cache.
+   */
+  fun update(transform: (UserSettings) -> UserSettings): Job {
     val next = transform(settings)
     cached = next
     val encoded = json.encodeToString(UserSettings.serializer(), next)
-    runBlocking { context.dataStore.edit { it[keySettings] = encoded } }
+    val job = writeScope.launch {
+      context.dataStore.edit { it[keySettings] = encoded }
+    }
+    // Registered before the caller can observe the job, so `awaitWrites()` cannot miss a write
+    // that was just issued. `ConcurrentHashMap` because `update` is called from UI threads while
+    // `awaitWrites` runs on a test thread.
+    pendingWrites += job
+    job.invokeOnCompletion { pendingWrites -= job }
+    return job
+  }
+
+  /**
+   * Completes when every write issued so far has reached disk.
+   *
+   * The seam that keeps the "survives a restart" tests honest: they build a *second*
+   * [UserPreferences] over the same file, so they have to wait for the write rather than for the
+   * in-memory cache. Production never calls this — `DataStore` flushes on its own, and the process
+   * dying between a tap and the write is not a state this app promises to recover.
+   */
+  fun awaitWrites() {
+    // Looped rather than one pass: joining a job can let a queued one start, and a caller that
+    // awaits twice in a row expects both to be on disk.
+    while (true) {
+      val pending = pendingWrites.toList()
+      if (pending.isEmpty()) return
+      runBlocking { pending.joinAll() }
+    }
   }
 
   // Publish (not suspend) variants used from Compose callbacks.
-  fun setThemeMode(mode: String) = update { it.copy(themeMode = mode) }
+  //
+  // They discard the [Job] that [update] returns: a UI callback only needs the new value to be
+  // visible, and it already is by the time these return. Keeping the return type `Unit` also
+  // stops the write handle leaking out of this class.
+  fun setThemeMode(mode: String) {
+    update { it.copy(themeMode = mode) }
+  }
 
-  fun setLastPlatform(platform: Platform) = update { it.copy(lastPlatform = platform.id) }
+  fun setLastPlatform(platform: Platform) {
+    update { it.copy(lastPlatform = platform.id) }
+  }
 
-  fun setDanmakuEnabled(enabled: Boolean) = update { it.copy(danmakuEnabled = enabled) }
+  fun setDanmakuEnabled(enabled: Boolean) {
+    update { it.copy(danmakuEnabled = enabled) }
+  }
 
-  fun setBlockedKeywords(keywords: List<String>) = update { it.copy(blockedKeywords = keywords) }
+  fun setBlockedKeywords(keywords: List<String>) {
+    update { it.copy(blockedKeywords = keywords) }
+  }
 
   /**
    * Records a submitted keyword, newest first.
@@ -130,24 +218,50 @@ class UserPreferences(private val context: Context) {
     }
   }
 
-  fun clearSearchHistory() = update { it.copy(searchHistory = emptyList()) }
+  fun clearSearchHistory() {
+    update { it.copy(searchHistory = emptyList()) }
+  }
 
-  fun setPreferredQuality(platform: Platform, quality: Int) = update {
-    it.copy(preferredQuality = it.preferredQuality + (platform.id to quality))
+  fun setPreferredQuality(platform: Platform, quality: Int) {
+    update { it.copy(preferredQuality = it.preferredQuality + (platform.id to quality)) }
   }
 
   // ------------------------------------------------------------------ identity
 
+  /**
+   * This installation's stable device id.
+   *
+   * Cached after the first read. It used to hit DataStore on **every** access — and every follow,
+   * unfollow, reorder, star, quality change and sync exchange reads it — so tapping a star cost a
+   * blocking `dataStore.data.first()` on the calling thread, which for the UI callbacks in
+   * `MainViewModel` is the main thread. The value is written once and never changes afterwards,
+   * so caching it removes a file read per tap without changing any observable behaviour.
+   *
+   * `@Volatile` plus a `synchronized` block rather than a plain field: the sync server answers on
+   * its own threads and calls this too, and two threads must not both generate an id and write
+   * competing values to disk.
+   */
+  @Volatile private var cachedDeviceId: Long = 0L
+
   val deviceId: Long
-    get() = runBlocking {
-      val prefs = context.dataStore.data.first()
-      val existing = prefs[keyDeviceId] ?: 0L
-      if (existing != 0L) {
-        existing
-      } else {
-        val generated = generateDeviceId()
-        context.dataStore.edit { it[keyDeviceId] = generated }
-        generated
+    get() {
+      val known = cachedDeviceId
+      if (known != 0L) return known
+      return synchronized(this) {
+        // Re-read under the lock: another thread may have resolved it while this one waited.
+        cachedDeviceId.takeIf { it != 0L } ?: runBlocking {
+          val prefs = context.dataStore.data.first()
+          val existing = prefs[keyDeviceId] ?: 0L
+          val resolved = if (existing != 0L) {
+            existing
+          } else {
+            val generated = generateDeviceId()
+            context.dataStore.edit { it[keyDeviceId] = generated }
+            generated
+          }
+          cachedDeviceId = resolved
+          resolved
+        }
       }
     }
 

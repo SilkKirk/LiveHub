@@ -180,6 +180,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       Screen.Search -> searchReturnScreen = current
       else -> Unit
     }
+    // Leaving the sync screen shuts the LAN server down. `SyncController`'s own contract says the
+    // server runs "only while the sync screen is open" — it used to keep listening until the
+    // process died, because the only `stop()` was in `onCleared`, which nothing called. Stopping
+    // here also cancels the pairing window, so a six digit code cannot outlive the screen that
+    // displayed it.
+    if (current == Screen.Sync && screen != Screen.Sync) stopSyncServer()
     _state.update { it.copy(screen = screen) }
     when (screen) {
       Screen.Follow -> refreshFollowStatus()
@@ -205,6 +211,30 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
+  /**
+   * Stops the LAN server and clears everything the sync screen owns.
+   *
+   * The UI state goes too: a code or an address left behind would be shown again on the next
+   * visit before `beginPairing()` had a chance to issue a new one, and the "我的设备" card would
+   * advertise a port nothing is listening on.
+   */
+  private fun stopSyncServer() {
+    discoveryJob?.cancel()
+    discoveryJob = null
+    pairingCountdownJob?.cancel()
+    pairingCountdownJob = null
+    container.syncController.stop()
+    _state.update {
+      it.copy(
+        pairingCode = "",
+        pairingCodeSecondsLeft = 0,
+        discoveredPeers = emptyList(),
+        discovering = false,
+        localAddress = "",
+      )
+    }
+  }
+
   private fun back() {
     val current = _state.value.screen
     val target = when (current) {
@@ -217,6 +247,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       danmakuJob?.cancel()
       playbackJob?.cancel()
     }
+    // The back gesture is the other way off the sync screen, so it has to tear the server down
+    // for the same reason [navigate] does.
+    if (current == Screen.Sync) stopSyncServer()
     _state.update {
       it.copy(
         screen = target,
@@ -1184,9 +1217,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   /** Convenience for the UI: the currently selected category's display name. */
   fun categoryTitle(category: Category?): String = category?.name.orEmpty()
 
+  /**
+   * Tears down everything the process should not keep after the UI is gone.
+   *
+   * Reached only through `ViewModelStore.clear()`, which is why `MainActivity` now resolves this
+   * ViewModel through a `ViewModelProvider` instead of calling the constructor: an instance built
+   * inline is never stored, so nothing ever called this, and the LAN server outlived every
+   * screen. See [MainActivity]'s field comment.
+   */
   override fun onCleared() {
     danmakuJob?.cancel()
+    playbackJob?.cancel()
     pairingCountdownJob?.cancel()
+    discoveryJob?.cancel()
     container.syncController.stop()
   }
 

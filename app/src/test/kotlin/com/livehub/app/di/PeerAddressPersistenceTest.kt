@@ -45,6 +45,10 @@ class PeerAddressPersistenceTest {
     )
     preferences.savePeerAddresses(listOf(address))
 
+    // `savePeerAddresses` still writes on the calling thread, so the file already holds it; this
+    // is the seam that would need `awaitWrites()` if that ever moved to the write worker.
+    preferences.awaitWrites()
+
     // A cold start shares nothing with the old process except the file on disk.
     val restarted = UserPreferences(context)
 
