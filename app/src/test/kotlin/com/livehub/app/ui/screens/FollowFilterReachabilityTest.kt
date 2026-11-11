@@ -3,7 +3,10 @@ package com.livehub.app.ui.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
@@ -46,6 +49,23 @@ class FollowFilterReachabilityTest {
     viewerCount = if (live) 1_000 else 0,
   )
 
+  /**
+   * A chip, not any other node that happens to carry the same words.
+   *
+   * `未开播` is also drawn as a badge on every offline room card, so a bare `onNodeWithText` finds
+   * two nodes and the assertion fails on ambiguity — which is what happened the first time this
+   * test ran on CI. A `FilterChip` exposes `SemanticsProperties.Selected` (it is selectable) and a
+   * card badge does not, so matching on that is what makes the assertion about the filter row
+   * rather than about the grid.
+   *
+   * Written as `keyIsDefined` rather than with the `isSelectable()` helper because that helper has
+   * no precedent in this repository and I cannot compile locally — this form uses only the two
+   * matchers already proven here (`hasText`, `keyIsDefined`).
+   */
+  private fun chip(label: String) = composeRule.onNode(
+    hasText(label) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected),
+  )
+
   private fun render(state: UiState) {
     composeRule.setContent {
       Box(modifier = Modifier.size(320.dp, 640.dp)) {
@@ -73,9 +93,9 @@ class FollowFilterReachabilityTest {
       ),
     )
 
-    composeRule.onNodeWithText("全部").assertIsDisplayed()
-    composeRule.onNodeWithText("直播中").assertIsDisplayed()
-    composeRule.onNodeWithText("未开播").assertIsDisplayed()
+    chip("全部").assertIsDisplayed()
+    chip("直播中").assertIsDisplayed()
+    chip("未开播").assertIsDisplayed()
   }
 
   /**
@@ -96,7 +116,7 @@ class FollowFilterReachabilityTest {
     )
 
     composeRule.onNodeWithText("关注").assertIsDisplayed()
-    composeRule.onNodeWithText("直播中").assertDoesNotExist()
+    chip("直播中").assertDoesNotExist()
   }
 
   /**
@@ -117,7 +137,7 @@ class FollowFilterReachabilityTest {
 
     // The header itself is there, so the absence below is about the chips, not a failed render.
     composeRule.onNodeWithText("关注").assertIsDisplayed()
-    composeRule.onNodeWithText("直播中").assertDoesNotExist()
+    chip("直播中").assertDoesNotExist()
   }
 
   /** An active filter always shows the row, so the user can get back out of it. */
@@ -131,8 +151,8 @@ class FollowFilterReachabilityTest {
       ),
     )
 
-    composeRule.onNodeWithText("直播中").assertIsDisplayed()
-    composeRule.onNodeWithText("全部").assertIsDisplayed()
+    chip("直播中").assertIsDisplayed()
+    chip("全部").assertIsDisplayed()
   }
 
   /** A platform filter is offered once there are two platforms, and only then. */
@@ -148,9 +168,6 @@ class FollowFilterReachabilityTest {
       ),
     )
 
-    // 斗鱼 also names the platform of the room cards' subtitle, so match the chip by selection
-    // semantics instead: a chip is a selectable node. Presence of 虎牙 in a chip position is what
-    // matters, and the room cards here do not render a platform name (round 33 removed it).
-    composeRule.onNodeWithText("虎牙").assertIsDisplayed()
+    chip("虎牙").assertIsDisplayed()
   }
 }
