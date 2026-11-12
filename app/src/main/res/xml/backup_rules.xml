@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The pre-API-31 half of `data_extraction_rules.xml`.
+
+  Android 11 and older only have Auto Backup, so "do not copy the credentials to the cloud" means
+  excluding the whole DataStore directory — and therefore the settings and the follow list with it.
+  That is the intended trade: the follow list is one file over from the session cookies and cannot
+  be separated, and it already reaches a second device over the LAN sync.
+-->
+<full-backup-content>
+    <exclude domain="file" path="datastore/" />
+</full-backup-content>

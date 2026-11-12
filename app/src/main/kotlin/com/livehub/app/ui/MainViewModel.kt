@@ -12,11 +12,14 @@ import com.livehub.platform.api.PlatformException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -50,6 +53,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * which also stops an older refresh from clearing the pull-to-refresh indicator of a newer one.
    */
   private var followsRefreshToken: Int = 0
+
+  /** When the follow list was last checked; see [FOLLOW_REFRESH_MIN_INTERVAL_MILLIS]. */
+  private var lastFollowRefreshAt: Long = 0L
 
   init {
     val preferences = container.preferences
@@ -705,44 +711,69 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       return
     }
 
+    // Visiting the tab is not a request for a fresh answer every time.
+    //
+    // Every navigation to 关注 starts this — including the one that happens when the user taps the
+    // tab they are already on — so flicking between two tabs used to queue a full round of live
+    // checks per tap. A pull-to-refresh always runs; a plain visit is skipped while the previous
+    // answer is still recent.
+    val now = System.currentTimeMillis()
+    if (!pullToRefresh && now - lastFollowRefreshAt < FOLLOW_REFRESH_MIN_INTERVAL_MILLIS) return
+    lastFollowRefreshAt = now
+
     // One refresh at a time.
     //
-    // Every visit to the follow tab starts one of these, and tapping the tab twice used to leave
-    // two in flight: each held the list it read *before* it started, so whichever finished last
+    // Two in flight each held the list they read *before* they started, so whichever finished last
     // overwrote the other — sometimes with older live states than the ones already on screen.
     followsJob?.cancel()
     val token = ++followsRefreshToken
     followsJob = viewModelScope.launch {
       if (pullToRefresh) _state.update { it.copy(refreshing = true) }
       try {
-        val fresh = followed.mapNotNull { streamer ->
-          val status = try {
-            container.platformRepository.liveStatus(streamer.platform, streamer.roomId)
-          } catch (cancelled: CancellationException) {
-            // Re-thrown rather than swallowed: `runCatching` used to catch this, so a cancelled
-            // refresh kept walking the whole list and only then wrote its (now stale) result.
-            throw cancelled
-          } catch (error: Exception) {
-            // A single room failing leaves the row as it was; a platform being rate limited is
-            // normal and is not worth a message.
-            null
-          }
-          if (status == null) return@mapNotNull null
+        // Independent requests, so they run together — six at a time.
+        //
+        // This used to be a serial `map`: forty follows meant forty round trips end to end, and a
+        // hundred took long enough that the list looked frozen. Nothing downstream depends on the
+        // order, because each answer is merged into the row it belongs to as it arrives — so the
+        // rows light up as the answers come back instead of all at once at the end.
+        val permits = Semaphore(FOLLOW_REFRESH_CONCURRENCY)
+        coroutineScope {
+          followed.forEach { streamer ->
+            launch {
+              permits.withPermit {
+                val status = try {
+                  container.platformRepository.liveStatus(streamer.platform, streamer.roomId)
+                } catch (cancelled: CancellationException) {
+                  // Re-thrown rather than swallowed: `runCatching` used to catch this, so a
+                  // cancelled refresh kept walking the whole list before writing its stale result.
+                  throw cancelled
+                } catch (error: Exception) {
+                  // One room failing leaves its row as it was; a platform rate limiting us is
+                  // normal and is not worth a message.
+                  null
+                }
+                if (status == null) return@withPermit
+                if (token != followsRefreshToken) return@withPermit
 
-          streamer.key to streamer.copy(
-            isLive = status.isLive,
-            title = status.title ?: streamer.title,
-            viewerCount = status.viewerCount,
-            coverUrl = status.coverUrl ?: streamer.coverUrl,
-            updatedAt = System.currentTimeMillis(),
-          )
-        }
-        if (token != followsRefreshToken) return@launch
-        // Applied onto the *current* list rather than replacing it: a follow or an unfollow made
-        // while the requests were in flight must not be undone by the snapshot taken before them.
-        val byKey = fresh.toMap()
-        _state.update {
-          it.copy(followed = it.followed.map { room -> byKey[room.key] ?: room })
+                val updated = streamer.copy(
+                  isLive = status.isLive,
+                  title = status.title ?: streamer.title,
+                  viewerCount = status.viewerCount,
+                  coverUrl = status.coverUrl ?: streamer.coverUrl,
+                  updatedAt = System.currentTimeMillis(),
+                )
+                // Merged by key into whatever the list looks like *now*: a follow or an unfollow
+                // made while the requests were in flight must not be undone by this snapshot.
+                _state.update { current ->
+                  current.copy(
+                    followed = current.followed.map { room ->
+                      if (room.key == updated.key) updated else room
+                    },
+                  )
+                }
+              }
+            }
+          }
         }
       } finally {
         // Only the newest refresh owns the flag; the previous one may still be unwinding.
@@ -1400,5 +1431,22 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     const val DISCOVERY_POLL_INTERVAL_MILLIS = 2_000L
     const val LOGIN_POLL_ATTEMPTS = 100
     const val LOGIN_POLL_INTERVAL_MILLIS = 2_000L
+
+    /**
+     * How many live checks the follow refresh keeps in flight.
+     *
+     * Six rather than "all of them": the list can be hundreds long, and every one of these is a
+     * request to the same platform API — the point is to stop paying the *sum* of the round trips,
+     * not to open a hundred sockets.
+     */
+    const val FOLLOW_REFRESH_CONCURRENCY = 6
+
+    /**
+     * How long a plain visit to 关注 trusts the previous live check.
+     *
+     * A pull-to-refresh ignores this. Thirty seconds is long enough to cover tab flicking and short
+     * enough that a user who leaves the app and comes back still sees a fresh list.
+     */
+    const val FOLLOW_REFRESH_MIN_INTERVAL_MILLIS = 30_000L
   }
 }

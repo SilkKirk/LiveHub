@@ -11,6 +11,7 @@ import com.livehub.core.model.Streamer
 import com.livehub.core.network.HttpClient
 import com.livehub.core.network.HttpResponse
 import com.livehub.platform.douyu.DouyuAdapter
+import kotlinx.coroutines.yield
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.Assert.assertEquals
@@ -23,15 +24,19 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
- * What 下拉刷新 does on the follow screen.
+ * What a refresh on the follow screen actually does.
  *
- * [com.livehub.app.ui.MainViewModel]'s `refresh` had one behaviour for every screen: reload the room
- * grid. Pulling on the follow list therefore spent a request on a list that was not on screen, and
- * — because that request owned the same `refreshing` flag as the follow refresh — its completion
- * switched the indicator off while dozens of live checks were still running.
+ * Two defects lived here, and both were invisible in the state:
  *
- * The assertion is on the outgoing requests, because the follow refresh and the grid refresh both
- * end with `refreshing == false`: only the traffic says which one ran.
+ *  * [MainViewModel]'s `refresh` had one behaviour for every screen — reload the room grid. Pulling
+ *    on the follow list therefore spent a request on a list that was not on screen, and because
+ *    that request owned the same `refreshing` flag as the follow refresh, its completion switched
+ *    the indicator off while dozens of live checks were still running.
+ *  * the checks themselves ran as a serial `map`, paying the *sum* of the round trips, and every
+ *    visit to the tab started a fresh round of them.
+ *
+ * So the assertions are on the outgoing traffic and on how many requests overlapped, because both
+ * refreshes end with `refreshing == false` and only the traffic says which one ran.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34])
@@ -83,19 +88,17 @@ class FollowRefreshTest {
 
   private val state: UiState get() = viewModel.state.value
 
+  private fun room(roomId: String) = Streamer(
+    platform = Platform.DOUYU,
+    roomId = roomId,
+    streamerName = "主播$roomId",
+    title = "标题$roomId",
+    isLive = false,
+  )
+
   @Test
   fun `a pull on the follow screen re-checks the follows and leaves the home grid alone`() {
-    viewModel.onAction(
-      UiAction.ToggleFollow(
-        Streamer(
-          platform = Platform.DOUYU,
-          roomId = "room-1",
-          streamerName = "主播",
-          title = "标题",
-          isLive = false,
-        ),
-      ),
-    )
+    viewModel.onAction(UiAction.ToggleFollow(room("room-1")))
     idle()
     assertEquals(1, state.followed.size)
 
@@ -120,6 +123,55 @@ class FollowRefreshTest {
   }
 
   /**
+   * The checks run together, not one after another.
+   *
+   * The serial loop paid the *sum* of the round trips — forty follows meant forty waits end to end,
+   * and the list looked frozen while they drained. The fake suspends on `yield()` rather than
+   * blocking, so a concurrent refresh has several requests in flight at the same moment while a
+   * serial one can never exceed one. The assertion is that peak, not wall-clock time, which would
+   * be flaky on CI.
+   */
+  @Test
+  fun `the live checks run together instead of one after another`() {
+    repeat(3) { index -> viewModel.onAction(UiAction.ToggleFollow(room("room-$index"))) }
+    idle()
+
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    awaitCondition { liveChecks() >= 3 }
+    idle()
+
+    assertTrue(
+      "the checks never overlapped (peak ${http.peakLiveChecks}), so they ran serially",
+      http.peakLiveChecks >= 2,
+    )
+    assertEquals("every followed room is checked", 3, liveChecks())
+  }
+
+  /**
+   * Re-entering 关注 inside the window reuses the last answer.
+   *
+   * Every navigation to the tab starts a refresh — including the tap that lands on the tab already
+   * shown — so flicking between two tabs used to queue a whole round of live checks per tap. The
+   * pull-to-refresh path ignores the window on purpose, which the first test pins.
+   */
+  @Test
+  fun `re-entering the follow tab inside the window reuses the last check`() {
+    viewModel.onAction(UiAction.ToggleFollow(room("room-1")))
+    idle()
+
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    awaitCondition { liveChecks() == 1 }
+
+    viewModel.onAction(UiAction.Navigate(Screen.Home))
+    idle()
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    idle()
+    idle()
+
+    assertEquals("a second visit must not re-check every room", 1, liveChecks())
+  }
+
+  /**
    * Answers Douyu's four endpoints with canned JSON and records every URL it was asked for.
    *
    * The adapter under test is the real [DouyuAdapter]: which endpoint a screen refreshes is only
@@ -128,17 +180,35 @@ class FollowRefreshTest {
   private class RecordingDouyuHttp : HttpClient {
     val urls = mutableListOf<String>()
 
+    /** The most `/betard/` requests that were ever in flight at one moment. */
+    var peakLiveChecks = 0
+      private set
+
+    private var liveChecksInFlight = 0
+
     override suspend fun execute(request: Request): HttpResponse {
       val url = request.url.toString()
       urls += url
-      val body = when {
-        url.contains("getThreeCate") -> """{"error":0,"data":[]}"""
-        url.contains("mixListV1") -> pageJson()
-        url.contains("/betard/") -> betardJson()
-        url.contains("cate/list") -> catalogueJson()
-        else -> "{}"
+      val liveCheck = url.contains("/betard/")
+      if (liveCheck) {
+        liveChecksInFlight += 1
+        peakLiveChecks = maxOf(peakLiveChecks, liveChecksInFlight)
       }
-      return HttpResponse(code = 200, body = body, headers = emptyMap(), url = url)
+      try {
+        // Suspending (not blocking) is what lets a sibling request start while this one waits, so
+        // the peak above is a property of the caller and not of the fake.
+        yield()
+        val body = when {
+          url.contains("getThreeCate") -> """{"error":0,"data":[]}"""
+          url.contains("mixListV1") -> pageJson()
+          url.contains("/betard/") -> betardJson()
+          url.contains("cate/list") -> catalogueJson()
+          else -> "{}"
+        }
+        return HttpResponse(code = 200, body = body, headers = emptyMap(), url = url)
+      } finally {
+        if (liveCheck) liveChecksInFlight -= 1
+      }
     }
 
     /** One partition in one group, so the view model selects it on its own. */

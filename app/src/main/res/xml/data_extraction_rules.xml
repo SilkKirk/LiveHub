@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What may leave the device, and what may not.
+
+  `files/datastore/*.preferences_pb` holds far more than preferences: the Bilibili and Douyin
+  session cookies, this installation's sync secret, and the secret of every paired device. Those
+  are credentials. A cloud backup copies them into the user's Drive account, where the platform's
+  own "log out everywhere" cannot reach them, and where they outlive the phone.
+
+  Device transfer is deliberately left alone — `include` rather than `exclude`. Moving to a new
+  phone is a step the user takes on purpose, and the app already syncs the login state to paired
+  devices over the LAN by design (see `SyncScope`). Auto Backup is the part that happens silently,
+  so it is the part that gets the exclusion.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore/" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="datastore/" />
+    </device-transfer>
+</data-extraction-rules>
