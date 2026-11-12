@@ -182,7 +182,7 @@ fun StreamerListSkeleton(
       Row(
         // Same cover width, gap and padding as `StreamerSearchCard`, so the first page does not
         // shift sideways when it arrives.
-        modifier = Modifier.padding(start = 8.dp, end = 6.dp, vertical = 8.dp),
+        modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 6.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         Box(

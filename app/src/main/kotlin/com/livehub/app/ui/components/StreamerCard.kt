@@ -302,7 +302,7 @@ fun StreamerSearchCard(
       // Denser than the grid tile, because the trailing star and the viewer count have to share
       // one line with the name: at 320dp the row is 296dp wide, and every dp here comes out of
       // "一条小团团" (the name ellipsized two characters when the star grew to 48dp).
-      modifier = Modifier.padding(start = 8.dp, end = 6.dp, vertical = 8.dp),
+      modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 6.dp, bottom = 8.dp),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
