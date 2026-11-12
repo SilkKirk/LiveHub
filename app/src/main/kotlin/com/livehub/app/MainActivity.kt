@@ -16,7 +16,6 @@ import com.livehub.app.ui.MainViewModel
 import com.livehub.app.ui.player.PictureInPicture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
 
@@ -51,7 +50,9 @@ class MainActivity : ComponentActivity() {
     viewModel = ViewModelProvider(this, ContainerViewModelFactory(container))
       .get(MainViewModel::class.java)
     setContent {
-      LiveHubApp(viewModel, inPictureInPicture.asStateFlow())
+      // The `MutableStateFlow` *is* the `StateFlow` the shell reads; wrapping it in `asStateFlow()`
+      // here would call a flow operator from inside composition, which lint (rightly) rejects.
+      LiveHubApp(viewModel, inPictureInPicture)
     }
   }
 
