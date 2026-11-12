@@ -387,7 +387,7 @@ class DouyinApi(
     if (!cookieStore.isLoggedIn()) {
       throw PlatformAuthRequiredException(
         "抖音的关键词搜索需要登录（接口返回 2483「请先登录，再继续搜索吧」）。" +
-          "在「设置 → 抖音账号」扫码登录后即可按昵称搜索；" +
+          "在「设置 → 抖音账号」登录后即可按昵称搜索；" +
           "输入直播间号（字母数字都行）或直接粘贴直播间链接时不需要登录。",
         Platform.DOUYIN,
       )

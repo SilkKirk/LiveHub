@@ -174,7 +174,7 @@ private val SEARCH_HINTS = mapOf(
   Platform.DOUYU to "输入关键词后按回车，可搜索斗鱼主播与直播间。",
   Platform.HUYA to "输入关键词后按回车，可搜索虎牙主播与直播间。",
   Platform.DOUYIN to "输入直播间号（数字或 AYM0707 这样的字母号）或直接粘贴直播间链接即可定位；" +
-    "在「设置 → 抖音账号」扫码登录后，可按主播昵称搜索。",
+    "在「设置 → 抖音账号」登录后，可按主播昵称搜索。",
   Platform.BILIBILI to "输入关键词后按回车，可搜索 B 站主播与直播间。",
 )
 

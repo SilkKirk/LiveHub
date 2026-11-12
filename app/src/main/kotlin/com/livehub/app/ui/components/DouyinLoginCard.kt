@@ -35,7 +35,7 @@ fun DouyinLoginCard(
         text = if (loggedIn) {
           "已登录。现在可以在搜索页按昵称/关键词搜抖音直播间；房间号搜索不需要登录。"
         } else {
-          "抖音的关键词搜索要求登录（接口会拒绝匿名请求）。扫码登录后即可按昵称搜索；只输入房间号时不用登录。"
+          "抖音的关键词搜索要求登录（接口会拒绝匿名请求）。登录后即可按昵称搜索；只输入房间号时不用登录。"
         },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -44,7 +44,10 @@ fun DouyinLoginCard(
         if (loggedIn) {
           TextButton(onClick = onLogout) { Text("退出登录") }
         } else {
-          TextButton(onClick = onLogin) { Text("扫码登录") }
+          // Not 扫码登录: the sheet is a browser session, and it accepts either a QR code or a
+          // verification code — see `DouyinWebLoginSheet`'s own copy. The button named one of the
+          // two ways in, which made the other look unsupported.
+          TextButton(onClick = onLogin) { Text("登录抖音") }
         }
       }
     }

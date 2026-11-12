@@ -50,7 +50,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
           Text("主题", style = MaterialTheme.typography.bodyLarge)
           Text(
-            text = "跟随系统时打开深浅色开关由系统决定，选择深色或浅色则固定不变",
+            text = "选择「跟随系统」时跟随系统的深浅色设置；选择深色或浅色则固定不变。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
