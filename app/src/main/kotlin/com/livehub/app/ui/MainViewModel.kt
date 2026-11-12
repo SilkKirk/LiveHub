@@ -121,6 +121,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SelectQuality -> selectQuality(action.quality, line = null)
       is UiAction.SelectLine -> selectQuality(quality = null, line = action.line)
       is UiAction.PlayerFailed -> _state.update { it.copy(playerError = action.message) }
+      is UiAction.SetPlayerPaused -> _state.update { it.copy(playerPaused = action.paused) }
       is UiAction.ToggleFollow -> toggleFollow(action.streamer)
       is UiAction.UpdateQuery -> {
         if (action.query.isBlank()) {
@@ -284,6 +285,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         room = null,
         variants = emptyList(),
         selectedVariant = null,
+        // A pause belongs to the room that is open; the next one starts playing.
+        playerPaused = false,
         danmaku = if (current == Screen.Player) emptyList() else it.danmaku,
         // Leaving the room ends the socket, so the status has to go back to "opening" — otherwise
         // the next room would inherit the previous one's failure banner before its own socket had
@@ -808,6 +811,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         // which is only valid for the URL it was raised against.
         error = null,
         playerError = null,
+        // A new room starts playing; a pause left behind by the previous one (or by the app being
+        // hidden) would otherwise be inherited by a stream the user just opened.
+        playerPaused = false,
         // And the same for the danmaku socket: opening a room starts a new subscription, so the
         // previous room's failure must not be shown while the new one is still connecting.
         danmakuStatus = DanmakuStatus.Connecting,
@@ -932,6 +938,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         danmaku = emptyList(),
         danmakuStatus = DanmakuStatus.Connecting,
         playerError = null,
+        // Nothing is open any more, so nothing can be paused.
+        playerPaused = false,
       )
     }
   }

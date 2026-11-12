@@ -13,6 +13,8 @@ import androidx.lifecycle.ViewModelProvider
 import com.livehub.app.di.AppContainer
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.MainViewModel
+import com.livehub.app.ui.Screen
+import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.player.PictureInPicture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -81,6 +83,28 @@ class MainActivity : ComponentActivity() {
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     inPictureInPicture.value = isInPictureInPictureMode
+  }
+
+  /**
+   * Pauses the stream when the app is hidden without a thumbnail.
+   *
+   * Everything above is about keeping a stream *visible*; this is the other half of the same
+   * decision. A stream the user can no longer see must not keep making noise with nothing on screen
+   * to stop it — and there is no media notification to stop it with (see the round note in
+   * `docs/ITERATIONS.md`). Leaving through Home or Recents opens the picture-in-picture window, and
+   * an activity in that window is not stopped, so what reaches this method is "the thumbnail was
+   * closed" or "the system refused to open one".
+   *
+   * Nothing resumes automatically: coming back shows the frame the stream stopped on with the
+   * 「已暂停 · 双击继续」 badge, which is also what a deliberate pause looks like.
+   */
+  override fun onStop() {
+    super.onStop()
+    if (isInPictureInPictureMode) return
+    val state = viewModel.state.value
+    if (state.screen == Screen.Player && !state.playerPaused) {
+      viewModel.onAction(UiAction.SetPlayerPaused(true))
+    }
   }
 }
 

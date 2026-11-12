@@ -260,4 +260,17 @@ class PlayerChromeTest {
       composeRule.onAllNodesWithText("正在连接弹幕…").fetchSemanticsNodes().size,
     )
   }
+
+  /**
+   * A paused stream says so.
+   *
+   * The badge used to be driven by a `remember` inside this composable; it now comes from
+   * `UiState.playerPaused`, which is what lets the activity pause the stream on its way out.
+   */
+  @Test
+  fun `a paused stream shows the badge`() {
+    render(state = uiState().copy(playerPaused = true))
+
+    composeRule.onNodeWithText("已暂停 · 双击继续").assertIsDisplayed()
+  }
 }

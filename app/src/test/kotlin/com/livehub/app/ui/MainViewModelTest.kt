@@ -153,6 +153,36 @@ class MainViewModelTest {
     assertNull("the failure belongs to the closed room", state.playerError)
   }
 
+  /**
+   * Pause is part of the state, not of the composable that draws it.
+   *
+   * The activity pauses the stream when the app is hidden without a picture-in-picture window —
+   * a stream the user cannot see must not keep playing with nothing on screen to stop it — and it
+   * can only reach that through the view model. Equally: a pause must not outlive the room it
+   * belongs to, or the next room opens frozen.
+   */
+  @Test
+  fun `pausing lives in the state and dies with the room`() {
+    val room = streamer("12", "主播")
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+    assertFalse("a freshly opened room plays", state.playerPaused)
+
+    viewModel.onAction(UiAction.SetPlayerPaused(true))
+    idle()
+    assertTrue("the pause has to live in the state", state.playerPaused)
+
+    viewModel.onAction(UiAction.SetPlayerPaused(false))
+    idle()
+    assertFalse(state.playerPaused)
+
+    viewModel.onAction(UiAction.SetPlayerPaused(true))
+    idle()
+    viewModel.onAction(UiAction.ClosePlayer)
+    idle()
+    assertFalse("a pause cannot outlive its room", state.playerPaused)
+  }
+
   @Test
   fun `opening a room switches to the player and closing returns home`() {
     val room = streamer("1", "主播")

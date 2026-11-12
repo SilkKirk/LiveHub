@@ -63,6 +63,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -219,8 +220,15 @@ internal fun PlayerContent(
 ) {
   val variant: StreamVariant? = state.selectedVariant
   var controlsVisible by remember { mutableStateOf(true) }
-  /** Pause is view-local: leaving the screen always resumes, so it never sticks. */
-  var paused by remember(state.room?.key) { mutableStateOf(false) }
+  // Pause lives in `UiState`, not in a `remember`.
+  //
+  // It used to be a local flag, which made it invisible to everything outside this composable —
+  // including the activity, which now pauses the stream when the app is hidden without a
+  // picture-in-picture window. See `LiveHubApp` and [UiAction.SetPlayerPaused].
+  val paused = state.playerPaused
+  // The gesture detector below is created once per composition and reads `state` from *that*
+  // composition; `rememberUpdatedState` is what keeps a double tap from toggling a stale value.
+  val current by rememberUpdatedState(state)
   // Learned from the decoder. Null until the first frame is sized, which keeps the
   // surface at 16:9 instead of collapsing to zero height on open.
   var videoAspect by remember(state.room?.key) { mutableStateOf<Float?>(null) }
@@ -317,7 +325,7 @@ internal fun PlayerContent(
               .pointerInput(Unit) {
                 detectTapGestures(
                   onTap = { controlsVisible = !controlsVisible },
-                  onDoubleTap = { paused = !paused },
+                  onDoubleTap = { onAction(UiAction.SetPlayerPaused(!current.playerPaused)) },
                 )
               },
           )

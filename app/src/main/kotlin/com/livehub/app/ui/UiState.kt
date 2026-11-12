@@ -177,6 +177,15 @@ data class UiState(
    * button looked dead over a stream that had just been re-resolved successfully.
    */
   val playerError: String? = null,
+  /**
+   * True while the open stream is paused.
+   *
+   * It used to be a `remember` inside the player composable, which made it invisible to everything
+   * outside that composable — including the activity, which now pauses the stream when the app is
+   * hidden without a picture-in-picture window. [UiAction.SetPlayerPaused] is the only way it
+   * changes: the player's double tap, and that exit path.
+   */
+  val playerPaused: Boolean = false,
   val message: String? = null,
   /**
    * The user's theme choice, and the only thing the theme depends on.
@@ -279,6 +288,15 @@ sealed interface UiAction {
    * the ViewModel owns) can actually clear it; see [UiState.playerError].
    */
   data class PlayerFailed(val message: String) : UiAction
+
+  /**
+   * Pauses or resumes the stream that is open.
+   *
+   * Two senders, one state: the player's double tap, and the activity when the app is hidden
+   * without a picture-in-picture window. A stream that keeps playing with no window on screen and
+   * no media notification is audio the user has no way to stop.
+   */
+  data class SetPlayerPaused(val paused: Boolean) : UiAction
 
   data class ToggleFollow(val streamer: Streamer) : UiAction
 
