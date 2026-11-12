@@ -203,19 +203,18 @@ fun StreamerCard(
           }
         }
 
-        // The tap target is 48dp even though the star draws at 32dp.
+        // 48dp, and *only* 48dp.
         //
-        // `size(32.dp)` on the `IconButton` used to shrink the *touch* area too, and 32dp is
-        // below the 48dp minimum both Material and the platform accessibility guidance call for:
-        // on a 320dp-wide screen the star is a 6dp-radius circle squeezed into a corner, and
-        // missing it opens the room instead of following it. The disc stays 32dp so the card looks
-        // the same; the padding is what the finger gets.
+        // The trap is that `IconButton`'s own `minimumInteractiveComponentSize()` sits **inside**
+        // the caller's modifier, so anything that constrains the button from the outside also
+        // constrains the touch target: `size(32.dp)` gave a 32dp target, and the previous fix —
+        // `size(48.dp).padding(8.dp)` — reported a 48dp semantics node while leaving the clickable
+        // area at 32dp, because the padding is what the inner `size(40.dp)` saw. A plain
+        // `size(48.dp)` forces that inner box to 48dp, which is the number the finger actually gets.
+        // The 19dp disc is centred either way, so the card looks unchanged.
         IconButton(
           onClick = onToggleFollow,
-          modifier = Modifier
-            .align(Alignment.TopEnd)
-            .size(48.dp)
-            .padding(8.dp),
+          modifier = Modifier.align(Alignment.TopEnd).size(48.dp),
         ) {
           Icon(
             imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
@@ -368,7 +367,10 @@ fun StreamerSearchCard(
         }
       }
 
-      IconButton(onClick = onToggleFollow, modifier = Modifier.size(36.dp)) {
+      // 48dp for the same reason — and with the same trap — as the grid tile's star: a caller's
+      // `size(36.dp)` used to constrain Material's own minimum from the outside, so the target was
+      // 36dp on the row's outermost control, where a miss opens the room instead of following it.
+      IconButton(onClick = onToggleFollow, modifier = Modifier.size(48.dp)) {
         Icon(
           imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
           contentDescription = if (followed) "取消关注" else "关注",

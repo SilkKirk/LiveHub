@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,7 +28,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -72,6 +75,14 @@ import com.livehub.core.model.Platform
 
 /** Below this count a single-page result gets an explicit end-of-list hint. */
 private const val NO_MORE_HINT_THRESHOLD = 21
+
+/**
+ * How tall the wrapped partition row may get before it scrolls instead of growing.
+ *
+ * 220dp is roughly six chip rows on a 320dp-wide phone, and it leaves the grid more than half of a
+ * 640dp window. It is a cap, not a height: with three partitions the row is still one line tall.
+ */
+private val EXPANDED_PARTITION_MAX_HEIGHT = 220.dp
 
 /**
  * The category tree, resolved once and shared by the two inline rows.
@@ -524,8 +535,22 @@ private fun CategoryTree(
     // still wrapped ~40 partitions into a screenful of chips and pushed the grid — the thing the
     // user actually opened the app for — entirely below the fold.
     if (expanded) {
+      // Bounded and scrollable, because "全部" is not a small list.
+      //
+      // The expanded row lists the partitions of *every* group at once — 456 of them on Bilibili,
+      // about 200 on Huya — and this column is not a scroll container. A `FlowRow` given more
+      // content than the window has is not scrollable, it is simply clipped by its constraints:
+      // every partition past the first screenful was unreachable, and the room grid underneath was
+      // measured to zero height, so a tap on 全部 looked like the app had emptied itself.
+      //
+      // The cap is a share of the screen rather than "whatever is left": the grid is the reason the
+      // page exists and has to keep a usable amount of it.
       FlowRow(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(max = EXPANDED_PARTITION_MAX_HEIGHT)
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {

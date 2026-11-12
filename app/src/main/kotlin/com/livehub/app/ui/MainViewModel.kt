@@ -3,7 +3,6 @@ package com.livehub.app.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.livehub.app.di.AppContainer
-import com.livehub.app.ui.components.BiliLoginUi
 import com.livehub.app.sync.SyncController
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
@@ -11,12 +10,14 @@ import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.platform.api.PlatformException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The single ViewModel backing the app shell.
@@ -36,9 +37,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private var searchJob: Job? = null
   private var playbackJob: Job? = null
   private var danmakuJob: Job? = null
+  private var followsJob: Job? = null
   private var pairingCountdownJob: Job? = null
   private var nextCursor: String? = null
   private var searchCursor: String? = null
+
+  /**
+   * Identifies the newest follow-status refresh.
+   *
+   * A cancelled coroutine still runs its `finally`, so "am I the current refresh?" cannot be
+   * answered by the job handle (it has already been replaced). The number is compared instead,
+   * which also stops an older refresh from clearing the pull-to-refresh indicator of a newer one.
+   */
+  private var followsRefreshToken: Int = 0
 
   init {
     val preferences = container.preferences
@@ -49,6 +60,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       "light" -> com.livehub.core.designsystem.ThemeMode.Light
       else -> com.livehub.core.designsystem.ThemeMode.System
     }
+    // Login state is deliberately **not** part of this first snapshot. It lives in two DataStore
+    // files of its own and reading it is a synchronous read, so resolving it here put two blocking
+    // disk reads on the main thread inside `onCreate` — the same defect round 60 fixed for
+    // `UserPreferences`. The flags are only rendered on 设置 and in the search hint, so resolving
+    // them one frame later is invisible; blocking the first frame is not.
     _state.update {
       it.copy(
         platform = platform,
@@ -65,13 +81,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         specialFollowKeys = container.followStore.specialKeys(),
         peers = preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
-        bilibiliLogin = com.livehub.app.ui.components.BiliLoginUi(
-          loggedIn = container.bilibiliAuth.isLoggedIn(),
-        ),
-        douyinLoggedIn = container.douyinCookieStore.isLoggedIn(),
       )
     }
     loadCategories(platform)
+    viewModelScope.launch {
+      val bilibili = withContext(Dispatchers.IO) { container.bilibiliAuth.isLoggedIn() }
+      val douyin = withContext(Dispatchers.IO) { container.douyinCookieStore.isLoggedIn() }
+      _state.update {
+        it.copy(
+          bilibiliLogin = it.bilibiliLogin.copy(loggedIn = bilibili),
+          douyinLoggedIn = douyin,
+        )
+      }
+    }
   }
 
   fun onAction(action: UiAction) {
@@ -501,16 +523,28 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     loadRooms(current.platform, category, reset = false)
   }
 
+  /**
+   * Re-fetches whatever the current screen shows.
+   *
+   * [UiAction.Refresh] is emitted by three different pull-to-refresh surfaces and by the home
+   * screen's refresh button, and it used to do one fixed thing: reload the room grid. On the follow
+   * screen that meant a request for a list that was not even on screen, plus a second `refreshing`
+   * writer — the grid finished first and cleared the indicator while the follow refresh was still
+   * working through the list.
+   */
   private fun refresh() {
     val current = _state.value
+    if (current.screen == Screen.Follow) {
+      refreshFollowStatus(pullToRefresh = true)
+      return
+    }
     val category = activeCategory(current)
     if (category == null) {
       loadCategories(current.platform)
-    } else {
-      nextCursor = null
-      loadRooms(current.platform, category, reset = true, pullToRefresh = current.screen == Screen.Home)
+      return
     }
-    if (current.screen == Screen.Follow) refreshFollowStatus(pullToRefresh = true)
+    nextCursor = null
+    loadRooms(current.platform, category, reset = true, pullToRefresh = current.screen == Screen.Home)
   }
 
   // --------------------------------------------------------------------- search
@@ -666,25 +700,54 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun refreshFollowStatus(pullToRefresh: Boolean = false) {
     val followed = container.followStore.followed()
     if (followed.isEmpty()) {
+      followsJob?.cancel()
       _state.update { it.copy(followed = emptyList(), refreshing = false) }
       return
     }
-    viewModelScope.launch {
+
+    // One refresh at a time.
+    //
+    // Every visit to the follow tab starts one of these, and tapping the tab twice used to leave
+    // two in flight: each held the list it read *before* it started, so whichever finished last
+    // overwrote the other — sometimes with older live states than the ones already on screen.
+    followsJob?.cancel()
+    val token = ++followsRefreshToken
+    followsJob = viewModelScope.launch {
       if (pullToRefresh) _state.update { it.copy(refreshing = true) }
-      val refreshed = followed.map { streamer ->
-        runCatching {
-          container.platformRepository.liveStatus(streamer.platform, streamer.roomId)
-        }.getOrNull()?.let { status ->
-          streamer.copy(
+      try {
+        val fresh = followed.mapNotNull { streamer ->
+          val status = try {
+            container.platformRepository.liveStatus(streamer.platform, streamer.roomId)
+          } catch (cancelled: CancellationException) {
+            // Re-thrown rather than swallowed: `runCatching` used to catch this, so a cancelled
+            // refresh kept walking the whole list and only then wrote its (now stale) result.
+            throw cancelled
+          } catch (error: Exception) {
+            // A single room failing leaves the row as it was; a platform being rate limited is
+            // normal and is not worth a message.
+            null
+          }
+          if (status == null) return@mapNotNull null
+
+          streamer.key to streamer.copy(
             isLive = status.isLive,
             title = status.title ?: streamer.title,
             viewerCount = status.viewerCount,
             coverUrl = status.coverUrl ?: streamer.coverUrl,
             updatedAt = System.currentTimeMillis(),
           )
-        } ?: streamer
+        }
+        if (token != followsRefreshToken) return@launch
+        // Applied onto the *current* list rather than replacing it: a follow or an unfollow made
+        // while the requests were in flight must not be undone by the snapshot taken before them.
+        val byKey = fresh.toMap()
+        _state.update {
+          it.copy(followed = it.followed.map { room -> byKey[room.key] ?: room })
+        }
+      } finally {
+        // Only the newest refresh owns the flag; the previous one may still be unwinding.
+        if (token == followsRefreshToken) _state.update { it.copy(refreshing = false) }
       }
-      _state.update { it.copy(followed = refreshed, refreshing = false) }
     }
   }
 
@@ -693,7 +756,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun openRoom(streamer: Streamer) {
     playbackJob?.cancel()
     // Remember where the room was opened from so closing it returns there.
-    playerReturnScreen = _state.value.screen.takeIf { it != Screen.Player } ?: Screen.Home
+    //
+    // Only for a *new* room. The side 刷新 button and the error state's 重试 both call this to
+    // re-resolve the room that is already open — at that moment `screen` is already `Player` — and
+    // the old fallback wrote `Home` in that case. Retrying a stream opened from the follow list and
+    // then closing it dropped the user on the browse tab.
+    _state.value.screen.takeIf { it != Screen.Player }?.let { playerReturnScreen = it }
     _state.update {
       it.copy(
         screen = Screen.Player,

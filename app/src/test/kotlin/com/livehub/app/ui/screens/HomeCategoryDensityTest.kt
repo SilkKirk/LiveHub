@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -447,6 +449,41 @@ class HomeCategoryDensityTest {
     composeRule.onAllNodesWithText("全部")[0].performClick()
 
     composeRule.onAllNodesWithText("全部")[0].assertIsSelected()
+  }
+
+  /**
+   * Widening to 全部 and then expanding must leave the grid reachable.
+   *
+   * The expanded row lists the partitions of *every* group at once — 456 of them on Bilibili, about
+   * 200 on Huya — inside a `Column` that does not scroll. A `FlowRow` given more content than the
+   * window is clipped rather than scrolled, so every partition past the first screenful was
+   * unreachable and the grid underneath was measured to zero height. The row is capped and
+   * scrollable now, and the grid keeps the rest of the page.
+   */
+  @Test
+  fun `expanding every group keeps the grid reachable`() {
+    val many = (1..60).map { category("c$it", "网游分区$it", "网游", it) } +
+      (1..40).map { category("d$it", "手游分区$it", "手游", 100 + it) }
+    composeHome(state = homeState().copy(categories = many, selectedCategory = many.first()))
+
+    // The group row's 全部: one row holding every group's partitions.
+    composeRule.onAllNodesWithText("全部")[0].performClick()
+    composeRule.onNodeWithContentDescription("展开分类").performClick()
+
+    composeRule.onNodeWithText("主播1").assertIsDisplayed()
+
+    // A *vertical* scroller holding the chips: the grid is vertical too, but it holds cards, not
+    // partitions. Without the cap and the scroll modifier the block would simply be clipped.
+    val scrollers = composeRule
+      .onAllNodes(
+        SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and
+          hasAnyDescendant(hasText("网游分区1")),
+      )
+      .fetchSemanticsNodes()
+    assertTrue(
+      "the wrapped partition row must scroll instead of overflowing, found ${scrollers.size}",
+      scrollers.isNotEmpty(),
+    )
   }
 
   private fun leftDp(text: String): Float = with(composeRule.density) {

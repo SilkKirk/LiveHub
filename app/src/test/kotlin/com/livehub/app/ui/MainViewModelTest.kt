@@ -190,6 +190,31 @@ class MainViewModelTest {
     assertEquals(Screen.Follow, state.screen)
   }
 
+  /**
+   * Re-opening the room that is already on screen must not rewrite where it came from.
+   *
+   * The side 刷新 button and the error state's 重试 both emit `OpenRoom` for the room that is
+   * already playing, and `openRoom` is also what records the screen to return to. It recorded the
+   * `Home` fallback whenever it was called from the player — so after a retry, closing the room
+   * landed on 首页 instead of the follow list the user had opened it from.
+   */
+  @Test
+  fun `refreshing the open room keeps the screen it was opened from`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    idle()
+    val room = streamer("9", "主播")
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+
+    // What the player's 刷新 button does.
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+
+    viewModel.onAction(UiAction.ClosePlayer)
+    idle()
+    assertEquals(Screen.Follow, state.screen)
+  }
+
   @Test
   fun `leaving search returns to the screen it was opened from`() {
     viewModel.onAction(UiAction.Navigate(Screen.Follow))

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -34,6 +35,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -200,12 +202,20 @@ private fun SearchField(state: UiState, onAction: (UiAction) -> Unit) {
       },
       singleLine = true,
       leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+      // Both controls, always.
+      //
+      // This used to be an either/or: as soon as the field had text the submit button was replaced
+      // by 清空, so after typing there was no tappable "search" anywhere on the screen — the only
+      // remaining way was the keyboard's own search key, which several IMEs keep one panel deep.
+      // A search field whose submit affordance disappears exactly when it becomes usable is the
+      // wrong trade, even at the cost of ~48dp of text width.
       trailingIcon = {
-        if (state.searchQuery.isNotEmpty()) {
-          IconButton(onClick = { onAction(UiAction.UpdateQuery("")) }) {
-            Icon(Icons.Filled.Clear, contentDescription = "清空")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          if (state.searchQuery.isNotEmpty()) {
+            IconButton(onClick = { onAction(UiAction.UpdateQuery("")) }) {
+              Icon(Icons.Filled.Clear, contentDescription = "清空")
+            }
           }
-        } else {
           IconButton(
             onClick = { onAction(UiAction.SubmitSearch) },
             enabled = state.searchQuery.isNotBlank(),

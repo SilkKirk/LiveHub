@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -473,15 +474,18 @@ private fun FullscreenBar(
       .padding(horizontal = 6.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
+    // Both glyphs keep their size and gain a 48dp target: these two are drawn over the picture
+    // with no disc behind them, so a miss does not look like a miss — it looks like the button was
+    // never there. `size(34.dp)` on the *clickable* node shrank the target along with the icon.
     Icon(
       imageVector = Icons.AutoMirrored.Filled.ArrowBack,
       contentDescription = "退出全屏",
       tint = Color.White,
       modifier = Modifier
-        .size(34.dp)
+        .size(48.dp)
         .clip(CircleShape)
         .clickable(onClick = onExit)
-        .padding(5.dp),
+        .padding(12.dp),
     )
     Text(
       text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
@@ -497,10 +501,10 @@ private fun FullscreenBar(
       contentDescription = "关注",
       tint = Color.White,
       modifier = Modifier
-        .size(34.dp)
+        .size(48.dp)
         .clip(CircleShape)
         .clickable { state.room?.let { onAction(UiAction.ToggleFollow(it)) } }
-        .padding(6.dp),
+        .padding(13.dp),
     )
   }
 }
@@ -1116,25 +1120,39 @@ private fun CenteredNotice(
 
 @Composable
 private fun PillButton(label: String, filled: Boolean, onClick: () -> Unit) {
-  Surface(
-    color = if (filled) {
-      MaterialTheme.colorScheme.primary
-    } else {
-      MaterialTheme.colorScheme.surfaceVariant
-    },
-    shape = RoundedCornerShape(20.dp),
-    modifier = Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick),
+  // 48dp of touch target around the pill, which is about 34dp tall on its own.
+  //
+  // The `Surface` used to be the clickable node and its height came from the label plus 7dp of
+  // vertical padding — well under the 48dp minimum. 关注, 重试 and 返回 are the most consequential
+  // controls on the screen (a missed 重试 leaves a dead stream on screen). The pill itself is drawn
+  // exactly as before; what grows is the ring around it, which is also where the press ripple now
+  // reaches.
+  Box(
+    modifier = Modifier
+      .heightIn(min = 48.dp)
+      .clip(RoundedCornerShape(24.dp))
+      .clickable(onClick = onClick),
+    contentAlignment = Alignment.Center,
   ) {
-    Text(
-      text = label,
-      style = MaterialTheme.typography.labelLarge,
+    Surface(
       color = if (filled) {
-        MaterialTheme.colorScheme.onPrimary
+        MaterialTheme.colorScheme.primary
       } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+        MaterialTheme.colorScheme.surfaceVariant
       },
-      modifier = Modifier.padding(horizontal = 18.dp, vertical = 7.dp),
-    )
+      shape = RoundedCornerShape(20.dp),
+    ) {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelLarge,
+        color = if (filled) {
+          MaterialTheme.colorScheme.onPrimary
+        } else {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 7.dp),
+      )
+    }
   }
 }
 

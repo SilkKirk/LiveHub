@@ -13,7 +13,18 @@ import kotlinx.coroutines.runBlocking
 
 private val Context.biliDataStore: DataStore<Preferences> by preferencesDataStore(name = "livehub_bilibili")
 
-/** Persists the Bilibili cookie header so a login survives restarts. */
+/** One writer for the file, shared by every instance; see [SerialWriteQueue]. */
+private val biliWrites = SerialWriteQueue("livehub-bilibili-write")
+
+/**
+ * Persists the Bilibili cookie header so a login survives restarts.
+ *
+ * Reads stay synchronous — adapters ask for the header inside a request — but they are served from
+ * the in-memory cache after the first touch, and callers that reach the first read are on IO
+ * (`MainViewModel` resolves the login flags on `Dispatchers.IO` now). Writes are handed to
+ * [SerialWriteQueue] instead of blocking the caller, so a 退出登录 tap no longer writes a file on the
+ * main thread.
+ */
 class DataStoreBilibiliCookies(private val context: Context) : BilibiliCookieStore {
   private val keyCookie = stringPreferencesKey("cookie_header")
 
@@ -31,14 +42,19 @@ class DataStoreBilibiliCookies(private val context: Context) : BilibiliCookieSto
   override fun save(rawHeader: String) {
     if (rawHeader.isBlank()) return
     val merged = merge(header(), rawHeader)
+    // Published before the write is handed off, so a request issued in the same frame already
+    // carries the new cookie — this is what makes "logged in" work without waiting for the disk.
     cached = merged
-    runBlocking { context.biliDataStore.edit { it[keyCookie] = merged } }
+    biliWrites.submit { context.biliDataStore.edit { it[keyCookie] = merged } }
   }
 
   override fun clear() {
     cached = ""
-    runBlocking { context.biliDataStore.edit { it.remove(keyCookie) } }
+    biliWrites.submit { context.biliDataStore.edit { it.remove(keyCookie) } }
   }
+
+  /** Blocks until every write issued by this process has reached disk. Tests only. */
+  fun awaitWrites() = biliWrites.awaitIdle()
 
   private fun merge(existing: String, incoming: String): String {
     val map = LinkedHashMap<String, String>()

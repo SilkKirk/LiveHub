@@ -8,8 +8,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
+import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
@@ -59,10 +61,10 @@ class SearchScreenTest {
 
   private fun searchState() = UiState(platform = Platform.DOUYU, screen = Screen.Search)
 
-  private fun render(state: UiState) {
+  private fun render(state: UiState, onAction: (UiAction) -> Unit = {}) {
     composeRule.setContent {
       Box(modifier = Modifier.size(320.dp, 640.dp)) {
-        SearchScreen(state = state, onAction = {})
+        SearchScreen(state = state, onAction = onAction)
       }
     }
     composeRule.waitForIdle()
@@ -211,5 +213,48 @@ class SearchScreenTest {
 
     composeRule.onNodeWithText("搜索主播或直播间").assertIsDisplayed()
     composeRule.onNodeWithText("搜索失败").assertDoesNotExist()
+  }
+
+  /**
+   * The submit button does not disappear the moment the field becomes usable.
+   *
+   * The trailing slot used to be either/or: as soon as there was text in the field, 清空 replaced the
+   * submit button, so the screen offered no tappable way to run the search — only the keyboard's own
+   * search key, which several IMEs keep one panel deep. Both buttons are now drawn together.
+   */
+  @Test
+  fun `the submit button is still there once the field has text`() {
+    val actions = mutableListOf<UiAction>()
+    render(searchState().copy(searchQuery = "英雄联盟"), onAction = { actions += it })
+
+    composeRule.onNodeWithContentDescription("清空").assertExists()
+    composeRule.onNodeWithContentDescription("搜索").assertExists()
+
+    composeRule.onNodeWithContentDescription("搜索").performClick()
+    composeRule.waitForIdle()
+
+    assertEquals(listOf<UiAction>(UiAction.SubmitSearch), actions)
+  }
+
+  /**
+   * The follow star is a 48dp target, like the grid tile's.
+   *
+   * `IconButton` applies Material's minimum interactive size only when it is not given an explicit
+   * one, so this row's star was a 36dp target: the control closest to the screen edge, and a miss
+   * opens the room instead of following it.
+   */
+  @Test
+  fun `the follow star is a 48dp target`() {
+    render(
+      searchState().copy(
+        searchQuery = "英雄联盟",
+        lastSearchQuery = "英雄联盟",
+        searchResults = listOf(streamer("1", "一条小团团", "今天继续冲分！冲击王者一百星", 128_500)),
+      ),
+    )
+
+    // The merged node, i.e. the button rather than the 20dp glyph inside it.
+    val star = boxOf(composeRule.onNodeWithContentDescription("关注"))
+    assertTrue("the star is only ${star.height}dp tall", star.height >= 48f)
   }
 }

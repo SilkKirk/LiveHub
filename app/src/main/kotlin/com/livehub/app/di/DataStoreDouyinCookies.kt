@@ -13,6 +13,9 @@ import kotlinx.coroutines.runBlocking
 
 private val Context.douyinDataStore: DataStore<Preferences> by preferencesDataStore(name = "livehub_douyin")
 
+/** One writer for the file, shared by every instance; see [SerialWriteQueue]. */
+private val douyinWrites = SerialWriteQueue("livehub-douyin-write")
+
 /**
  * Persists Douyin's cookies so both the negotiated `ttwid` and a QR login survive restarts.
  *
@@ -24,6 +27,10 @@ private val Context.douyinDataStore: DataStore<Preferences> by preferencesDataSt
  * cheap (one page load), but the first request after launch would still race the negotiation,
  * and the whole point of storing it is that the *first* room-open already carries a valid
  * cookie — that was a reported bug in an earlier round.
+ *
+ * Writes are queued rather than performed inline; see [SerialWriteQueue]. The merge itself reads
+ * the in-memory cache, so two saves issued back to back still compose correctly without waiting
+ * for either write.
  */
 class DataStoreDouyinCookies(private val context: Context) : DouyinCookieStore {
   private val keyCookie = stringPreferencesKey("ttwid_header")
@@ -43,11 +50,14 @@ class DataStoreDouyinCookies(private val context: Context) : DouyinCookieStore {
     if (header.isBlank()) return
     val merged = mergeDouyinCookies(header(), header)
     cached = merged
-    runBlocking { context.douyinDataStore.edit { it[keyCookie] = merged } }
+    douyinWrites.submit { context.douyinDataStore.edit { it[keyCookie] = merged } }
   }
 
   override fun clear() {
     cached = ""
-    runBlocking { context.douyinDataStore.edit { it.remove(keyCookie) } }
+    douyinWrites.submit { context.douyinDataStore.edit { it.remove(keyCookie) } }
   }
+
+  /** Blocks until every write issued by this process has reached disk. Tests only. */
+  fun awaitWrites() = douyinWrites.awaitIdle()
 }

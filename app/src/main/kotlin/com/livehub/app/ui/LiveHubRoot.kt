@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -62,6 +64,20 @@ fun LiveHubRoot(
 ) {
   val snackbar = remember { SnackbarHostState() }
 
+  /**
+   * Where each dock screen's `rememberSaveable` state lives while it is off screen.
+   *
+   * The grids and the search results use `rememberLazyGridState` / `rememberLazyListState`, which
+   * are `rememberSaveable`. That is not enough on its own: a screen leaves composition whenever
+   * another one is shown — and the player replaces this whole scaffold, so *every* screen is gone
+   * while a room is open. Without a holder the saved values are discarded with the composition, so
+   * coming back from a room landed the user at the top of a grid they had scrolled halfway down.
+   *
+   * Held above the player branch on purpose: the holder itself has to outlive the branch that is
+   * not composed, otherwise it would be re-created (empty) exactly when it is needed.
+   */
+  val screenStates = rememberSaveableStateHolder()
+
   // Only transient messages go through the snackbar. A load error is already rendered
   // inline by the screen (with a retry button), so echoing it here duplicates the text.
   LaunchedEffect(state.message) {
@@ -85,16 +101,23 @@ fun LiveHubRoot(
         }
       } else {
         Scaffold(
+          // The keyboard is not part of `Scaffold`'s default content insets, and from Android 15
+          // an edge-to-edge app has to make room for the IME itself — the window is no longer
+          // resized for it. Without this the last search result sits under the keyboard and
+          // cannot be scrolled into view.
+          modifier = Modifier.imePadding(),
           snackbarHost = { SnackbarHost(snackbar) },
           bottomBar = { AppBottomBar(state = state, onAction = onAction) },
         ) { padding ->
           Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (state.screen) {
-              Screen.Follow -> FollowScreen(state, onAction)
-              Screen.Search -> SearchScreen(state, onAction)
-              Screen.Sync -> SyncScreen(state, onAction)
-              Screen.Settings -> SettingsScreen(state, onAction)
-              else -> HomeScreen(state, onAction)
+            screenStates.SaveableStateProvider(state.screen.name) {
+              when (state.screen) {
+                Screen.Follow -> FollowScreen(state, onAction)
+                Screen.Search -> SearchScreen(state, onAction)
+                Screen.Sync -> SyncScreen(state, onAction)
+                Screen.Settings -> SettingsScreen(state, onAction)
+                else -> HomeScreen(state, onAction)
+              }
             }
           }
         }

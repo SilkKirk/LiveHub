@@ -7,6 +7,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -193,5 +194,44 @@ class PlayerChromeTest {
     assertEquals(1, actions.size)
     assertTrue("got ${actions.first()}", actions.first() is UiAction.OpenRoom)
     assertEquals(room.key, (actions.first() as UiAction.OpenRoom).streamer.key)
+  }
+
+  private fun heightOfDp(node: androidx.compose.ui.test.SemanticsNodeInteraction): Float =
+    with(composeRule.density) { node.fetchSemanticsNode().boundsInRoot.height.toDp().value }
+
+  /**
+   * The action row's 关注 is a 48dp target.
+   *
+   * The pill's height came from its label plus 7dp of vertical padding — about 34dp — because the
+   * `Surface` itself was the clickable node. It stays that size; the tap area grew around it.
+   */
+  @Test
+  fun `the follow pill is a 48dp target`() {
+    render(fullscreen = false)
+
+    val height = heightOfDp(composeRule.onNodeWithText("关注"))
+    assertTrue("the follow pill is only ${height}dp tall", height >= 48f)
+  }
+
+  /**
+   * Both controls in the full-screen bar are 48dp targets.
+   *
+   * They float over the picture with no disc behind them and only 34dp of hit area, so a miss read
+   * as "the button is not there" rather than as a miss. The side buttons were fixed the same way in
+   * round 64; these two are the ones it left behind.
+   */
+  @Test
+  fun `the full screen bar controls are 48dp targets`() {
+    render(fullscreen = true)
+
+    val heights = composeRule.onAllNodesWithContentDescription("退出全屏")
+      .fetchSemanticsNodes()
+      .map { node -> with(composeRule.density) { node.boundsInRoot.height.toDp().value } }
+
+    // The bar's back arrow and the side column's exit-fullscreen button.
+    assertTrue("expected two exit controls, got ${heights.size}", heights.size >= 2)
+    heights.forEach { height ->
+      assertTrue("an exit control is only ${height}dp tall", height >= 48f)
+    }
   }
 }
