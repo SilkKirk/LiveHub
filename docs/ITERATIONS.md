@@ -1164,6 +1164,37 @@ stop，所以这条路径不会误伤正在缩窗播放的流；它接住的是�
 - `setAutoEnterEnabled`（第六十七轮记的）。
 - 真机验证清单已经很长了：PiP 三条路径、`onStop` 暂停、音频焦点、局域网配对、四平台弹幕。
 
+---
+
+## 发版：v0.19.0
+
+第六十五到第六十八轮之后发版（`v0.18.0..v0.19.0`，16 个提交）。Release workflow 一次通过：
+
+- 产物 `LiveHub-v0.19.0-release.apk`，4.69 MB（4914456 字节），
+  sha256 `6f0f1f8829c0fad3eac5f810f4ff50c651287b56c7c184b44821de23a3bd251b`，随包附
+  `*.sha256.txt`。
+- **release 签名**，不是回退的 debug 包：证书 `CN=LiveHub, OU=Personal, O=SilkKirk, C=CN`，
+  证书 SHA-256 `2e45831c…bda33c`。workflow 里那条「release 包被 debug 密钥签名就让任务失败」
+  的检查没有触发。
+- 已标记为 latest，`prerelease = false`。
+- `versionCode` 由标签推导（0.19.0 → 1900），高于 0.18.0 的 1800，覆盖安装不会被判成降级包。
+
+体积与 v0.18.0 持平（都是 4.69 MB）。这一轮最重的新东西是画中画，而它只用框架 API
+（`onUserLeaveHint`、`PictureInPictureParams`、`onPictureInPictureModeChanged`），没有引入
+任何依赖。后台播放那一轮如果做 `MediaSessionService`，会带进 `media3-session`——体积和
+风险都会变，这是把它单独留出来的另一个理由。
+
+标签信息里是完整的变更说明（第六十五到六十八轮的修复与新能力）；Release 正文由
+`generate_release_notes` 生成，附 `compare/v0.18.0...v0.19.0` 链接。
+
+### 下一轮
+
+- 媒体通知 + 前台服务（要真机在环）。
+- `setAutoEnterEnabled`（要真机）。
+- 不依赖真机的候选：关注页搜索/分组、四平台聚合搜索、把 `TouchTargetSizeCheck` 开成 error。
+- 真机验证清单见上。
+
+
 
 
 
