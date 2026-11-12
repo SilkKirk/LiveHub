@@ -2,14 +2,13 @@ package com.livehub.app.ui
 
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasAnyDescendant
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Rule
@@ -79,22 +78,31 @@ class ScreenScrollRetentionTest {
   fun `the home grid keeps its scroll position after a round trip through another screen`() {
     val state = render()
 
-    // The grid is the only *vertical* scroller on the page: the platform switcher is a pager and a
-    // horizontal scroller, and the state has no categories, so the partition row is not drawn.
+    // Selected by *its own* scroll range, not by a child: `performSemanticsAction` re-fetches the
+    // node before it acts, and a selector that names a card stops matching the moment that card
+    // scrolls out of composition ("the node is no longer in the tree").
+    //
+    // The grid is the only vertical scroller here: the platform switcher is a horizontal pager, and
+    // the state has no categories, so no partition row is drawn.
     val grid = composeRule.onNode(
-      SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and
-        hasAnyDescendant(hasText("主播1")),
+      SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange),
     )
-    grid.performScrollToNode(hasText("主播30"))
-    composeRule.onNodeWithText("主播30").assertIsDisplayed()
+    grid.performSemanticsAction(SemanticsActions.ScrollToIndex) { it(20) }
+    composeRule.waitForIdle()
+
+    // Two screens' worth down: the first card is gone and room 21 is on screen.
+    composeRule.onNodeWithText("主播1").assertDoesNotExist()
+    composeRule.onNodeWithText("主播21").assertIsDisplayed()
 
     state.value = reduce(state.value, UiAction.Navigate(Screen.Follow))
     composeRule.waitForIdle()
-    composeRule.onNodeWithText("主播30").assertDoesNotExist()
+    composeRule.onNodeWithText("主播21").assertDoesNotExist()
 
     state.value = reduce(state.value, UiAction.Navigate(Screen.Home))
     composeRule.waitForIdle()
 
-    composeRule.onNodeWithText("主播30").assertIsDisplayed()
+    // Back on the grid, at the position it was left at — not at the top.
+    composeRule.onNodeWithText("主播21").assertIsDisplayed()
+    composeRule.onNodeWithText("主播1").assertDoesNotExist()
   }
 }
