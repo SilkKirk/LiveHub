@@ -758,3 +758,159 @@ runbook 第八步补了说明——新轮次写主文件末尾，第 X 轮（X �
 - **虎牙弹幕**仍有一类线上帧解不出来（第九轮记录的 `@Disabled` 用例），命中率 5/51。
 - 宽屏（平板）没有截图覆盖。要做得在 CI 矩阵里加一台 640×320 的模拟器，而不是让测试改全局
   显示参数（第三十五轮的结论）。
+
+---
+
+## 第六十五轮迭代：刷新丢掉返回来源、展开分类溢出、列表回顶部、主线程写盘
+
+先做了一遍完整审查（读全部 UI 代码、`MainViewModel`、`core:data` 与两个 cookie store、43 张
+r64 截图、`docs/` 与 README），把结论分成「读码可确认的缺陷 / 界面 / 功能 / 工程」四组。
+本轮只做第一组，八项一次做完。其中两项是**同一类问题在别处的另一半**，一项是**前一轮的修法
+本身没生效**——后者比新发现的缺陷更值得记下来。
+
+### 缺陷一：播放页「刷新/重试」会把返回来源重置成首页
+
+`openRoom` 同时干两件事：打开房间、记录「关掉后回哪一页」。而播放页右侧的「刷新」和错误态的
+「重试」都是**对已经打开的房间**再调一次 `openRoom`，此时 `screen` 已经是 `Player`：
+
+```kotlin
+playerReturnScreen = _state.value.screen.takeIf { it != Screen.Player } ?: Screen.Home
+```
+
+`takeIf` 返回 null，兜底写进 `Home`。复现：关注页 → 进直播间 → 点刷新 → 返回 → **落在首页**，
+关注页的筛选和位置一起丢。原来的用例只钉了「从关注页打开、直接关闭」，没钉「刷新后再关闭」。
+
+改成只在真正换房间时记录。`MainViewModelTest` 补了一条。
+
+### 缺陷二：展开分类 + 选「全部」是一面被裁掉的芯片墙
+
+展开态用 `FlowRow` 直出 `levels.visible`，而这个 `Column` 不是滚动容器。选中分组行首的「全部」
+时 `visible` 是**所有分组的分区**：B 站 456 个、虎牙约 200 个。`FlowRow` 拿到超过窗口的内容不会
+滚动，只会被约束裁掉：超出部分**不可达**，同时下面的房间网格被量成 **0 高**——用户点一下「全部」，
+看起来像整个页面被清空了。
+
+改成 `heightIn(max = 220.dp) + verticalScroll`。上限是「屏幕的一份额度」而不是「剩下的全给它」，
+因为网格才是这个页面存在的理由。第六十三轮修的是折叠态不要换行，这条是展开态的另一半。
+
+`HomeCategoryDensityTest` 补了一条用 100 个分区的用例：展开后第一张卡片仍可见，且分区块自己
+是纵向滚动容器。
+
+### 缺陷三：48dp 触控目标还差三处，而且第六十一轮的修法无效
+
+三处不达标的：搜索结果行的星标 36dp、播放页 `PillButton`（关注/重试/返回）约 34dp、全屏栏的
+返回与星标 34dp。
+
+查这三处时发现更麻烦的一件事：**第六十一轮给卡片星标的修法没有生效**。当时把
+`size(32.dp)` 改成 `size(48.dp).padding(8.dp)`，语义节点确实变成 48dp，但
+`IconButton` 的最小触控尺寸是**在调用方 modifier 内层**实现的：
+
+```kotlin
+Box(modifier = modifier.minimumInteractiveComponentSize().size(40.dp)…clickable(…))
+```
+
+调用方的 `padding(8.dp)` 先把可用空间压到 32dp，内层 `size(40.dp)` 被强制成 32dp，
+`clickable` 的可点区域就是 32dp。只有 `size(48.dp)` **不加 padding** 时，内层那个 40dp 才会被
+约束撑到 48dp。也就是说卡片的星标从第六十一轮起一直是 32dp——语义树上看不出来，点偏了也只是
+打开了直播间。
+
+三处统一成 `size(48.dp)`（全屏栏那两个用 `size(48.dp)…clickable(…).padding(12.dp)`，可点在外、
+内边距在内），图标尺寸与位置不变。用例：搜索行星标高度、关注胶囊高度、两个「退出全屏」按钮
+高度，都断言 ≥ 48dp。
+
+### 缺陷四：列表滚动位置在离开页面后归零
+
+`rememberLazyGridState` / `rememberLazyListState` 都是 `rememberSaveable`，但
+`rememberSaveable` 只在有 `SaveableStateHolder` 时才把值留到组合之外。三个列表页都直接长在
+`when (state.screen)` 里，**离开就销毁**——而播放页是把整个 Scaffold 换掉的，所以进一次直播间，
+首页的滚动位置就没了；从首页切到关注再回来同样回到顶部。
+
+`LiveHubRoot` 加一个 `rememberSaveableStateHolder()`，用 `state.screen.name` 做 key 包住五个
+dock 页面。holder 必须放在 player 分支**之上**：放在 `else` 里的话它自己会随分支一起被销毁，
+正好在需要它的那一刻变空。
+
+用例（`ScreenScrollRetentionTest`）用真实 `LiveHubRoot`：`ScrollToIndex(20)` → 断言第一张卡
+不在树里、第 21 号在屏幕上 → 切到关注页 → 切回来 → 第 21 号仍在屏幕上。
+
+### 缺陷五：关注页下拉刷新多打一次首页请求，指示器还会提前消失
+
+`refresh()` 不分辨页面：在关注页下拉时先 `loadRooms(...)`（首页那套请求，用户看不到），
+再 `refreshFollowStatus(pullToRefresh = true)`。两个协程**共写** `refreshing`，房间那路先结束
+就把指示器关掉，而此时几十个主播的开播状态还在查。
+
+改成按页面分派；刷新本身也一起收了：单个 job（再进关注页会取消上一次）、token 守卫
+（被取消的那个协程仍会跑 `finally`，不能让它关掉新一次的指示器）、结果**按 key 合并进当前列表**
+而不是整份替换（刷新途中关注/取关不会被旧快照撤销）。
+
+顺带修掉一处吞异常：原来是 `runCatching { liveStatus(...) }`，它连 `CancellationException`
+一起吃掉，被取消的刷新会继续走完整份列表再写入结果。现在显式重抛。
+
+用例（`FollowRefreshTest`）用记录 URL 的假 HTTP 客户端 + 真 `DouyuAdapter`：下拉后不得出现
+新的 `mixListV1` 请求，但必须出现 `/betard/`，且 `refreshing` 最终为 false。
+
+### 缺陷六：主线程磁盘 I/O 还留在 cookie 与启动路径上
+
+第六十轮把 `UserPreferences` 的写改成了单线程队列，两个 cookie store 没有跟着改：
+`save`/`clear` 是 `runBlocking { dataStore.edit { … } }`，而调用方是「登录/退出」按钮、
+以及收到配对设备推来的登录态——都是主线程。`MainViewModel` 构造里还有两次
+`isLoggedIn()` 同步读盘（各自一个 DataStore 文件）。
+
+- 新增 `SerialWriteQueue`：一条线程一支队列，**按文件共享**（同文件的写入顺序在全进程内保持，
+  否则测试里每个用例新建容器的写法会让上一个用例的写落在下一个用例的写之后）。
+  `save`/`clear` 先把新值发布到内存缓存再交出去，所以同一帧发出的请求已经带上新 cookie。
+- `MainViewModel` 的登录态改在 `Dispatchers.IO` 上读，读到之后再更新两个标志。这两个字段只有
+  设置页和搜索提示会用到，晚一帧看不见；卡住第一帧是看得见的。
+
+`CookieStoreWriteTest`：写入后立即能读到（同实例）、`awaitWrites()` 之后新实例也能读到（落盘）。
+
+### 缺陷七：搜索框有文字后，屏幕上没有可点的「搜索」
+
+`trailingIcon` 是个二选一：有文字就只剩「清空」，提交按钮消失——只能靠软键盘的搜索键，而几种
+输入法把它藏在一层菜单里。改成「清空 + 提交」并列常驻，提交按钮没有文字时禁用。
+
+代价是文字区少 48dp。`11-search-results.png` 里能看到代价：「一条小团团」被截成「一条小…」。
+48dp 的星标也要吃掉 12dp，两者叠加。可以接受（星标和提交都变成了真的能按到的东西），但若想
+要回那 12dp，从封面宽度（104dp）或行的内边距里还。
+
+### 缺陷八：键盘没有让位
+
+`Scaffold` 的默认 `contentWindowInsets` 只含 system bars，全工程没有一处 `imePadding()`。
+targetSdk 37（Android 15 起）边到边应用**不再因键盘收缩窗口**，得自己让。给 `Scaffold` 加
+`Modifier.imePadding()`：键盘弹起时整页（含底部导航）上移，搜索结果最后一条可以滚到可视区。
+
+### 本轮踩的坑（都是我自己的错）
+
+滚动位置那条用例第一次是红的——**失败在我的选择器，不在被测行为**：我用
+`(VerticalScrollAxisRange is defined) and hasAnyDescendant(hasText("主播1"))` 定位网格，而
+`performSemanticsAction` / `performScrollToNode` 每执行一步都会**用原选择器重新取节点**。
+滚过一屏后「主播1」那张卡片离开组合，选择器不再匹配，报 `The node is no longer in the tree`，
+附带 `maxValue=100.0` 这种一眼看上去像布局坏了的语义快照（其实是取节点那一刻的旧值）。
+
+改成只按网格自己的 `VerticalScrollAxisRange` 定位（本页唯一的纵向滚动容器），一步
+`ScrollToIndex(20)`，不再依赖任何会滚走的子节点。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error（告警仍是既有的依赖版本 / 图标形状那几条） |
+| JVM 单元测试 | ✅ 743 个用例（新增 12 个） |
+| 仪器测试 | ✅ 43 张截图，逐张看过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `7e7424b` 三个 job 全绿 |
+
+第一次推送 `63fc7e2` 是「743 个用例 1 失败」，红的就是上面那个新用例；修好选择器后
+`7e7424b` 全绿。截图比对：`01b-home-category-expanded` 与上一轮逐字节相同（fixture 只有 4 个
+分区，封顶与滚动都不触发），`17b-player-fullscreen` 只高了 14dp（48dp 可点区 + 24dp 图标不变），
+`11-search-results` 是唯一有明显视觉代价的一张。
+
+### 下一轮
+
+- **备份规则**：`allowBackup="true"` 且没有 `dataExtractionRules` / `fullBackupContent`，
+  B 站/抖音 cookie、同步 `selfSecret`、已配对设备密钥都在默认备份范围里（云备份与换机迁移）。
+  第五十九轮堵的是凭据外泄的另一半，这一半还开着。
+- 搜索行文字列被两个 48dp 控件吃掉 60dp：要么接受，要么从封面（104dp）里还。
+- 设置页「主题」的说明文字还写着「打开深浅色开关」——界面上早就没有开关了，是三个 chip。
+- 抖音账号卡按钮写「扫码登录」，实际打开的是 WebView 登录页。
+- 「展开分类」在「全部」下的折叠箭头会被 `FlowRow` 推到单独一行，看起来像分隔条。
+- 仍是那句：**真机验证**是最大空白，第五十九到六十五轮的改动全部只在 CI 上验证过。
+
