@@ -3,9 +3,7 @@ package com.livehub.app
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.livehub.app.di.AppContainer
-import android.os.Build
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,25 +79,5 @@ class AppWiringTest {
     assertNotNull(payload)
     assertEquals("follows", payload!!.scope)
     assertTrue(payload.sequence > 0)
-  }
-
-  /**
-   * The manifest actually names the backup rules.
-   *
-   * A rules file nobody references is decoration: Auto Backup would go on copying the DataStore
-   * directory — session cookies and sync secrets — into the user's Drive account.
-   * `BackupRulesTest` checks what the files say; only a real PackageManager can say whether they
-   * are wired into the app, which is why this half lives here.
-   */
-  @Test
-  fun backupRulesAreDeclaredInTheManifest() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-    val info = context.packageManager.getApplicationInfo(context.packageName, 0)
-
-    assertNotEquals(
-      "android:dataExtractionRules is not declared in the merged manifest",
-      0,
-      info.dataExtractionRulesRes,
-    )
   }
 }

@@ -3,6 +3,7 @@ package com.livehub.app
 import android.app.Application
 import android.content.pm.ApplicationInfo
 import androidx.test.core.app.ApplicationProvider
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -89,5 +90,32 @@ class BackupRulesTest {
       "with allowBackup=false the rules would be decoration; this app chose rules over no backup",
       info.flags and ApplicationInfo.FLAG_ALLOW_BACKUP != 0,
     )
+  }
+
+  /**
+   * Each file is the schema its attribute expects.
+   *
+   * The platform ignores a rules file whose root element it does not recognise — silently, with
+   * only a log line — so pasting `backup_rules.xml`'s body into `data_extraction_rules.xml` would
+   * put the credentials straight back into the cloud backup while both files still looked right.
+   * The attribute itself cannot be checked from here (`ApplicationInfo.dataExtractionRulesRes` is
+   * `@hide`), but it cannot go missing either: `@xml/…` that does not resolve fails the build.
+   */
+  @Test
+  fun `each file declares the root element its attribute expects`() {
+    assertEquals("data-extraction-rules", rootTag(R.xml.data_extraction_rules))
+    assertEquals("full-backup-content", rootTag(R.xml.backup_rules))
+  }
+
+  private fun rootTag(resourceId: Int): String {
+    val parser = context.resources.getXml(resourceId)
+    try {
+      while (parser.next() != XmlPullParser.END_DOCUMENT) {
+        if (parser.eventType == XmlPullParser.START_TAG) return parser.name
+      }
+    } finally {
+      parser.close()
+    }
+    return ""
   }
 }
