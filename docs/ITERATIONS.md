@@ -1099,5 +1099,71 @@ Auto Backup 默认把 `files/` 整个带走。于是用户的 Google 账号里�
 - 「开播提醒」按用户要求搁置（worker 每 30 分钟已经在查开播状态，真要做得只差一条通知）。
 - 真机验证：这一轮尤其需要——画中画的进入/退出/关闭三条路径在 CI 上一条都跑不到。
 
+---
+
+## 第六十八轮迭代：应用被隐藏时暂停，而不是留一段没人能停的声音
+
+上一轮记下的洞：关掉画中画窗口之后，声音继续放，屏幕上什么都没有，也没有通知可以停。
+
+**完整的解法是 `MediaSessionService` + 前台服务 + Android 13 的通知权限**，这样做还能把
+锁屏/蓝牙/媒体面板一起接上。这一轮没有做它，理由写在下面「为什么停在这一半」；做的是另一半：
+让那个状态**不存在**。
+
+### 暂停从组合里搬进状态
+
+`paused` 原本是播放页里的 `remember`。它工作得很好，也确实"随页面销毁而复位"，但它对页面
+之外的一切不可见——包括 activity，而这一轮正是 activity 要暂停。
+
+- `UiState.playerPaused` + `UiAction.SetPlayerPaused(paused)`：双击和 activity 走同一个入口。
+- `openRoom` / `closePlayer` / `back` 都清掉它。不这么做，上一个房间（或上一次熄屏）的暂停
+  会被下一个房间继承——用户点开直播间，画面是冻的，还找不到原因。
+- 播放页的双击现在读 `state.playerPaused`。**这里有个坑**：`pointerInput(Unit)` 的闭包只在
+  首次组合时创建，直接读参数会一直读到那一刻的 `state`，双击就成了"永远把首次的值取反"。
+  用 `rememberUpdatedState` 包一层再读。
+
+### `onStop` 就是那条退出路径
+
+`MainActivity.onStop()`：没有缩窗却被隐藏时暂停。有 PiP 窗口时 activity 只是 paused、不会
+stop，所以这条路径不会误伤正在缩窗播放的流；它接住的是三种情况——用户关掉了缩窗、系统拒绝了
+开窗、熄屏。
+
+不自动恢复：回来时停在那一帧，「已暂停 · 双击继续」的角标和手动暂停长得一模一样，
+不需要再记一个"这次是自动暂停的"标记。
+
+### 为什么停在这一半
+
+`MediaSessionService` 里的 `startForeground` / 通知渠道 / `POST_NOTIFICATIONS` 运行时权限，
+以及"服务没起来"（`ForegroundServiceDidNotStartInTimeException`）和"通知挂不上"这两类失败，
+**在 CI 上一条都跑不到**：单元测试碰不到服务生命周期，仪器测试里那 43 张截图也碰不到。
+这一轮之前的所有改动都能被 CI 判个对错，这一块不能——而它的失败形态是崩溃或一条停不掉的通知，
+比"没有后台播放"糟糕得多。所以先把「无人能停的声音」消掉，后台播放留到有真机在环的时候做。
+
+### 本轮踩的坑
+
+`PlayerChromeTest` 新加的角标用例用了 `assertIsDisplayed`，而这个文件此前只用过 `assertTrue`
+和 `count`，import 里没有它——**只有单元测试那个 job 红**，另外两个绿。这已经是第三次
+"红在一个 job 上"了（lint 只在 `Build & test` 里跑、`assembleDebugAndroidTest` 只在仪器 job
+里跑），值得记住：单看某一个 job 的绿不能推整体。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 758 个用例（新增 2 个） |
+| 仪器测试 | ✅ 43 张截图 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `efe0b89` 三个 job 全绿 |
+
+`0d7d295` 红过一次（缺 import，只有 `Build & test`）。
+
+### 下一轮
+
+- **媒体通知 + 前台服务**：`MediaSessionService` 接管播放器，UI 换成 `MediaController`，
+  锁屏/蓝牙/通知一起来。要有真机在环——这也意味着这一条不适合在没有设备的时候做。
+- `setAutoEnterEnabled`（第六十七轮记的）。
+- 真机验证清单已经很长了：PiP 三条路径、`onStop` 暂停、音频焦点、局域网配对、四平台弹幕。
+
+
 
 
