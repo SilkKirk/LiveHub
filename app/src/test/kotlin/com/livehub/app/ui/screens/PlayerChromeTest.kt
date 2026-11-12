@@ -90,6 +90,7 @@ class PlayerChromeTest {
   private fun render(
     state: UiState = uiState(),
     fullscreen: Boolean = false,
+    pip: Boolean = false,
     onAction: (UiAction) -> Unit = {},
   ) {
     composeRule.mainClock.autoAdvance = false
@@ -101,6 +102,7 @@ class PlayerChromeTest {
         onFullscreenChange = {},
         onOpenSettings = {},
         videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
+        pip = pip,
       )
     }
     composeRule.mainClock.advanceTimeByFrame()
@@ -233,5 +235,29 @@ class PlayerChromeTest {
     heights.forEach { height ->
       assertTrue("an exit control is only ${height}dp tall", height >= 48f)
     }
+  }
+
+  /**
+   * The thumbnail window draws the picture and nothing else.
+   *
+   * Everything the player normally puts over the picture — the side column, the full-screen bar, the
+   * action row and the danmaku list — needs a surface a finger can aim at, and a picture-in-picture
+   * window has none of that size. The system draws its own expand/close controls there.
+   */
+  @Test
+  fun `the picture in picture window renders the picture only`() {
+    render(fullscreen = false, pip = true)
+
+    assertEquals("the side column must be gone", 0, count("播放设置"))
+    assertEquals(
+      "the action row must be gone, found ${composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size}",
+      0,
+      composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size,
+    )
+    assertEquals(
+      "the danmaku panel must be gone",
+      0,
+      composeRule.onAllNodesWithText("正在连接弹幕…").fetchSemanticsNodes().size,
+    )
   }
 }

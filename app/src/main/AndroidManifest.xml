@@ -25,6 +25,7 @@
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
             android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.LiveHub">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

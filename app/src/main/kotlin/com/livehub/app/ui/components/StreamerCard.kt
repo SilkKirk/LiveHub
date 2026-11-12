@@ -299,13 +299,16 @@ fun StreamerSearchCard(
     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      // Denser than the grid tile, because the trailing star and the viewer count have to share
+      // one line with the name: at 320dp the row is 296dp wide, and every dp here comes out of
+      // "一条小团团" (the name ellipsized two characters when the star grew to 48dp).
+      modifier = Modifier.padding(start = 8.dp, end = 6.dp, vertical = 8.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Box(
         modifier = Modifier
-          .size(width = 104.dp, height = 66.dp)
+          .size(width = 100.dp, height = 66.dp)
           .clip(RoundedCornerShape(8.dp)),
       ) {
         CoverImage(streamer = streamer)

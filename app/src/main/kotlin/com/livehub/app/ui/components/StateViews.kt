@@ -180,12 +180,14 @@ fun StreamerListSkeleton(
   ) {
     items(count = itemCount) {
       Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        // Same cover width, gap and padding as `StreamerSearchCard`, so the first page does not
+        // shift sideways when it arrives.
+        modifier = Modifier.padding(start = 8.dp, end = 6.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         Box(
           modifier = Modifier
-            .size(width = 104.dp, height = 66.dp)
+            .size(width = 100.dp, height = 66.dp)
             .background(
               MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
               RoundedCornerShape(8.dp),

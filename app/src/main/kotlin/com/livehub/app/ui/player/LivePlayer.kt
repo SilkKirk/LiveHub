@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -83,6 +85,19 @@ fun LivePlayer(
 
   val player = remember {
     ExoPlayer.Builder(context).build().apply {
+      // Audio focus, asked for explicitly.
+      //
+      // Without this the player never requests focus: a music app that is already playing keeps
+      // playing underneath the stream, and nothing ducks or pauses when a call comes in. The second
+      // argument is the whole point — ExoPlayer then follows the platform's focus contract instead
+      // of mixing with whatever else is running.
+      setAudioAttributes(
+        AudioAttributes.Builder()
+          .setUsage(C.USAGE_MEDIA)
+          .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+          .build(),
+        /* handleAudioFocus = */ true,
+      )
       playWhenReady = true
       repeatMode = Player.REPEAT_MODE_OFF
     }

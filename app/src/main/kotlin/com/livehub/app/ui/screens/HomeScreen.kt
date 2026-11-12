@@ -470,27 +470,33 @@ private fun CategoryTree(
 
   Column(modifier = Modifier.fillMaxWidth()) {
     if (expanded && multiGroup) {
-      FlowRow(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        // 全部 leads the group row, as it does in the reference client: "show every group's
-        // partitions" is a real choice, and without it the widest scope is the biggest group.
-        GroupChip(
-          name = "全部",
-          selected = levels.browsingAll,
-          onClick = { onSelectGroup(ALL_GROUPS) },
-        )
-        levels.groups.forEach { name ->
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        // The chevron is a *sibling* of the wrapped block, not its last item.
+        //
+        // Inside the `FlowRow` it went wherever the groups happened to end — on Douyu (twelve
+        // groups, three or four lines) that was a line of its own at the left margin, which reads
+        // as a divider rather than as "collapse". As a sibling it is always at the right edge, level
+        // with the first line, which is where the collapsed row puts it too.
+        FlowRow(
+          modifier = Modifier.weight(1f).padding(start = 12.dp, end = 4.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          // 全部 leads the group row, as it does in the reference client: "show every group's
+          // partitions" is a real choice, and without it the widest scope is the biggest group.
           GroupChip(
-            name = name,
-            selected = name == levels.activeGroup,
-            onClick = { onSelectGroup(name) },
+            name = "全部",
+            selected = levels.browsingAll,
+            onClick = { onSelectGroup(ALL_GROUPS) },
           )
+          levels.groups.forEach { name ->
+            GroupChip(
+              name = name,
+              selected = name == levels.activeGroup,
+              onClick = { onSelectGroup(name) },
+            )
+          }
         }
-        // The collapse control rides at the end of the wrapped flow, where the reference puts it:
-        // one chevron, always in the last row, so it never disappears while the list grows.
         ChevronButton(expanded = true, onClick = onToggleExpanded)
       }
     } else {

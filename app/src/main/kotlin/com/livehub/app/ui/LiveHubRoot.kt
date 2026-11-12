@@ -61,6 +61,13 @@ private enum class Dock(val screen: Screen, val label: String, val icon: ImageVe
 fun LiveHubRoot(
   state: UiState,
   onAction: (UiAction) -> Unit,
+  /**
+   * True while the window is a picture-in-picture thumbnail.
+   *
+   * Defaulted rather than required so every preview, screenshot and test keeps composing the
+   * full-size shell without knowing about the activity's window mode.
+   */
+  inPictureInPicture: Boolean = false,
 ) {
   val snackbar = remember { SnackbarHostState() }
 
@@ -97,7 +104,7 @@ fun LiveHubRoot(
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
       if (state.screen == Screen.Player) {
         BackSwipeContainer(onClose = { onAction(UiAction.ClosePlayer) }) {
-          PlayerScreen(state = state, onAction = onAction)
+          PlayerScreen(state = state, onAction = onAction, pip = inPictureInPicture)
         }
       } else {
         Scaffold(

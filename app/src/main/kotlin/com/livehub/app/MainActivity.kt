@@ -1,5 +1,6 @@
 package com.livehub.app
 
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,6 +13,10 @@ import androidx.lifecycle.ViewModelProvider
 import com.livehub.app.di.AppContainer
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.MainViewModel
+import com.livehub.app.ui.player.PictureInPicture
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
 
@@ -30,6 +35,15 @@ class MainActivity : ComponentActivity() {
    */
   private lateinit var viewModel: MainViewModel
 
+  /**
+   * `Activity.isInPictureInPictureMode`, in a form the Compose tree can observe.
+   *
+   * The activity gets a callback when the window shrinks or is expanded again; a composable cannot
+   * poll for it, and a `Configuration` change is not how the mode is reported. The player reads this
+   * to drop everything that only makes sense at full size.
+   */
+  private val inPictureInPicture = MutableStateFlow(false)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
@@ -37,8 +51,35 @@ class MainActivity : ComponentActivity() {
     viewModel = ViewModelProvider(this, ContainerViewModelFactory(container))
       .get(MainViewModel::class.java)
     setContent {
-      LiveHubApp(viewModel)
+      LiveHubApp(viewModel, inPictureInPicture.asStateFlow())
     }
+  }
+
+  /**
+   * Shrinks into a picture-in-picture window when the user leaves while a stream is playing.
+   *
+   * `onUserLeaveHint` is the platform's own "the user meant to leave" signal — Home, Recents, the
+   * app switcher — and it is not called for a notification or an incoming call, which is exactly
+   * the distinction wanted here. There is no button for any of this: the gesture the user already
+   * makes is the trigger, and leaving a stream that is not playing simply closes the screen.
+   */
+  override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    enterPictureInPicture()
+  }
+
+  private fun enterPictureInPicture() {
+    if (isInPictureInPictureMode) return
+    if (!PictureInPicture.shouldEnter(viewModel.state.value)) return
+    // `enterPictureInPictureMode` throws when the activity is finishing or the window cannot
+    // shrink (some OEM builds in freeform/split mode). A shrink that silently does not happen is
+    // better than a crash on the way out of the app.
+    runCatching { enterPictureInPictureMode(PictureInPicture.params()) }
+  }
+
+  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    inPictureInPicture.value = isInPictureInPictureMode
   }
 }
 
@@ -56,10 +97,12 @@ private class ContainerViewModelFactory(
 }
 
 @Composable
-private fun LiveHubApp(viewModel: MainViewModel) {
+private fun LiveHubApp(viewModel: MainViewModel, inPictureInPicture: StateFlow<Boolean>) {
   val state by viewModel.state.collectAsState()
+  val pip by inPictureInPicture.collectAsState()
   LiveHubRoot(
     state = state,
     onAction = viewModel::onAction,
+    inPictureInPicture = pip,
   )
 }

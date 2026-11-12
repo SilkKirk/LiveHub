@@ -101,7 +101,18 @@ import kotlinx.coroutines.delay
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
+fun PlayerScreen(
+  state: UiState,
+  onAction: (UiAction) -> Unit,
+  /**
+   * True while the activity is a picture-in-picture window.
+   *
+   * Only the picture is drawn there: the window is the size of a thumbnail, so the side controls,
+   * the action row and the danmaku list would be unreadable — and the system draws its own
+   * expand/close affordances over that window anyway.
+   */
+  pip: Boolean = false,
+) {
   var fullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
   // In landscape the bottom sheet has only the height of a landscape window to work with,
@@ -109,7 +120,7 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
   // room instead — the same reason the reference client switches to a drawer there.
   val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-  BackHandler(enabled = fullscreen) { fullscreen = false }
+  BackHandler(enabled = fullscreen && !pip) { fullscreen = false }
 
   Box(modifier = Modifier.fillMaxSize()) {
     PlayerContent(
@@ -118,16 +129,17 @@ fun PlayerScreen(state: UiState, onAction: (UiAction) -> Unit) {
       fullscreen = fullscreen,
       onFullscreenChange = { fullscreen = it },
       onOpenSettings = { showSettings = true },
+      pip = pip,
     )
 
-    if (showSettings && isLandscape) {
+    if (showSettings && isLandscape && !pip) {
       PlayerSettingsDrawer(onDismiss = { showSettings = false }) {
         PlayerSettings(state = state, variant = state.selectedVariant, onAction = onAction)
       }
     }
   }
 
-  if (showSettings && !isLandscape) {
+  if (showSettings && !isLandscape && !pip) {
     ModalBottomSheet(onDismissRequest = { showSettings = false }) {
       PlayerSettings(state = state, variant = state.selectedVariant, onAction = onAction)
     }
@@ -196,6 +208,14 @@ internal fun PlayerContent(
   onOpenSettings: () -> Unit,
   modifier: Modifier = Modifier,
   videoSurface: (@Composable (Modifier) -> Unit)? = null,
+  /**
+   * True while the activity is a picture-in-picture window.
+   *
+   * The window is a thumbnail, so everything except the picture is dropped here: the chrome, the
+   * action row, the danmaku list and the tap-to-pause layer all need a surface the user can aim at,
+   * and the system draws its own expand/close controls over this window.
+   */
+  pip: Boolean = false,
 ) {
   val variant: StreamVariant? = state.selectedVariant
   var controlsVisible by remember { mutableStateOf(true) }
@@ -233,6 +253,9 @@ internal fun PlayerContent(
       // leaving one of them with a bar nobody needed.
 
       val videoModifier = when {
+        // The picture-in-picture window *is* the picture: no status-bar inset and no aspect
+        // ratio, because the system has already sized the window and the video has to fill it.
+        pip -> Modifier.fillMaxSize()
         // Full screen and the full-bleed vertical layout are immersive on purpose: the
         // picture runs under the status bar, which is what "fills the screen" means.
         fullscreen || verticalFullBleed -> Modifier.fillMaxSize()
@@ -280,7 +303,10 @@ internal fun PlayerContent(
         // buttons (重试, 返回) inside this box, and a full-size gesture layer drawn on top of
         // them takes every one of those taps: pressing 重试 only toggled the chrome. That is
         // the same mistake as declaring the layer after the controls, one level down.
-        if (effectiveVariant != null && state.playerError == null) {
+        //
+        // Not in the picture-in-picture window either: there is no chrome to show there, and a
+        // double tap there is the system's (expand / close), not ours.
+        if (!pip && effectiveVariant != null && state.playerError == null) {
           Box(
             modifier = Modifier
               .fillMaxSize()
@@ -293,7 +319,7 @@ internal fun PlayerContent(
           )
         }
 
-        if (verticalFullBleed) {
+        if (!pip && verticalFullBleed) {
           // A vertical stream fills the screen, so there is no list underneath and the
           // streamer name would have nowhere else to go. This one line is all that is
           // left of the old header, and it carries no buttons.
@@ -311,7 +337,7 @@ internal fun PlayerContent(
         }
 
         // In full screen the bar floats over the picture instead of sitting above it.
-        if (fullscreen && controlsVisible) {
+        if (!pip && fullscreen && controlsVisible) {
           FullscreenBar(
             state = state,
             onExit = { onFullscreenChange(false) },
@@ -322,7 +348,7 @@ internal fun PlayerContent(
 
         // Overlay danmaku in full screen and over a full-bleed vertical picture; the
         // portrait layout uses the list below the video instead.
-        if ((fullscreen || verticalFullBleed) && effectiveVariant != null) {
+        if (!pip && (fullscreen || verticalFullBleed) && effectiveVariant != null) {
           DanmakuOverlay(
             messages = state.danmaku,
             enabled = state.danmakuEnabled,
@@ -340,8 +366,9 @@ internal fun PlayerContent(
         }
 
         // A paused live stream keeps showing the last frame, which is indistinguishable
-        // from a frozen one; a small badge says the user paused it on purpose.
-        if (paused && effectiveVariant != null) {
+        // from a frozen one; a small badge says the user paused it on purpose. The badge
+        // explains a double tap, which the thumbnail window does not have.
+        if (!pip && paused && effectiveVariant != null) {
           Surface(
             shape = RoundedCornerShape(12.dp),
             color = Color.Black.copy(alpha = 0.55f),
@@ -368,7 +395,7 @@ internal fun PlayerContent(
         }
 
         // Round controls down the right edge, as in the reference player.
-        if (controlsVisible) {
+        if (!pip && controlsVisible) {
           SideControls(
             fullscreen = fullscreen,
             onToggleFullscreen = {
@@ -382,7 +409,9 @@ internal fun PlayerContent(
         }
       }
 
-      if (!fullscreen && !verticalFullBleed) {
+      // The action row and the danmaku list need full width and a readable text size; neither
+      // exists in a thumbnail, and the picture gets the whole window instead.
+      if (!pip && !fullscreen && !verticalFullBleed) {
         RoomActionRow(state = state, onAction = onAction)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         // Bottom inset for the same reason as the top one: with edge-to-edge on, the last
