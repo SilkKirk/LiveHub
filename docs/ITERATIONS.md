@@ -1017,4 +1017,87 @@ Auto Backup 默认把 `files/` 整个带走。于是用户的 Google 账号里�
   还会和别的音频叠在一起）。
 - 仍是那句：**真机验证**是最大空白，第五十九到六十六轮的改动全部只在 CI 上验证过。
 
+---
+
+## 第六十七轮迭代：画中画；搜索结果行的宽度还回来；折叠箭头不再单独一行
+
+「开播提醒」按用户要求跳过，这一轮做的是剩下的两条界面欠账，加上一条一直空着的功能：
+离开应用时声音还在放，却没有任何窗口。
+
+### 画中画：离开应用时缩窗，而不是把声音留在后台
+
+在此之前，按住 Home 之后直播的声音继续放，屏幕上什么都不剩——既没有通知可以停，也没有
+窗口可以看。现在正在播的直播间会缩成画中画；没有在播的房间照常退出，不留一个空窗口。
+
+- `android:supportsPictureInPicture="true"`。`configChanges` 早在第一版就包含
+  `screenSize|smallestScreenSize|screenLayout|orientation`，正是 PiP 要求的那组，所以
+  manifest 只加了一个属性。
+- **没有按钮**。触发点是 `Activity.onUserLeaveHint()`：Home、最近任务、切换到别的应用时
+  系统会调用它，来通知、来电时不会——这正是「用户自己想走」的语义。这一轮的定位也是
+  「手势优先」：入口不新增，把已有的手势必有的结果做对。
+- `PictureInPicture.shouldEnter(state)` 是纯函数：必须是播放页、已解析出播放地址、解码器
+  没有报错。三条各有反例用例——没解析就缩窗，窗口里是个邮票大的转圈。
+  不加 `Build.VERSION.SDK_INT` 判断：`minSdk` 就是 26，PiP 也是 26 进来的，那种判断只是
+  看起来谨慎的死代码。
+- `isInPictureInPictureMode` 用 `MutableStateFlow` 送给 Compose：组合函数拿不到那个回调，
+  而 `Configuration` 也不反映它。
+- `PlayerContent(pip = true)` 只留画面：侧边按钮、全屏栏、动作行、弹幕列表、双击暂停层
+  全部让位。缩窗里每一样都需要「能瞄准的平面」，而展开/关闭是系统画在那个窗口上的。
+- 竖屏流在缩窗里 letterbox 而不是裁切：`verticalFullBleed` 只管「填满手机竖屏」，16:9 的
+  缩窗里填满等于把竖屏裁成中间一条。
+- 顺带补上**音频焦点**：`setAudioAttributes(..., handleAudioFocus = true)`。原来玩家从不申请
+  焦点，别的音乐 App 会和直播叠着放，来电也不躲。
+
+**没有做的**（写在这里以免当成已完成）：`setAutoEnterEnabled`（Android 12 起手势进入 PiP 的
+无缝动画）需要状态一变就刷新 `PictureInPictureParams`，留到有真机可验证的时候一起做；
+媒体通知与前台服务也没做，所以**关掉 PiP 窗口之后音频仍会继续**——这一条和 PiP 之前的行为
+一样（以前是按住 Home 之后继续放），不是这一轮引入的。
+
+### 搜索结果行：把星标吃掉的 12dp 还回来
+
+第六十五轮把行尾星标从 36dp 改到 48dp（这是对的），代价是文字列少了 12dp，
+`11-search-results.png` 里「一条小团团」被截成「一条小…」。这一轮从行的密度里拿回来 14dp：
+内边距 `10/10` → `8/6`、间距 `10` → `8`、封面 `104` → `100`。骨架屏同步改，否则首屏到达时
+整行会横跳一下。
+
+### 展开分类：折叠箭头不再是最后一个 chip
+
+展开态里箭头原本是 `FlowRow` 的最后一项，于是它跟着最后一组走——斗鱼十二组会推到单独一行、
+贴在左边距，看起来像分隔条。改成箭头是 `FlowRow` 的**兄弟**：固定在右边缘、与第一行齐平，
+和折叠态（箭头在一行 chip 的末尾）在视觉上落回同一个位置。
+
+### 本轮踩的坑
+
+- **`Modifier.padding` 没有 `(start, end, vertical)` 这个重载**。我把它和
+  `(start, top, end, bottom)` 混着写，编译报「None of the following candidates is applicable」，
+  三个 job 一起红——因为它们都要编译。这是这一轮唯一一次三个 job 同时失败。
+- **`asStateFlow()` 不能写在组合里**。`setContent { LiveHubApp(viewModel, flow.asStateFlow()) }`
+  被 lint 的 `FlowOperatorInvokedInComposition` 判成 error，`Build & test` 红而另外两个 job
+  绿——这也说明三个 job 不是冗余的：lint 只在一个里跑。
+- **HTTPS 到 github.com 中途不通了**。这一轮开始时 `git push` 一直 `Could not connect to
+  server`，但 `github.com:22`（SSH）与 `api.github.com:443` 都正常，于是改用
+  `git push git@github.com:SilkKirk/LiveHub.git main`。记在这里：`ci.py` 走 api.github.com，
+  和 git 的 HTTPS 通道不是同一条，一个不通不代表另一个也不通；排查顺序应该是
+  「DNS → TCP 22/443 分别测 → SSH 兜底」，不要一直重试同一个通道。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error（23 条告警，仍是既有的依赖版本与图标形状那几类） |
+| JVM 单元测试 | ✅ 756 个用例（新增 6 个） |
+| 仪器测试 | ✅ 43 张截图，看过 `11-search-results`（名字不再截断）与 `01b-home-category-expanded`（箭头到右上） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `a8e6490` 三个 job 全绿 |
+
+红过两次：`e28c636`（padding 重载，三个 job 全红）、`aa99bb2`（lint，只有 `Build & test` 红）。
+
+### 下一轮
+
+- 媒体通知 + 前台服务：关掉 PiP 之后音频还在继续，需要一个能停的入口。
+- `setAutoEnterEnabled`：手势进入 PiP 的无缝动画，要有真机才验证得了。
+- 「开播提醒」按用户要求搁置（worker 每 30 分钟已经在查开播状态，真要做得只差一条通知）。
+- 真机验证：这一轮尤其需要——画中画的进入/退出/关闭三条路径在 CI 上一条都跑不到。
+
+
 
