@@ -241,7 +241,11 @@ internal fun PlayerContent(
   val isVerticalVideo = videoAspect?.let { it in 0.2f..0.95f } == true
   // A vertical stream in portrait should fill the screen, not sit in a 16:9 letterbox
   // with the top and bottom of the picture outside the frame.
-  val verticalFullBleed = !fullscreen && isVerticalVideo
+  //
+  // Not in the thumbnail window: that one is 16:9 by construction, so "fill" there means cropping
+  // the picture to a horizontal slice of a vertical stream. Letterboxing keeps whatever is framed
+  // — which for a portrait stream is the part worth watching.
+  val verticalFullBleed = !fullscreen && !pip && isVerticalVideo
 
   Box(
     modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
