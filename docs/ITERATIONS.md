@@ -1915,3 +1915,163 @@ v0.20.0 之后紧接着的一次补丁发版。原因是 v0.20.0 的 tag 打在�
   10sp 偏小；首页每张卡都画 LIVE 角标（首页列出的全是直播中）。
 - 功能面：播放历史、分享直播间链接、后台刷新开关、自动同步。
 - 媒体通知 + 前台服务仍然要真机在环。
+
+
+---
+
+## 第七十九～八十一轮迭代：三条界面/功能项并行做（首次换成智能体分工）
+
+从这两轮起循环的执行方式变了：把三条**写作用域互不重叠**的缺陷拆成三个任务，三个 agent
+并行做，Lead 负责 review、分轮提交、跑 CI 与写记录。三条改动没有共享文件，所以一次推送
+在 HEAD 上验证；若红，可按 commit 二分。集成时逐条核对过 diff 只落在各自作用域内。
+
+四条提交：`598f08c`（79）、`5e1efbe`（80）、`71922bf`（81）、`b38aa2d`（截图 harness）。
+
+---
+
+## 第七十九轮迭代：关注页能取关了，但要两步
+
+### 缺陷是什么
+
+关注页没有任何取关入口。卡片上的点击是进直播间，星标在那一页被重新定义成「特别关注」，
+长按打开的是标签面板——于是"清理二十个不看了的主播"要开二十个直播间再退出来。
+
+### 为什么会这样
+
+两个各自正确的决定叠出来的空洞：星标改成「特别关注」是对的（这一页每张卡都已关注，
+一个只会移除的星标就是删按钮）；面板只为标签而写。没人回头问"那取关在哪"。
+
+### 怎么修的
+
+- `TagEditorSheet` 底部加一行：未确认态是 `取消关注`（error 色 TextButton），确认态换成
+  `确认取消关注`（error 容器 Button）+ `保留关注`。**左对齐且两步都锚在同一位置**——第二下
+  不该追着按钮跑。
+- 取关走已有的 `UiAction.ToggleFollow`，页面不自己删任何东西：卡片因为 `followed` 不再包含它
+  而消失，面板随后关闭。
+- 面板高度 0.55 → 0.6：底下多了固定高的危险行与警告行，0.55 时 chip 区（面板本体）只剩两行。
+- 说明文字加一句"取消关注会把主播从列表里移除……"，**作为独立 Text 节点**：原来那句被
+  `FollowTagsTest` 逐字钉着，拼进去会让它红。
+
+### 本轮验证
+
+`FollowUnfollowTest` 四条，全部断言在 action 列表与面板/网格的真实状态上：
+
+| 用例 | 断言 | 去掉改动会怎样 |
+| --- | --- | --- |
+| `the long-press panel offers unfollow and says what it costs` | 面板有「取消关注」与警告文案，且 `actions` 为空 | 找不到节点，红 |
+| `the first tap only asks for confirmation` | 点击后 `filterIsInstance<ToggleFollow>()` 为空，且「确认取消关注」出现 | 做成一点就取关 → 第一条断言看到 1 条 → 红 |
+| `the confirming tap unfollows ... exactly once` | 恰好一条 `ToggleFollow`、key 是被打开面板的那间、「标题 1」消失而「标题 2」还在 | 页面自己缓存列表靠隐藏卡片 → 红 |
+| `backing out of the confirmation keeps the follow` | 「保留关注」后 0 条 action、按钮回到未确认态、`followed` 仍有该房间 | 红 |
+
+---
+
+## 第八十轮迭代：LIVE 角标按列表传；chip 选中色收回品牌红
+
+### 缺陷是什么
+
+1. **每张卡片都画 LIVE 角标**。首页/分区页/搜索结果列出的**全部**是在播房间——那正是平台
+   列表的定义——于是每张卡在重复页面的前提。参考项目的首页一个都不画，只留人气。
+2. **chip 选中态是青色**。M3 `FilterChip` 的选中容器取 `colorScheme.secondaryContainer`，
+   而主题里那一对是青色；于是选中 chip 青、tab 指示条/LIVE 角标/关注星/底部导航红。
+
+### 为什么会这样
+
+- 角标是按"房间属性"写的（`isLive`），但"要不要显示"其实是**列表**的属性。
+- `secondaryContainer` 被当成"调色板里的第二个色"填了青色，而它真正的消费者只有
+  `FilterChip` —— 全仓 grep 过：源码里没有任何一处显式读它，底部导航的指示器是显式
+  `primaryContainer`。
+
+### 怎么修的
+
+- `StreamerCard` / `StreamerSearchCard` 加 `showLiveBadge: Boolean = true`，首页与搜索传
+  `false`，关注页不传（那是唯一混合在播/未开播的列表）。**「未开播」角标不动**：它说的是
+  列表本身不携带的信息，哪个页面都该说。
+- `Theme.kt` 的 `secondaryContainer` / `onSecondaryContainer` 改成 `primaryContainer` 同族
+  （浅 `0xFFFFDDE3`/`0xFF41000D`，深 `0xFF8A0022`/`0xFFFFDDE3`）。`secondary` 本身不动，
+  也不改任何 chip 调用点——一处主题改动，全仓 chip 同时回品牌色。
+
+### 顺带修掉的一处验证盲区（两处，都是看图看出来的）
+
+**① 播放页截图从来不是应用配色。** 三张设置面板套的是裸 `MaterialTheme`，`capture` 对
+`Screen.Player` 更是直接 compose `PlayerContent`（`LiveHubTheme` 只在 `LiveHubRoot` 里套）。
+结果是 12 张播放页产物里的「已关注」是灰紫、弹幕用户名是 Material 默认紫——"看起来有覆盖，
+其实没有"。改成 `LiveHubTheme(mode = state.themeMode)` 并新增 `23d-player-dark`。
+
+**② 深色那张第一版里房间标题几乎看不见。** `PlayerContent` 的 `Text` 不指定颜色时取
+`LocalContentColor`，而它由外层 `Surface` 提供（应用里是 `LiveHubRoot` 那一层）。harness 只
+套了主题没套 `Surface`，于是回落到黑色——浅色图里看不出来，深色图里就是一个"像是应用对比度
+bug"的假象。补一层 `Surface(color = background)` 复制真实层级后，`23d` 才是可读的。
+
+### 本轮验证
+
+`CardInformationDensityTest` 追加三条：首页网格无 LIVE、关注页仍有 LIVE（证明是按场景传而不是
+把功能删了）、搜索结果无 LIVE；前两条先断言卡片标题存在，免得"什么都没画"也算通过。
+
+---
+
+## 第八十一轮迭代：分享直播间链接
+
+### 缺陷是什么
+
+全仓没有任何分享路径（`ACTION_SEND` / `ClipData` 都 grep 不到）。一个聚合直播客户端，
+看到好东西只能靠别人自己搜。
+
+### 为什么会这样
+
+自己能用之后没人回头做"给别人"。而链接其实不需要抓接口：`Platform.homePage` 早就在模型里，
+房间 id 就是各平台直播页 URL 的路径末段。
+
+### 怎么修的
+
+- `internal fun shareUrl(room)` = `homePage + "/" + roomId`。抽成纯函数是因为 host/id 配错是
+  静默错：链接看着像链接，收到的人打开是 404（抖音直播页在 `live.douyin.com`，
+  `www.douyin.com/<id>` 是主站）。
+- 操作行在「关注」右侧加「分享」药丸（复用 `PillButton`，顺手得到 48dp 目标与水波纹），发
+  `ACTION_SEND` + `text/plain` 并套 `createChooser`：正文是「主播 正在直播：标题 + 链接」，
+  subject 是标题（邮件/笔记才有标题）。`text/plain` 是因为正文是一句话加一个 URL，聊天/笔记/
+  邮件都注册 text，`text/x-uri` 只到极少数。
+- 缩略窗与全屏不画：控件在 `RoomActionRow` 内，而那一行本来就不在这两种形态里 compose。
+
+### 本轮验证
+
+`PlayerShareTest` 五条：四平台 URL 比**整串**（出错的一半是 host）、点击后
+`nextStartedActivity` 是 `ACTION_CHOOSER` 且内层 `ACTION_SEND` / `text/plain` / 正文 / subject
+全对、48dp、「缩略窗与全屏里没有分享」。
+
+---
+
+## 三条一起的验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error（Build & test job） |
+| JVM 单元测试 | ✅ **804** 个用例（第八十轮 792 → 本轮 +12：4 取关 + 3 角标 + 5 分享），0 失败 |
+| 仪器测试 | ✅ **50** 张截图（新增 `23d-player-dark`），逐张看过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `b38aa2d` 三个 job 全绿（四条提交一次推送） |
+
+截图对照（以第七十八轮为基线）：**43 张变化/新增，7 张逐字节未变**。
+
+| 分组 | 张数 | 为什么变 |
+| --- | --- | --- |
+| 首页（含平板/深色/迷你窗/空态/错误态） | 12 | 角标消失 + chip 选中色 |
+| 搜索（四种状态 × 三个平台） | 11 | 同上（搜索行走的是 `StreamerSearchCard`） |
+| 关注（含标签、面板、特别关注选择器） | 5 | chip 色 + `07e` 多了取消关注行 |
+| 设置 | 2 | 主题/开关 chip 的选中色 |
+| 播放页（含三张设置面板、竖屏、深色） | 13 | 分享药丸 + 首次以真实配色渲染 + 新增 `23d` |
+| 未变 | 7 | 同步页三张、关注空态、设置关于/已登录、同步深色 |
+
+### 没做到的
+
+- **取关面板的面板高度是手算的**（0.55→0.6），320×640 上 chip 区只剩两三行；真机上大字号会
+  更紧，需要一次 fontScale 的实测。
+- **字号那一半没做**：`labelSmall` 10sp 偏小这件事仍在（审计清单第 4 条的另一半），它要动
+  `Typography.kt` 与一批密度断言，适合单独一轮。
+- **分享只做了"发出去"**：没有"复制链接"，也没有平台分享卡片（要各家 SDK，不做）。
+- 三条改动仍然只在 CI 与截图里验证过，没有真机。
+
+### 下一轮
+
+`loop-runbook.md` 第五节现在剩：字号那一轮、播放历史/最近观看、后台刷新开关、自动同步；
+媒体通知 + 前台服务仍要真机在环。播放历史与自动同步都要动 `MainViewModel`，不能再并行，
+要分开排。
