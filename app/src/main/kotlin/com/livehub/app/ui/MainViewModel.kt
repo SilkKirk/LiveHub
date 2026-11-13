@@ -12,6 +12,7 @@ import com.livehub.platform.api.PlatformException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -140,6 +141,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
               lastSearchQuery = "",
               searchResults = emptyList(),
               searchHasMore = false,
+              searchFailures = emptyMap(),
               loading = false,
               refreshing = false,
               loadingMore = false,
@@ -328,6 +330,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         rooms = emptyList(),
         searchResults = emptyList(),
         searchHasMore = false,
+        searchFailures = emptyMap(),
         lastSearchQuery = "",
         screen = Screen.Home,
         error = null,
@@ -349,9 +352,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * The keyword itself survives: it is what the user typed, and re-running it on the new platform
    * is the entire point of putting a switcher here.
    */
-  private fun selectSearchPlatform(platform: Platform) {
-    if (platform == _state.value.platform) return
-    container.preferences.setLastPlatform(platform)
+  /**
+   * Switches what the search runs against, without leaving the search screen.
+   *
+   * [platform] null is "all four at once" — the aggregator's own premise, and the reason this
+   * screen got a platform switcher at all.
+   */
+  private fun selectSearchPlatform(platform: Platform?) {
+    val current = _state.value
+    val alreadySelected =
+      if (platform == null) current.searchAllPlatforms
+      else !current.searchAllPlatforms && platform == current.platform
+    if (alreadySelected) return
+    if (platform != null) container.preferences.setLastPlatform(platform)
     searchJob?.cancel()
     searchCursor = null
     // The field is the only source that can legitimately hold a keyword here. `lastSearchQuery` is
@@ -362,9 +375,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val keyword = _state.value.searchQuery.trim().ifBlank { _state.value.lastSearchQuery.trim() }
     _state.update {
       it.copy(
-        platform = platform,
+        // Choosing 全部 leaves the browse platform alone: the home tab is still showing it, and
+        // this chip is about where the search looks.
+        platform = platform ?: it.platform,
+        searchAllPlatforms = platform == null,
         searchResults = emptyList(),
         searchHasMore = false,
+        searchFailures = emptyMap(),
         lastSearchQuery = "",
         loading = false,
         loadingMore = false,
@@ -579,6 +596,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       return
     }
     container.preferences.addSearchHistory(query)
+    if (_state.value.searchAllPlatforms) {
+      searchEverywhere(query)
+      return
+    }
     searchJob?.cancel()
     searchCursor = null
     searchJob = viewModelScope.launch {
@@ -635,9 +656,81 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
+  /**
+   * Searches all four platforms at once.
+   *
+   * This is the aggregator's own premise: the same streamer exists on 斗鱼 and 虎牙 under the same
+   * nickname, and comparing them used to mean switching chips and retyping the keyword four times.
+   *
+   * The four requests go out together and their answers are concatenated in [Platform] order, so
+   * the list reads as four sections rather than as one interleaved list of unrelated rooms. A
+   * platform that fails is **not** a failed search: 抖音 refuses keyword search to anonymous
+   * callers, and that has to show up as its own line next to the three that answered
+   * ([UiState.searchFailures]) instead of emptying the page.
+   *
+   * No paging here: every platform keeps its own cursor, and "load more" would need four of them
+   * plus a way to say which one ran out. Single-platform search keeps its paging; the cross-platform
+   * answer is one page per platform.
+   */
+  private fun searchEverywhere(query: String) {
+    searchJob?.cancel()
+    searchCursor = null
+    searchJob = viewModelScope.launch {
+      _state.update { current ->
+        // Same rule as the single-platform path: re-running the same keyword keeps the list and
+        // turns the indicator, a new keyword replaces it.
+        val sameKeyword = current.lastSearchQuery == query
+        current.copy(
+          screen = Screen.Search,
+          lastSearchQuery = query,
+          refreshing = sameKeyword && current.searchResults.isNotEmpty(),
+          loading = !sameKeyword || current.searchResults.isEmpty(),
+          loadingMore = false,
+          searchResults = if (sameKeyword) current.searchResults else emptyList(),
+          searchHasMore = false,
+          searchFailures = emptyMap(),
+          error = null,
+          searchHistory = container.preferences.settings.searchHistory,
+        )
+      }
+      val answers = coroutineScope {
+        Platform.entries
+          .associateWith { platform ->
+            async {
+              try {
+                Result.success(container.platformRepository.search(platform, query))
+              } catch (cancelled: CancellationException) {
+                // Re-thrown rather than recorded as "this platform failed": a search the user
+                // replaced must not report its cancellation next to three real answers.
+                throw cancelled
+              } catch (error: Exception) {
+                Result.failure(error)
+              }
+            }
+          }
+          .mapValues { (_, answer) -> answer.await() }
+      }
+      val rooms = answers.values.mapNotNull { it.getOrNull() }.flatMap { page -> page.rooms }
+      val failures = answers.mapNotNull { (platform, answer) ->
+        answer.exceptionOrNull()?.let { platform to (it.message ?: "搜索失败") }
+      }.toMap()
+      _state.update {
+        it.copy(
+          searchResults = rooms,
+          searchHasMore = false,
+          searchFailures = failures,
+          loading = false,
+          refreshing = false,
+        )
+      }
+    }
+  }
+
   /** Appends the next page of search results, if the platform reported one. */
   private fun loadMoreSearch() {
     val current = _state.value
+    // One page per platform in the cross-platform mode; there is no shared cursor to continue.
+    if (current.searchAllPlatforms) return
     // The keyword that produced `searchCursor`, not what the field says now: editing the
     // field without submitting used to send the *new* text together with the *old* cursor,
     // so the appended page belonged to a search the user never made.

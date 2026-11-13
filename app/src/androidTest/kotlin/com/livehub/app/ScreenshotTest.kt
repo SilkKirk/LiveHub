@@ -542,6 +542,31 @@ class ScreenshotTest {
   )
 
   /**
+   * One keyword, three platforms answering and one saying why it could not.
+   *
+   * This is the render of the aggregator's own premise. What it has to show is the *sections* —
+   * without a header the four sources read as one list of unrelated rooms, and the cards carry no
+   * platform label on purpose — and the failed platform's line next to them, because "抖音 needs a
+   * login" must not look like "抖音 has nothing".
+   */
+  @Test
+  fun searchAllPlatforms() = capture(
+    "11e-search-all-platforms",
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "团团",
+      lastSearchQuery = "团团",
+      searchAllPlatforms = true,
+      searchResults = listOf(
+        douyuRooms[0],
+        streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
+        streamer(Platform.BILIBILI, "20", "某幻君", "今晚八点档", 45_000),
+      ),
+      searchFailures = mapOf(Platform.DOUYIN to "需要登录后按昵称搜索"),
+    ),
+  )
+
+  /**
    * The keyword was submitted and the first page has not arrived yet.
    *
    * No render ever showed this: the loading state has its own skeleton, and the search screen's

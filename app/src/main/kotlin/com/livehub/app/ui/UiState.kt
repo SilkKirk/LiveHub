@@ -109,6 +109,20 @@ data class UiState(
    */
   val lastSearchQuery: String = "",
   val searchResults: List<Streamer> = emptyList(),
+  /**
+   * True when a search runs against all four platforms at once.
+   *
+   * [platform] keeps meaning "the platform the browse screens are showing"; the search screen used
+   * to borrow it as its own selection, which is why "all platforms" had nowhere to live.
+   */
+  val searchAllPlatforms: Boolean = false,
+  /**
+   * Why a platform contributed nothing to the last cross-platform search, keyed by platform.
+   *
+   * Only the all-platforms mode fills this: four requests go out, and one of them failing must read
+   * as "抖音 needs a login" next to the three that answered — not as "no results anywhere".
+   */
+  val searchFailures: Map<Platform, String> = emptyMap(),
   val searchHistory: List<String> = emptyList(),
   /** Cursor for the next page of search results, null when exhausted. */
   val searchHasMore: Boolean = false,
@@ -224,7 +238,7 @@ sealed interface UiAction {
   data class SelectPlatform(val platform: Platform) : UiAction
 
   /**
-   * Switches the platform **without leaving the search screen**.
+   * Chooses which platform the search runs against; `null` means all four at once.
    *
    * Distinct from [SelectPlatform], which is the home screen's switcher: that one resets the
    * browse state and navigates to `Screen.Home`, because a platform change invalidates the
@@ -234,9 +248,9 @@ sealed interface UiAction {
    * going back to 首页 first.
    *
    * This one keeps [UiState.searchQuery] and re-runs the search when a keyword has already been
-   * submitted, so comparing "the same streamer on 斗鱼 and 虎牙" is two taps.
+   * submitted, so comparing "the same streamer on 斗鱼 and 虎牙" is two taps — or one, with `null`.
    */
-  data class SelectSearchPlatform(val platform: Platform) : UiAction
+  data class SelectSearchPlatform(val platform: Platform?) : UiAction
 
   data class SelectCategory(val category: Category) : UiAction
 

@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -50,8 +52,9 @@ class SearchScreenTest {
     title: String,
     viewers: Long = 0,
     live: Boolean = true,
+    platform: Platform = Platform.DOUYU,
   ) = Streamer(
-    platform = Platform.DOUYU,
+    platform = platform,
     roomId = id,
     streamerName = name,
     title = title,
@@ -256,5 +259,34 @@ class SearchScreenTest {
     // The merged node, i.e. the button rather than the 20dp glyph inside it.
     val star = boxOf(composeRule.onNodeWithContentDescription("关注"))
     assertTrue("the star is only ${star.height}dp tall", star.height >= 48f)
+  }
+
+  /**
+   * The cross-platform mode groups by platform and says which platform could not answer.
+   *
+   * The cards carry no platform label on purpose (they used to repeat the search field's own label),
+   * so in this mode the platform has to come from a section header — otherwise four sources end up
+   * in one list with nothing saying where a row came from. And a platform that failed has to be
+   * visible: 抖音 without a login is not "nothing matched".
+   */
+  @Test
+  fun `the cross platform mode groups results and names the failures`() {
+    render(
+      searchState().copy(
+        searchQuery = "团团",
+        lastSearchQuery = "团团",
+        searchAllPlatforms = true,
+        searchResults = listOf(
+          streamer("1", "一条小团团", "斗鱼的直播间"),
+          streamer("2", "小团团", "B 站的直播间", platform = Platform.BILIBILI),
+        ),
+        searchFailures = mapOf(Platform.DOUYIN to "需要登录后按昵称搜索"),
+      ),
+    )
+
+    composeRule.onNodeWithText("斗鱼的直播间").assertIsDisplayed()
+    composeRule.onNodeWithText("B 站的直播间").assertIsDisplayed()
+    composeRule.onNodeWithText("抖音：需要登录后按昵称搜索").assertIsDisplayed()
+    composeRule.onAllNodesWithText("全部")[0].assertIsSelected()
   }
 }

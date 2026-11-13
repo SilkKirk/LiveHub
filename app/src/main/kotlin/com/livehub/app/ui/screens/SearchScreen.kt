@@ -7,9 +7,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -48,6 +50,7 @@ import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerListSkeleton
 import com.livehub.app.ui.components.StreamerSearchCard
 import com.livehub.core.model.Platform
+import com.livehub.core.model.Streamer
 
 /**
  * Search screen.
@@ -132,13 +135,42 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxSize(),
           ) {
-            items(items = state.searchResults, key = { it.key }) { streamer ->
-              StreamerSearchCard(
-                streamer = streamer,
-                followed = followedKeys.contains(streamer.key),
-                onClick = { onAction(UiAction.OpenRoom(streamer)) },
-                onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
-              )
+            if (state.searchAllPlatforms) {
+              // Grouped, in `Platform` order, with a header per platform.
+              //
+              // A single merged list sorted by viewers would mix four sources whose numbers are not
+              // comparable, and the cards carry no platform label on purpose (they used to repeat
+              // the search field's own label) — so in this mode the platform has to come from
+              // somewhere. It comes from the section.
+              Platform.entries.forEach { platform ->
+                val rooms = state.searchResults.filter { it.platform == platform }
+                if (rooms.isEmpty()) {
+                  state.searchFailures[platform]?.let { reason ->
+                    item(key = "failure-${platform.id}") {
+                      SearchFailureLine(platform = platform, reason = reason)
+                    }
+                  }
+                } else {
+                  item(key = "header-${platform.id}") {
+                    PlatformHeader(platform = platform, count = rooms.size)
+                  }
+                  items(items = rooms, key = { it.key }) { streamer ->
+                    SearchResultRow(
+                      streamer = streamer,
+                      followed = followedKeys.contains(streamer.key),
+                      onAction = onAction,
+                    )
+                  }
+                }
+              }
+            } else {
+              items(items = state.searchResults, key = { it.key }) { streamer ->
+                SearchResultRow(
+                  streamer = streamer,
+                  followed = followedKeys.contains(streamer.key),
+                  onAction = onAction,
+                )
+              }
             }
             if (state.loadingMore) {
               item { InlineLoader() }
@@ -149,7 +181,15 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
         searched -> EmptyState(
           icon = Icons.Outlined.SearchOff,
           title = "没有找到「${state.lastSearchQuery}」",
-          description = "换个关键词试试，或者切换到其他平台再搜索。",
+          // In the cross-platform mode the reasons are the answer: 抖音 without a login is not
+          // "nothing matched", and the user can act on it.
+          description = if (state.searchFailures.isEmpty()) {
+            "换个关键词试试，或者切换到其他平台再搜索。"
+          } else {
+            state.searchFailures.entries.joinToString("\n") { (platform, reason) ->
+              "${platform.displayName}：$reason"
+            }
+          },
           actionLabel = "清空",
           onAction = { onAction(UiAction.UpdateQuery("")) },
         )
@@ -157,11 +197,59 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
         else -> EmptyState(
           icon = Icons.Filled.Search,
           title = "搜索主播或直播间",
-          description = SEARCH_HINTS[state.platform] ?: "输入关键词后按回车搜索。",
+          description = if (state.searchAllPlatforms) {
+            "同时在斗鱼、虎牙、抖音与哔哩哔哩里搜索，结果按平台分组。"
+          } else {
+            SEARCH_HINTS[state.platform] ?: "输入关键词后按回车搜索。"
+          },
         )
       }
     }
   }
+}
+
+/** One result row, shared by both modes so the two lists cannot drift apart. */
+@Composable
+private fun SearchResultRow(
+  streamer: Streamer,
+  followed: Boolean,
+  onAction: (UiAction) -> Unit,
+) {
+  StreamerSearchCard(
+    streamer = streamer,
+    followed = followed,
+    onClick = { onAction(UiAction.OpenRoom(streamer)) },
+    onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
+  )
+}
+
+/** The platform a group of results came from, with how many it contributed. */
+@Composable
+private fun PlatformHeader(platform: Platform, count: Int) {
+  Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    Text(
+      text = platform.displayName,
+      style = MaterialTheme.typography.titleSmall,
+      fontWeight = FontWeight.SemiBold,
+    )
+    Spacer(Modifier.width(6.dp))
+    Text(
+      text = "$count 个结果",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/** "抖音：需要登录" — a platform that could not answer, said out loud. */
+@Composable
+private fun SearchFailureLine(platform: Platform, reason: String) {
+  Text(
+    text = "${platform.displayName}：$reason",
+    style = MaterialTheme.typography.bodySmall,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.fillMaxWidth(),
+  )
 }
 
 /**
@@ -198,7 +286,14 @@ private fun SearchField(state: UiState, onAction: (UiAction) -> Unit) {
       onValueChange = { onAction(UiAction.UpdateQuery(it)) },
       modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
       label = {
-        Text(SEARCH_LABELS[state.platform] ?: "搜索 ${state.platform.displayName} 主播 / 直播间")
+        // In the cross-platform mode the label names no platform on purpose: the field is one
+        // keyword for four searches, and "搜索 斗鱼 …" would describe only a quarter of it.
+        Text(
+          when {
+            state.searchAllPlatforms -> "在斗鱼、虎牙、抖音、哔哩哔哩里搜索"
+            else -> SEARCH_LABELS[state.platform] ?: "搜索 ${state.platform.displayName} 主播 / 直播间"
+          },
+        )
       },
       singleLine = true,
       leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
@@ -250,9 +345,17 @@ private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
+    // 全部 leads, because it is what the app is for: one keyword, four platforms, grouped results.
+    // The per-platform chips stay for the cases where the aggregate is noise — a room number that
+    // only means something on one platform, or a platform whose search needs a login.
+    FilterChip(
+      selected = state.searchAllPlatforms,
+      onClick = { onAction(UiAction.SelectSearchPlatform(null)) },
+      label = { Text("全部", maxLines = 1, softWrap = false) },
+    )
     Platform.entries.forEach { platform ->
       FilterChip(
-        selected = platform == state.platform,
+        selected = !state.searchAllPlatforms && platform == state.platform,
         onClick = { onAction(UiAction.SelectSearchPlatform(platform)) },
         label = { Text(platform.displayName, maxLines = 1, softWrap = false) },
       )
