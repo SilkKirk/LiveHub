@@ -45,17 +45,30 @@ val LiveHubTypography = Typography(
     fontSize = 14.sp,
     lineHeight = 20.sp,
   ),
+  // Not inherited from Material any more: the default is 12sp, and this style carries the
+  // portrait danmaku body — the one block of text a viewer reads continuously. 13sp with 18sp
+  // of leading keeps it above the smallest label while still fitting the same list.
+  bodySmall = TextStyle(
+    fontFamily = FontFamily.Default,
+    fontWeight = FontWeight.Normal,
+    fontSize = 13.sp,
+    lineHeight = 18.sp,
+  ),
   labelMedium = TextStyle(
     fontFamily = FontFamily.Default,
     fontWeight = FontWeight.Medium,
     fontSize = 12.sp,
     lineHeight = 16.sp,
   ),
+  // 10sp is below Material's own floor for this style (11sp) and was the smallest glyph the app
+  // drew: at 320dp the Chinese labels that use it — 未开播, the audience figure, the partition
+  // badge — read as smudges. The 10sp/14sp pair is replaced by Material's 11sp/16sp box, so the
+  // line height grows with the font rather than being left behind.
   labelSmall = TextStyle(
     fontFamily = FontFamily.Default,
     fontWeight = FontWeight.Normal,
-    fontSize = 10.sp,
-    lineHeight = 14.sp,
+    fontSize = 11.sp,
+    lineHeight = 16.sp,
   ),
 )
 
