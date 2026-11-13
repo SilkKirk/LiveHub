@@ -208,6 +208,15 @@ data class UiState(
 ) {
   /** True only when the adapter reported a next page for the current list. */
   val hasMore: Boolean get() = hasNextPage && !loading && rooms.isNotEmpty()
+
+  /**
+   * True while the open room plays in the mini window instead of the player screen.
+   *
+   * Derived rather than stored: "a room is open" and "the player screen is not on" are both
+   * already in this state, and a third field would be a fourth thing to keep consistent. The two
+   * actions below are what move it.
+   */
+  val miniPlayer: Boolean get() = room != null && screen != Screen.Player
 }
 
 /** User intents handled by [MainViewModel.onAction]. */
@@ -272,6 +281,22 @@ sealed interface UiAction {
   data class OpenRoom(val streamer: Streamer) : UiAction
 
   data object ClosePlayer : UiAction
+
+  /**
+   * Leaves the player screen without stopping the stream.
+   *
+   * The room, its resolved variant and the danmaku socket all stay open; only [UiState.screen]
+   * changes, and the composable that draws the stream is resized into the mini window rather than
+   * disposed — see `LiveHubRoot`. That is what makes leaving the player free instead of a fresh
+   * resolve and a second of black picture.
+   *
+   * Sent by the back gesture and by the player's left-edge swipe. [ClosePlayer] — the mini window's
+   * × — is the one that actually stops.
+   */
+  data object MinimizePlayer : UiAction
+
+  /** Returns to the full player with the stream that is already playing. */
+  data object ExpandPlayer : UiAction
 
   data class SelectVariant(val variant: StreamVariant) : UiAction
 

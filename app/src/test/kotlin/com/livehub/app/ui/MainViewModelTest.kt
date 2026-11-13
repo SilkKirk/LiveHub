@@ -183,6 +183,48 @@ class MainViewModelTest {
     assertFalse("a pause cannot outlive its room", state.playerPaused)
   }
 
+  /**
+   * Leaving the player minimises it; only closing stops the stream.
+   *
+   * Everything the room owns has to survive the step — the variant, the danmaku socket and the room
+   * itself — because the composable that draws the picture is resized into the mini window rather
+   * than disposed. Re-resolving there would cost a round trip and a second of black on every back
+   * press.
+   */
+  @Test
+  fun `leaving the player keeps the stream, closing it stops the stream`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Follow))
+    idle()
+    val room = streamer("13", "主播")
+    viewModel.onAction(UiAction.OpenRoom(room))
+    idle()
+    assertEquals(Screen.Player, state.screen)
+
+    viewModel.onAction(UiAction.Back)
+    idle()
+
+    assertEquals("back returns to where the room was opened", Screen.Follow, state.screen)
+    assertEquals("the room stays open", room.key, state.room?.key)
+    assertTrue("a room off the player screen is the mini window", state.miniPlayer)
+
+    viewModel.onAction(UiAction.ExpandPlayer)
+    idle()
+    assertEquals(Screen.Player, state.screen)
+    assertFalse(state.miniPlayer)
+
+    viewModel.onAction(UiAction.Back)
+    idle()
+    viewModel.onAction(UiAction.ClosePlayer)
+    idle()
+
+    assertNull("closing the mini window stops the stream", state.room)
+    assertEquals(
+      "and leaves the user on the screen they were browsing",
+      Screen.Follow,
+      state.screen,
+    )
+  }
+
   @Test
   fun `opening a room switches to the player and closing returns home`() {
     val room = streamer("1", "主播")

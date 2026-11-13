@@ -117,6 +117,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       UiAction.Refresh -> refresh()
       is UiAction.OpenRoom -> openRoom(action.streamer)
       UiAction.ClosePlayer -> closePlayer()
+      UiAction.MinimizePlayer -> minimizePlayer()
+      UiAction.ExpandPlayer -> expandPlayer()
       is UiAction.SelectVariant -> selectVariant(action.variant)
       is UiAction.SelectQuality -> selectQuality(action.quality, line = null)
       is UiAction.SelectLine -> selectQuality(quality = null, line = action.line)
@@ -266,34 +268,45 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private fun back() {
     val current = _state.value.screen
+    // Leaving the player is not the same as closing the room any more: the stream keeps playing in
+    // the mini window, so nothing is torn down here. The mini window's × is what stops it.
+    if (current == Screen.Player) {
+      minimizePlayer()
+      return
+    }
+    if (current == Screen.Home) {
+      // On the start screen with a stream in the corner, back means "stop that one" — the same
+      // stack order the rest of the app uses. The next back leaves the app.
+      if (_state.value.miniPlayer) closePlayer()
+      return
+    }
     val target = when (current) {
-      Screen.Home -> return
-      Screen.Player -> playerReturnScreen.takeIf { it != Screen.Player } ?: Screen.Home
       Screen.Search -> searchReturnScreen.takeIf { it != Screen.Search } ?: Screen.Home
       else -> Screen.Home
-    }
-    if (current == Screen.Player) {
-      danmakuJob?.cancel()
-      playbackJob?.cancel()
     }
     // The back gesture is the other way off the sync screen, so it has to tear the server down
     // for the same reason [navigate] does.
     if (current == Screen.Sync) stopSyncServer()
-    _state.update {
-      it.copy(
-        screen = target,
-        room = null,
-        variants = emptyList(),
-        selectedVariant = null,
-        // A pause belongs to the room that is open; the next one starts playing.
-        playerPaused = false,
-        danmaku = if (current == Screen.Player) emptyList() else it.danmaku,
-        // Leaving the room ends the socket, so the status has to go back to "opening" — otherwise
-        // the next room would inherit the previous one's failure banner before its own socket had
-        // a chance to say anything.
-        danmakuStatus = if (current == Screen.Player) DanmakuStatus.Connecting else it.danmakuStatus,
-      )
-    }
+    _state.update { it.copy(screen = target) }
+  }
+
+  /**
+   * Steps off the player screen, leaving the stream running in the mini window.
+   *
+   * Everything the room owns stays: the resolved variant (a re-resolve would cost a round trip and
+   * a second of black), the danmaku socket (reconnecting it would drop the backlog and restart the
+   * handshake) and the pause flag. Only the screen changes, and `LiveHubRoot` answers that by
+   * resizing the player composable instead of disposing it.
+   */
+  private fun minimizePlayer() {
+    val target = playerReturnScreen.takeIf { it != Screen.Player } ?: Screen.Home
+    _state.update { it.copy(screen = target) }
+  }
+
+  /** Back to the full player, with the stream that is already playing. */
+  private fun expandPlayer() {
+    if (_state.value.room == null) return
+    _state.update { it.copy(screen = Screen.Player) }
   }
 
   // ------------------------------------------------------------------- platform
@@ -926,7 +939,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun closePlayer() {
     playbackJob?.cancel()
     danmakuJob?.cancel()
-    val target = playerReturnScreen.takeIf { it != Screen.Player } ?: Screen.Home
+    // Closing from the mini window leaves the user exactly where they were browsing; only closing
+    // the player screen itself navigates back to where the room was opened from.
+    val current = _state.value.screen
+    val target = if (current == Screen.Player) {
+      playerReturnScreen.takeIf { it != Screen.Player } ?: Screen.Home
+    } else {
+      current
+    }
     _state.update {
       it.copy(
         screen = target,

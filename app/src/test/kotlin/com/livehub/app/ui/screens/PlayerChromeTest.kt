@@ -91,7 +91,7 @@ class PlayerChromeTest {
   private fun render(
     state: UiState = uiState(),
     fullscreen: Boolean = false,
-    pip: Boolean = false,
+    compact: Boolean = false,
     onAction: (UiAction) -> Unit = {},
   ) {
     composeRule.mainClock.autoAdvance = false
@@ -103,7 +103,7 @@ class PlayerChromeTest {
         onFullscreenChange = {},
         onOpenSettings = {},
         videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
-        pip = pip,
+        compact = compact,
       )
     }
     composeRule.mainClock.advanceTimeByFrame()
@@ -239,15 +239,16 @@ class PlayerChromeTest {
   }
 
   /**
-   * The thumbnail window draws the picture and nothing else.
+   * The thumbnail composition draws the picture and nothing else.
    *
    * Everything the player normally puts over the picture — the side column, the full-screen bar, the
-   * action row and the danmaku list — needs a surface a finger can aim at, and a picture-in-picture
-   * window has none of that size. The system draws its own expand/close controls there.
+   * action row and the danmaku list — needs a surface a finger can aim at, and a thumbnail has none
+   * of that size. The mini window puts its own tap-and-close layer there, and picture-in-picture
+   * gets the system's.
    */
   @Test
-  fun `the picture in picture window renders the picture only`() {
-    render(fullscreen = false, pip = true)
+  fun `the compact composition renders the picture only`() {
+    render(fullscreen = false, compact = true)
 
     assertEquals("the side column must be gone", 0, count("播放设置"))
     assertEquals(

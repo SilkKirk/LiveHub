@@ -13,7 +13,6 @@ import androidx.lifecycle.ViewModelProvider
 import com.livehub.app.di.AppContainer
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.MainViewModel
-import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.player.PictureInPicture
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -95,6 +94,9 @@ class MainActivity : ComponentActivity() {
    * an activity in that window is not stopped, so what reaches this method is "the thumbnail was
    * closed" or "the system refused to open one".
    *
+   * A room in the mini window counts as watching: it is paused here just the same, because the mini
+   * window goes away with the app.
+   *
    * Nothing resumes automatically: coming back shows the frame the stream stopped on with the
    * 「已暂停 · 双击继续」 badge, which is also what a deliberate pause looks like.
    */
@@ -102,7 +104,7 @@ class MainActivity : ComponentActivity() {
     super.onStop()
     if (isInPictureInPictureMode) return
     val state = viewModel.state.value
-    if (state.screen == Screen.Player && !state.playerPaused) {
+    if (state.room != null && !state.playerPaused) {
       viewModel.onAction(UiAction.SetPlayerPaused(true))
     }
   }

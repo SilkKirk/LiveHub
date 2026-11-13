@@ -2,7 +2,6 @@ package com.livehub.app.ui.player
 
 import android.app.PictureInPictureParams
 import android.util.Rational
-import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
 
 /**
@@ -27,13 +26,16 @@ internal object PictureInPicture {
   private const val ASPECT_HEIGHT = 9
 
   /**
-   * True when the player holds a playable stream.
+   * True when there is a stream worth keeping on screen.
    *
-   * All three conditions matter: the player has to be the screen that is on, a variant has to be
-   * resolved, and the decoder must not have rejected that variant.
+   * All three conditions matter: a room has to be open, a variant has to be resolved, and the
+   * decoder must not have rejected that variant. The screen is deliberately *not* part of the
+   * question — a room in the mini window is being watched just as much as one on the player screen,
+   * and leaving the app from the list with a thumbnail in the corner should keep it (not pause it
+   * and make the user come back).
    */
   fun shouldEnter(state: UiState): Boolean =
-    state.screen == Screen.Player &&
+    state.room != null &&
       state.selectedVariant != null &&
       state.playerError == null
 

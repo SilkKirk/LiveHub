@@ -64,10 +64,21 @@ class PictureInPictureTest {
     assertFalse(PictureInPicture.shouldEnter(playerState(playerError = "无法解码该流")))
   }
 
+  /**
+   * A room in the mini window counts: the user is watching while they browse.
+   *
+   * This used to be a negative case — the rule then demanded the player *screen*. That made leaving
+   * the app from the list pause a stream the user could see in the corner.
+   */
   @Test
-  fun `leaving from another screen may not`() {
-    assertFalse(PictureInPicture.shouldEnter(playerState(screen = Screen.Home)))
-    assertFalse(PictureInPicture.shouldEnter(playerState(screen = Screen.Follow)))
+  fun `a room in the mini window may shrink too`() {
+    assertTrue(PictureInPicture.shouldEnter(playerState(screen = Screen.Home)))
+    assertTrue(PictureInPicture.shouldEnter(playerState(screen = Screen.Follow)))
+  }
+
+  @Test
+  fun `no room at all may not`() {
+    assertFalse(PictureInPicture.shouldEnter(UiState(screen = Screen.Home)))
   }
 
   @Test
