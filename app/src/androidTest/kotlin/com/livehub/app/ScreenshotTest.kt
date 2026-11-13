@@ -916,20 +916,8 @@ class ScreenshotTest {
   @Test
   fun searchHuya() = capture("11b-search-huya", huyaSearchState())
 
-  /**
-   * A B站 search, and the one render that shows the platform row scrolled.
-   *
-   * The state carries `platform = BILIBILI`, so the row's selected chip is the fifth one — past
-   * the right edge at 320dp. `PlatformFilterRow` scrolls it into view, but a scroll is applied on
-   * the *next* frame and the harness freezes the clock after one, so without the advance this
-   * render shows the chip cut in half and the scroll reads as broken. 16ms is exactly one frame.
-   */
   @Test
-  fun searchBilibili() = capture(
-    "11c-search-bilibili",
-    bilibiliSearchState(),
-    advanceMillis = 16L,
-  )
+  fun searchBilibili() = capture("11c-search-bilibili", bilibiliSearchState())
 
   /** A 哔哩哔哩 playback page, which no render had produced either. */
   @Test

@@ -102,13 +102,25 @@ class SearchPlatformSwitchTest {
    * The last chip is the one that used to sit past the right edge, so without the scroll a
    * restored 哔哩哔哩 selection would be a filter that is *on* with nothing on screen saying so —
    * the "it exists, it is just off screen" shape round 76 fixed for the follow tags.
+   *
+   * `assertIsDisplayed` is not enough to prove it: a chip with a few pixels of its left edge
+   * inside the window is "displayed" too, which is exactly the state before the scroll. The
+   * assertion is on the *right* edge against the window, so only a chip that fits entirely
+   * passes.
    */
   @Test
   fun `the restored platform is scrolled into view`() {
     render(state(platform = Platform.BILIBILI))
 
-    composeRule.onNodeWithText("B站").assertIsDisplayed()
-    composeRule.onNodeWithText("B站").assertIsSelected()
+    val chip = composeRule.onNodeWithText("B站")
+    chip.assertIsSelected()
+
+    val windowWidth = with(composeRule.density) { 320.dp.toPx() }
+    val bounds = chip.fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "B站 ends at ${bounds.right}px in a ${windowWidth}px window, so the row did not scroll",
+      bounds.right <= windowWidth,
+    )
   }
 
   /**
