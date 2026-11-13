@@ -17,6 +17,7 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,12 +46,19 @@ class FollowTagsTest {
     isLive = true,
   )
 
+  /**
+   * One live room and one offline, so the live/platform row is drawn.
+   *
+   * With both live that row is hidden (nothing to narrow), and the layout assertion below would be
+   * comparing against a chip that is not there — a fixture detail, not a behaviour, but exactly the
+   * kind of thing that makes a test pass or fail for the wrong reason.
+   */
   private val plain = Streamer(
     platform = Platform.DOUYU,
     roomId = "2",
     streamerName = "宝宝",
     title = "标题 2",
-    isLive = true,
+    isLive = false,
   )
 
   private fun state(tagFilter: String? = null) = UiState(
@@ -125,5 +133,26 @@ class FollowTagsTest {
 
     composeRule.onNodeWithText("没有带「不存在」的主播").assertIsDisplayed()
     composeRule.onNodeWithText("清空筛选").assertIsDisplayed()
+  }
+
+  /**
+   * The tag chips have a row to themselves.
+   *
+   * For one round they shared the live/platform row, and that row scrolls horizontally — on the
+   * 320dp render the first tag was already past the right edge, so the feature existed and could
+   * not be seen. Presence was true the whole time, which is why this asserts the *position*.
+   */
+  @Test
+  fun `tag chips sit on a row of their own`() {
+    render(state())
+
+    val liveTop = topOf("全部")
+    val tagTop = topOf("#常看")
+    assertTrue("the tag chip is level with the live filters ($tagTop vs $liveTop)", tagTop > liveTop)
+  }
+
+  /** The top edge of a node, in dp. */
+  private fun topOf(text: String): Float = with(composeRule.density) {
+    composeRule.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top.toDp().value
   }
 }

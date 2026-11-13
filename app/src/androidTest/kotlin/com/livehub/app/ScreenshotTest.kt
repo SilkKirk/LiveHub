@@ -545,22 +545,22 @@ class ScreenshotTest {
   fun followEmpty() = capture("08-follow-empty", baseState().copy(screen = Screen.Follow))
 
   /**
-   * The tag chips, in the same row as the live and platform filters.
+   * The tag row, on its own line under the live/platform filters.
    *
-   * A single-platform fixture on purpose: the row scrolls horizontally, so with four platform chips
-   * in front of them the tags sat past the right edge and the first version of this render proved
-   * nothing (it showed a chip row with no tags in it). `#` is the other half of the claim — a tag
-   * named after a platform ("斗鱼") has to stay distinguishable from a platform chip.
+   * It shared that row until round 76 and the tags were off the right edge there — this render is
+   * what caught it. The `#` prefix is the other half of the claim: a tag named after a platform
+   * ("斗鱼") has to stay distinguishable from a platform chip.
    */
   @Test
   fun followTags() = capture(
     "07d-follow-tags",
     baseState().copy(
       screen = Screen.Follow,
-      followed = followRooms.take(3),
+      followed = followRooms,
       followTags = mapOf(
         followRooms[0].key to listOf("常看"),
         followRooms[1].key to listOf("常看", "英雄联盟"),
+        followRooms[3].key to listOf("深夜档"),
       ),
     ),
   )

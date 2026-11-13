@@ -590,10 +590,7 @@ private fun FollowHeader(
     // follow a second platform. The live filter narrows whenever there are both live and offline
     // rooms, which is exactly `liveCount in 1 until total`.
     val canNarrowByLive = liveCount in 1 until total
-    val canNarrowByTag = tags.isNotEmpty() || tagFilter != null
-    if (filter != FollowLiveFilter.ALL || platformFilter != null || platforms.size > 1 ||
-      canNarrowByLive || canNarrowByTag
-    ) {
+    if (filter != FollowLiveFilter.ALL || platformFilter != null || platforms.size > 1 || canNarrowByLive) {
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -605,19 +602,6 @@ private fun FollowHeader(
             label = { Text(option.label) },
           )
         }
-        // Tags before platforms: the row scrolls horizontally, so whatever comes last is off screen
-        // on a 320dp phone. A tag is something the user made and came here to use; a platform chip
-        // only appears when they follow across platforms, and is one flick away either way.
-        //
-        // They carry a '#', so a tag named after a platform ("斗鱼") cannot be mistaken for the
-        // platform chip next to it.
-        items(tags) { tag ->
-          FilterChip(
-            selected = tagFilter == tag,
-            onClick = { onTagFilterChange(if (tagFilter == tag) null else tag) },
-            label = { Text("#$tag") },
-          )
-        }
         if (platforms.size > 1) {
           items(platforms) { platform ->
             FilterChip(
@@ -626,6 +610,33 @@ private fun FollowHeader(
               label = { Text(platform.displayName) },
             )
           }
+        }
+      }
+    }
+
+    // Tags get their own row, starting at the left edge.
+    //
+    // They shared the row above until round 76, and that row scrolls horizontally: with three live
+    // chips and a couple of platform chips in front of them, the first tag was already past the
+    // right edge on a 320dp phone. A row that starts with the tags can always show the first few,
+    // which is the difference between "the feature exists" and "the feature is somewhere off
+    // screen". The live and platform filters above are a fixed, small set; tags grow with use, so
+    // they are the ones that need room of their own.
+    //
+    // Shown whenever a tag exists, and always while one is selected — the same rule as the row
+    // above: a control that cannot narrow anything does not get drawn, and a filter that cannot be
+    // undone is worse than one that cannot be found.
+    if (tags.isNotEmpty() || tagFilter != null) {
+      LazyRow(
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(tags) { tag ->
+          FilterChip(
+            selected = tagFilter == tag,
+            onClick = { onTagFilterChange(if (tagFilter == tag) null else tag) },
+            label = { Text("#$tag") },
+          )
         }
       }
     }
