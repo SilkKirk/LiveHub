@@ -514,6 +514,31 @@ class ScreenshotTest {
     expectText = "选择特别关注",
   )
 
+  /**
+   * The name filter, on a list long enough to have one.
+   *
+   * The box is conditional — `FOLLOW_SEARCH_THRESHOLD` follows, i.e. more than a flick — so the
+   * ordinary five-room fixture would never draw it. This is the render of the shape the feature
+   * exists for, and of the header height it costs.
+   */
+  @Test
+  fun followSearch() = capture(
+    "07c-follow-search",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = (1..14).map { index ->
+        streamer(
+          Platform.DOUYU,
+          "${900 + index}",
+          "主播$index",
+          if (index % 2 == 0) "第 $index 场" else "深夜电台 $index",
+          index * 3_000L,
+          live = index % 2 == 0,
+        )
+      },
+    ),
+  )
+
   @Test
   fun followEmpty() = capture("08-follow-empty", baseState().copy(screen = Screen.Follow))
 

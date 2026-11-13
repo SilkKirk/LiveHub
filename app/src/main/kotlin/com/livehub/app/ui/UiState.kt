@@ -97,6 +97,13 @@ data class UiState(
   val followLiveFilter: FollowLiveFilter = FollowLiveFilter.ALL,
   /** The platform filter on the follow screen; null means every platform. */
   val followPlatformFilter: Platform? = null,
+  /**
+   * The name filter on the follow screen, already trimmed by the caller.
+   *
+   * In the state rather than in the field's own `remember` for the same reason the two filters
+   * above are: opening a room and coming back used to reset everything the screen had selected.
+   */
+  val followQuery: String = "",
   val searchQuery: String = "",
   /**
    * The keyword [searchResults] were searched with, and the one the next page is requested for.
@@ -284,6 +291,15 @@ sealed interface UiAction {
 
   /** Narrows the follow screen to one platform, or clears the filter when null. */
   data class SetFollowPlatformFilter(val platform: Platform?) : UiAction
+
+  /**
+   * Narrows the follow list to rooms whose streamer name or title contains this text.
+   *
+   * A filter, not a search: it looks at what has already been followed and never goes to a platform.
+   * The field appears once the list is long enough to need one — see
+   * `FOLLOW_SEARCH_THRESHOLD` in `FollowScreen`.
+   */
+  data class SetFollowQuery(val query: String) : UiAction
 
   /** Shows a one-line explanation. Used where an action is refused for a reason worth stating. */
   data class ShowMessage(val text: String) : UiAction

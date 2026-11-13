@@ -26,10 +26,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -75,20 +79,32 @@ import com.livehub.core.model.Streamer
  * Both filters live in `UiState` rather than in a `remember`, because they are selections the user
  * expects to survive opening a room and coming back.
  */
+
+/**
+ * How many follows before the name filter is worth a box on screen.
+ *
+ * Twelve is about six rows of two cards — two flicks on the smallest phone this app targets. Below
+ * that, scrolling *is* the search. The same rule as the chip row below it: a control that cannot
+ * help does not get drawn, and 56dp of text field above four cards is chrome nobody uses.
+ */
+private const val FOLLOW_SEARCH_THRESHOLD = 12
+
 @Composable
 fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val filter = state.followLiveFilter
   val platformFilter = state.followPlatformFilter
+  val query = state.followQuery.trim()
   // Which panel is open is the only local state left: everything the screen *selects* lives in
   // `UiState` so it survives a round trip through the player.
   var pickerOpen by remember { mutableStateOf(false) }
 
   val platforms = remember(state.followed) { state.followed.map { it.platform }.distinct() }
 
-  val visible = remember(state.followed, filter, platformFilter) {
+  val visible = remember(state.followed, filter, platformFilter, query) {
     state.followed
       .filter { platformFilter == null || it.platform == platformFilter }
       .filter(filter::matches)
+      .filter { query.isEmpty() || it.matchesName(query) }
       // Live rooms first. The stored order is the user's manual arrangement, but burying whoever
       // is actually streaming under offline names defeated the point of the list. `sortedBy` is
       // stable, so manual order still breaks ties.
@@ -129,6 +145,8 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
           platforms = platforms,
           platformFilter = platformFilter,
           onPlatformChange = { onAction(UiAction.SetFollowPlatformFilter(it)) },
+          query = state.followQuery,
+          onQueryChange = { onAction(UiAction.SetFollowQuery(it)) },
           special = special,
           onOpenSpecial = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
           onReorderSpecial = { streamer, index ->
@@ -146,21 +164,31 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
         )
 
         if (visible.isEmpty()) {
+          // The name filter gets its own copy: "关注的主播都没有在播" would be a lie when the real
+          // reason is that nothing in the list matches what was typed.
           EmptyState(
-            title = when (filter) {
-              FollowLiveFilter.LIVE -> "关注的主播都没有在播"
-              FollowLiveFilter.OFFLINE -> "所有关注的主播都在直播"
-              FollowLiveFilter.ALL -> "没有符合条件的关注"
-            },
-            description = if (platformFilter != null) {
-              "当前只显示 ${platformFilter.displayName} 的主播"
+            title = if (query.isNotEmpty()) {
+              "没有找到「$query」"
             } else {
-              null
+              when (filter) {
+                FollowLiveFilter.LIVE -> "关注的主播都没有在播"
+                FollowLiveFilter.OFFLINE -> "所有关注的主播都在直播"
+                FollowLiveFilter.ALL -> "没有符合条件的关注"
+              }
             },
-            actionLabel = "显示全部",
+            description = when {
+              query.isNotEmpty() -> "关注列表里没有名字或标题包含这两个字的主播。"
+              platformFilter != null -> "当前只显示 ${platformFilter.displayName} 的主播"
+              else -> null
+            },
+            actionLabel = if (query.isNotEmpty()) "清空搜索" else "显示全部",
             onAction = {
-              onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.ALL))
-              onAction(UiAction.SetFollowPlatformFilter(null))
+              if (query.isNotEmpty()) {
+                onAction(UiAction.SetFollowQuery(""))
+              } else {
+                onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.ALL))
+                onAction(UiAction.SetFollowPlatformFilter(null))
+              }
             },
           )
         } else {
@@ -338,6 +366,44 @@ private fun FollowGrid(
   }
 }
 
+/**
+ * The name filter on the follow screen.
+ *
+ * A label rather than a placeholder: `OutlinedTextField` keeps the label visible once the field has
+ * text, which is what tells the user — and this screen's tests — which box the typed text went into.
+ * The clear button only exists while there is something to clear.
+ */
+@Composable
+private fun FollowSearchField(query: String, onQueryChange: (String) -> Unit) {
+  OutlinedTextField(
+    value = query,
+    onValueChange = onQueryChange,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+    label = { Text("搜索关注的主播") },
+    singleLine = true,
+    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+    trailingIcon = if (query.isNotEmpty()) {
+      {
+        IconButton(onClick = { onQueryChange("") }) {
+          Icon(Icons.Filled.Clear, contentDescription = "清空搜索")
+        }
+      }
+    } else {
+      null
+    },
+  )
+}
+
+/**
+ * True when [query] appears in the streamer's name or in the title, ignoring case.
+ *
+ * Both fields, because a followed room is remembered by whichever the user recognises — the name on
+ * a list of people, the title on a list of shows. Ignoring case because the names mix Latin and CJK
+ * on all four platforms ("DNF", "dnf", "PDD").
+ */
+private fun Streamer.matchesName(query: String): Boolean =
+  streamerName.contains(query, ignoreCase = true) || title.contains(query, ignoreCase = true)
+
 @Composable
 private fun FollowHeader(
   total: Int,
@@ -347,6 +413,8 @@ private fun FollowHeader(
   platforms: List<Platform>,
   platformFilter: Platform?,
   onPlatformChange: (Platform?) -> Unit,
+  query: String,
+  onQueryChange: (String) -> Unit,
   special: List<Streamer>,
   onOpenSpecial: (Streamer) -> Unit,
   onReorderSpecial: (Streamer, Int) -> Unit,
@@ -363,6 +431,18 @@ private fun FollowHeader(
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+    }
+
+    // The name filter, once the list is long enough for scrolling alone to be a problem.
+    //
+    // Same rule as the chip row below: a control that cannot help does not get drawn. Six follows
+    // are one flick away — half a screen of search box above them is chrome nobody uses — while
+    // the sort of list this app encourages needs a way to jump straight to a name.
+    //
+    // A non-empty query keeps the field whatever the list looks like: it has to stay there while
+    // the user types, or it would disappear under their finger the moment the results got short.
+    if (total >= FOLLOW_SEARCH_THRESHOLD || query.isNotEmpty()) {
+      FollowSearchField(query = query, onQueryChange = onQueryChange)
     }
 
     // Always drawn, even while empty: the ＋ is how the feature is discovered, and a row that
