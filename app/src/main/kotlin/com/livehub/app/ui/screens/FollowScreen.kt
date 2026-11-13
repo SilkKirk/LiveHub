@@ -607,7 +607,9 @@ private fun FollowHeader(
             FilterChip(
               selected = platformFilter == platform,
               onClick = { onPlatformChange(if (platformFilter == platform) null else platform) },
-              label = { Text(platform.displayName) },
+              // Same rule as the home switcher and the search row: a chip gets the short name,
+              // because 哔哩哔哩 is four characters in a control sized for two.
+              label = { Text(platform.shortName) },
             )
           }
         }

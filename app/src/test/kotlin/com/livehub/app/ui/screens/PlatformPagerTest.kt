@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -12,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
@@ -19,6 +21,8 @@ import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -128,7 +132,7 @@ class PlatformPagerTest {
     val actions = mutableListOf<UiAction>()
     compose(actions = actions)
 
-    composeRule.onNodeWithText("哔哩哔哩").performClick()
+    composeRule.onNodeWithText("B站").performClick()
 
     val selected = actions.filterIsInstance<UiAction.SelectPlatform>()
     assertEquals(Platform.BILIBILI, selected.firstOrNull()?.platform)
@@ -137,7 +141,7 @@ class PlatformPagerTest {
   /**
    * The pager opens on the platform the ViewModel restored, not on the first page.
    *
-   * `lastPlatform` is persisted, so a user who left the app on 哔哩哔哩 must not be handed 斗鱼 and
+   * `lastPlatform` is persisted, so a user who left the app on B站 must not be handed 斗鱼 and
    * a "switch back" swipe on launch. The assertion is on the *tab*, not on the grid: this fixture
    * carries Douyu rooms regardless of platform (the ViewModel would have replaced them), so what
    * is actually being checked is that the pager — and therefore the selected tab — started on the
@@ -147,7 +151,7 @@ class PlatformPagerTest {
   fun `the pager opens on the restored platform`() {
     compose(state(platform = Platform.BILIBILI))
 
-    composeRule.onNodeWithText("哔哩哔哩").assertIsSelected()
+    composeRule.onNodeWithText("B站").assertIsSelected()
     composeRule.onNodeWithText("斗鱼").assertIsNotSelected()
   }
 
@@ -158,7 +162,7 @@ class PlatformPagerTest {
     composeRule.onNodeWithText("斗鱼").assertIsDisplayed()
     composeRule.onNodeWithText("虎牙").assertIsDisplayed()
     composeRule.onNodeWithText("抖音").assertIsDisplayed()
-    composeRule.onNodeWithText("哔哩哔哩").assertIsDisplayed()
+    composeRule.onNodeWithText("B站").assertIsDisplayed()
   }
 
   @Test
@@ -166,5 +170,40 @@ class PlatformPagerTest {
     compose()
 
     composeRule.onNodeWithContentDescription("刷新").assertIsDisplayed()
+  }
+
+  /**
+   * Every tab label is drawn at the width it asks for.
+   *
+   * The four tabs share `(320 - 8 - 48) / 4 = 66dp` before the tab's own padding, and "哔哩哔哩"
+   * is four characters of it: it rendered as "哔哩", with no ellipsis and no error, because a
+   * one-line `Text` clips by default. `Platform.shortName` is the fix ("B站"); this is what keeps
+   * it fixed — and it would also notice the font-size increase that would break it again, which
+   * no existence check can.
+   *
+   * The **layout result** is the evidence, not the node's bounds: a clipped label reports the
+   * width it was allowed, so bounds are identical in both cases. `didOverflowWidth` is the one
+   * value that separates "this label fits" from "this label was cut".
+   */
+  @Test
+  fun `every tab label is drawn in full`() {
+    compose()
+
+    Platform.entries.forEach { platform ->
+      val node = composeRule
+        .onNodeWithText(platform.shortName, useUnmergedTree = true)
+        .fetchSemanticsNode()
+      val results = mutableListOf<TextLayoutResult>()
+      node.config[SemanticsActions.GetTextLayoutResult]?.action?.invoke(results)
+
+      val layout = results.firstOrNull()
+      assertNotNull("no text layout result for ${platform.shortName}", layout)
+      assertFalse(
+        "${platform.shortName} was clipped: it wants " +
+          "${layout!!.multiParagraph.intrinsics.maxIntrinsicWidth}px and was given " +
+          "${layout.multiParagraph.width}px",
+        layout.didOverflowWidth,
+      )
+    }
   }
 }

@@ -3,8 +3,6 @@ package com.livehub.app.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -340,27 +338,46 @@ private fun SearchField(state: UiState, onAction: (UiAction) -> Unit) {
  * screen's switcher and resets the browse state and navigates to `Screen.Home`, which would throw
  * the user out of search.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
-  FlowRow(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+  val listState = rememberLazyListState()
+  val selectedIndex = if (state.searchAllPlatforms) 0 else 1 + Platform.entries.indexOf(state.platform)
+
+  // Keep the selected chip on screen. Five Material chips need about 364dp and the phone this
+  // app targets is 320dp, so the last one sits past the right edge; without this, a platform
+  // restored from `lastPlatform` can be selected while nothing on screen says so — the same
+  // "it exists, it is just off screen" shape round 76 fixed for the follow tags.
+  //
+  // `scrollToItem`, not `animateScrollToItem`: the only time the selection moves from off
+  // screen is a restore, where an animation buys nothing and would leave the row mid-flight in
+  // a frozen-clock render.
+  LaunchedEffect(selectedIndex) {
+    listState.scrollToItem(selectedIndex.coerceAtLeast(0))
+  }
+
+  LazyRow(
+    state = listState,
+    modifier = Modifier.fillMaxWidth(),
+    contentPadding = PaddingValues(horizontal = 12.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     // 全部 leads, because it is what the app is for: one keyword, four platforms, grouped results.
     // The per-platform chips stay for the cases where the aggregate is noise — a room number that
     // only means something on one platform, or a platform whose search needs a login.
-    FilterChip(
-      selected = state.searchAllPlatforms,
-      onClick = { onAction(UiAction.SelectSearchPlatform(null)) },
-      label = { Text("全部", maxLines = 1, softWrap = false) },
-    )
-    Platform.entries.forEach { platform ->
+    item(key = "all-platforms") {
+      FilterChip(
+        selected = state.searchAllPlatforms,
+        onClick = { onAction(UiAction.SelectSearchPlatform(null)) },
+        label = { Text("全部", maxLines = 1, softWrap = false) },
+      )
+    }
+    items(Platform.entries.toList(), key = { it.id }) { platform ->
       FilterChip(
         selected = !state.searchAllPlatforms && platform == state.platform,
         onClick = { onAction(UiAction.SelectSearchPlatform(platform)) },
-        label = { Text(platform.displayName, maxLines = 1, softWrap = false) },
+        // `shortName`: five chips have to share one 320dp line, and "哔哩哔哩" is what made this
+        // row wrap 4 + 1 with the last chip alone on its own line. See `Platform.shortName`.
+        label = { Text(platform.shortName, maxLines = 1, softWrap = false) },
       )
     }
   }

@@ -14,11 +14,24 @@ enum class Platform(
   val id: String,
   val displayName: String,
   val homePage: String,
+  /**
+   * The name for controls, where [displayName] does not fit.
+   *
+   * The home screen's switcher gives each of the four platforms a quarter of the row — 66dp of a
+   * 320dp phone, minus the tab's own padding — and "哔哩哔哩" is four characters of it. It
+   * rendered as "哔哩": no ellipsis, no error, just a label that stops mid-word. Controls get the
+   * short name; sentences keep the long one, because "在斗鱼、虎牙、抖音、哔哩哔哩里搜索" is prose
+   * and prose has a whole line to wrap in.
+   *
+   * "B站" rather than "哔哩": it is what the platform is called in speech, and what the reference
+   * client puts in its own navigation (`screenshots/douyu.jpeg`).
+   */
+  val shortName: String,
 ) {
-  DOUYU("douyu", "斗鱼", "https://www.douyu.com"),
-  HUYA("huya", "虎牙", "https://www.huya.com"),
-  DOUYIN("douyin", "抖音", "https://live.douyin.com"),
-  BILIBILI("bilibili", "哔哩哔哩", "https://live.bilibili.com"),
+  DOUYU("douyu", "斗鱼", "https://www.douyu.com", "斗鱼"),
+  HUYA("huya", "虎牙", "https://www.huya.com", "虎牙"),
+  DOUYIN("douyin", "抖音", "https://live.douyin.com", "抖音"),
+  BILIBILI("bilibili", "哔哩哔哩", "https://live.bilibili.com", "B站"),
   ;
 
   companion object {

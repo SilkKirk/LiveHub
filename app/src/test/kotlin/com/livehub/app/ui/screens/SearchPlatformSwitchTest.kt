@@ -5,9 +5,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
@@ -58,13 +61,30 @@ class SearchPlatformSwitchTest {
     return actions
   }
 
+  /**
+   * Brings a platform chip into view.
+   *
+   * The row is a `LazyRow`: five Material chips need about 364dp and this window is 320dp, so the
+   * last one is not composed until the row scrolls. Reaching each platform this way is also the
+   * assertion — a chip that exists but cannot be scrolled to fails here rather than passing on a
+   * render where it happens to fit.
+   *
+   * This screen has exactly one scrollable in these fixtures (no results, no history), so the
+   * bare `hasScrollAction()` is unambiguous.
+   */
+  private fun scrollChipsTo(label: String) {
+    composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(label))
+    composeRule.waitForIdle()
+  }
+
   /** Every platform is reachable from this screen. */
   @Test
   fun `all four platforms are offered`() {
     render(state())
 
     Platform.entries.forEach { platform ->
-      composeRule.onNodeWithText(platform.displayName).assertIsDisplayed()
+      scrollChipsTo(platform.shortName)
+      composeRule.onNodeWithText(platform.shortName).assertIsDisplayed()
     }
   }
 
@@ -77,6 +97,21 @@ class SearchPlatformSwitchTest {
   }
 
   /**
+   * A platform restored from `lastPlatform` is scrolled into view.
+   *
+   * The last chip is the one that used to sit past the right edge, so without the scroll a
+   * restored 哔哩哔哩 selection would be a filter that is *on* with nothing on screen saying so —
+   * the "it exists, it is just off screen" shape round 76 fixed for the follow tags.
+   */
+  @Test
+  fun `the restored platform is scrolled into view`() {
+    render(state(platform = Platform.BILIBILI))
+
+    composeRule.onNodeWithText("B站").assertIsDisplayed()
+    composeRule.onNodeWithText("B站").assertIsSelected()
+  }
+
+  /**
    * Tapping a chip asks for a search-scoped switch, not the home one.
    *
    * Asserting the *absence* of `SelectPlatform` is the point: the two look identical from the
@@ -86,7 +121,8 @@ class SearchPlatformSwitchTest {
   fun `tapping a chip emits the search scoped action`() {
     val actions = render(state())
 
-    composeRule.onNodeWithText("哔哩哔哩").performClick()
+    scrollChipsTo("B站")
+    composeRule.onNodeWithText("B站").performClick()
 
     val switched = actions.filterIsInstance<UiAction.SelectSearchPlatform>()
     assertEquals(Platform.BILIBILI, switched.firstOrNull()?.platform)

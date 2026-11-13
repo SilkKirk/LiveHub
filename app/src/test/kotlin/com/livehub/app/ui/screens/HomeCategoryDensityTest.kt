@@ -148,11 +148,12 @@ class HomeCategoryDensityTest {
   fun `the four platform tabs stay on one line`() {
     composeHome()
 
-    // 虎牙 and 哔哩哔哩 are only rendered by the switcher (every card in the fixture is a 斗鱼
-    // room), so this compares two tabs and nothing else. Wrapping put them 58dp apart.
+    // 虎牙 and B站 are only rendered by the switcher (every card in the fixture is a 斗鱼
+    // room), so this compares two tabs and nothing else. Wrapping put them 58dp apart. The
+    // labels are `Platform.shortName` since round 78: the full 哔哩哔哩 was clipped in a 66dp tab.
     val huya = topDp("虎牙")
-    val bilibili = topDp("哔哩哔哩")
-    assertEquals("哔哩哔哩 is on its own line under 虎牙: $bilibili vs $huya", huya, bilibili, 1f)
+    val bilibili = topDp("B站")
+    assertEquals("B站 is on its own line under 虎牙: $bilibili vs $huya", huya, bilibili, 1f)
   }
 
   /**

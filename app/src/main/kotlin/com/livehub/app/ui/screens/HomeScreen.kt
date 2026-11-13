@@ -395,8 +395,11 @@ private fun PlatformTabs(
           selectedContentColor = MaterialTheme.colorScheme.primary,
           unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
           text = {
+            // `shortName`, not `displayName`: four tabs share 66dp each on a 320dp phone, and
+            // "哔哩哔哩" was drawn as "哔哩" — clipped silently, because a one-line `Text`
+            // defaults to `TextOverflow.Clip`. See `Platform.shortName`.
             Text(
-              text = platform.displayName,
+              text = platform.shortName,
               style = MaterialTheme.typography.titleMedium,
               fontWeight = if (pagerState.currentPage == index) FontWeight.Bold else FontWeight.Medium,
               maxLines = 1,
