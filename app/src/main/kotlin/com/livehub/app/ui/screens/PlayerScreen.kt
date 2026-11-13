@@ -1,5 +1,6 @@
 package com.livehub.app.ui.screens
 
+import android.content.Intent
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -72,6 +73,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -88,6 +90,7 @@ import com.livehub.app.ui.player.withoutBlockedKeywords
 import com.livehub.core.common.ViewerCountFormatter
 import com.livehub.core.designsystem.LiveBadgeColor
 import com.livehub.core.model.StreamVariant
+import com.livehub.core.model.Streamer
 import kotlinx.coroutines.delay
 
 /**
@@ -918,8 +921,48 @@ private fun ControlFab(
 
 // --------------------------------------------------------------- action row ---
 
+/**
+ * The public link to a room, spelled from the platform's own home page.
+ *
+ * Nothing has to be resolved for it: the room id the app already holds *is* the last path
+ * segment of the platform's live page on all four platforms, so sharing is a string operation
+ * rather than a network round trip.
+ *
+ * Extracted from the chooser because the host/id pairing is the part that can be wrong
+ * silently: a link to the wrong host still looks like a link, and the only symptom is that the
+ * person who receives it lands on a 404.
+ */
+internal fun shareUrl(room: Streamer): String = "${room.platform.homePage}/${room.roomId}"
+
+/**
+ * The chooser that hands a room to whichever app the user shares with.
+ *
+ * `text/plain` rather than a link type: the payload is a line of prose followed by a URL, and
+ * `text/plain` is what chat, notes and mail apps register for — a `text/x-uri` intent would only
+ * reach the few that claim links specifically.
+ *
+ * The subject carries the title so a mail arrives titled instead of blank, and the body repeats
+ * it because most share targets display the body alone.
+ */
+private fun shareChooser(room: Streamer): Intent {
+  val title = room.title.ifBlank { "直播中" }
+  return Intent.createChooser(
+    Intent(Intent.ACTION_SEND)
+      .setType("text/plain")
+      .putExtra(Intent.EXTRA_SUBJECT, title)
+      .putExtra(
+        Intent.EXTRA_TEXT,
+        "${room.streamerName} 正在直播：${title}\n${shareUrl(room)}",
+      ),
+    "分享直播间",
+  )
+}
+
 @Composable
 private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
+  // The composition's own context, so the chooser opens *over* the player rather than as a new
+  // task: `PlayerScreen` is only ever composed inside the activity.
+  val context = LocalContext.current
   val followed = remember(state.followed, state.room) {
     state.room?.let { room -> state.followed.any { it.key == room.key } } ?: false
   }
@@ -965,6 +1008,20 @@ private fun RoomActionRow(state: UiState, onAction: (UiAction) -> Unit) {
         filled = !followed,
         onClick = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
       )
+      // A room a viewer cannot hand to anyone else is a room only they will ever watch, and the
+      // app had no way out of itself at all — no share, no clipboard.
+      //
+      // The same pill as 关注 instead of a third style in this row, which also gives it the 48dp
+      // target and the ripple for free. Only drawn when there is a room to link to; the thumbnail
+      // window and full screen never compose this row at all (see the guard around
+      // `RoomActionRow`), so the pill is never on a surface a finger cannot aim at.
+      state.room?.let { room ->
+        PillButton(
+          label = "分享",
+          filled = false,
+          onClick = { context.startActivity(shareChooser(room)) },
+        )
+      }
       Spacer(Modifier.weight(1f))
       // A section label, not a count.
       //
