@@ -1135,6 +1135,12 @@ class ScreenshotTest {
         // were all drawn in default Material 3 colours. `state.themeMode` is what the app would
         // read, so a dark render is genuine rather than a light one over a black box.
         //
+        // The `Surface` is not decoration: it is what `LiveHubRoot` puts around every screen, and
+        // it is the only thing that sets `LocalContentColor`. Without it a `Text` that names no
+        // colour falls back to black, which looks correct in the light renders and turns the
+        // room title and the subtitle invisible in `23d-player-dark` — a harness artefact that
+        // reads as a contrast bug in the app.
+        //
         // The video surface is replaced: `captureToImage` cannot read a SurfaceView (its
         // pixels are composited by SurfaceFlinger, not drawn into the window), so a real
         // player always captures as solid black and the render would prove nothing about
@@ -1142,15 +1148,20 @@ class ScreenshotTest {
         // actually playing, so the loading / offline / error states still render their own
         // content.
         LiveHubTheme(mode = state.themeMode) {
-          PlayerContent(
-            state = state,
-            onAction = {},
-            fullscreen = fullscreen,
-            onFullscreenChange = {},
-            onOpenSettings = {},
-            videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
-            videoAspectHint = videoAspect,
-          )
+          Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+          ) {
+            PlayerContent(
+              state = state,
+              onAction = {},
+              fullscreen = fullscreen,
+              onFullscreenChange = {},
+              onOpenSettings = {},
+              videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
+              videoAspectHint = videoAspect,
+            )
+          }
         }
       } else {
         LiveHubRoot(state = state, onAction = { })
