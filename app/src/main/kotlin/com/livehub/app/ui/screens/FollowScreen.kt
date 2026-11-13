@@ -31,7 +31,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -228,13 +231,20 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
       )
     }
 
-    // The tag editor: long-press a card to open it for that room.
+    // The tag editor: long-press a card to open it for that room. It is also the only way off this
+    // list — the card's tap opens the room and its star is 特别关注, so nothing is left on the tile.
     taggingRoom?.let { room ->
       TagEditorSheet(
         streamer = room,
         tags = tags[room.key].orEmpty(),
         known = knownTags,
         onTagsChange = { onAction(UiAction.SetRoomTags(room, it)) },
+        onUnfollow = {
+          onAction(UiAction.ToggleFollow(room))
+          // The card leaves the grid because `followed` no longer holds it; the panel only has to
+          // close, since the room it was opened for is not in the list any more.
+          taggingRoom = null
+        },
         onDismiss = { taggingRoom = null },
       )
     }
@@ -242,12 +252,16 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
 }
 
 /**
- * Long-press editor for one room's labels.
+ * Long-press editor for one room: its labels, and the way out of the follow list.
  *
  * Long-press rather than a button on the card: the card already carries a tap (open) and a star
  * (特别关注), and a third visible control would crowd a 140dp tile for something used once in a
  * while. The sheet shows every tag already in use, so the second room you tag is one tap instead of
  * typing the same word again.
+ *
+ * 取消关注 lives down here for the same reason. It is the one action on this screen that throws a
+ * record away, and there is no third place on the card to put it, so it goes behind a gesture and
+ * behind a second tap rather than on the tile.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -256,10 +270,16 @@ private fun TagEditorSheet(
   tags: List<String>,
   known: List<String>,
   onTagsChange: (List<String>) -> Unit,
+  onUnfollow: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   BackHandler { onDismiss() }
   var draft by remember { mutableStateOf("") }
+  // Unfollowing deletes the follow record and the labels that hang off it, and nothing on this
+  // screen can put it back — the user has to go and find the room again. The button also sits in
+  // the bottom row of a panel that appears under the finger that opened it, which is where a thumb
+  // rests anyway, so a single tap is a tap that happens by accident; the first one only arms it.
+  var confirmingUnfollow by remember { mutableStateOf(false) }
 
   Box(modifier = Modifier.fillMaxSize()) {
     Box(
@@ -269,7 +289,10 @@ private fun TagEditorSheet(
         .pointerInput(Unit) { detectTapGestures { onDismiss() } },
     )
     Surface(
-      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.55f).align(Alignment.BottomCenter),
+      // Taller than this panel used to be: the unfollow row and its warning are fixed height and
+      // sit below the chip list, and at 0.55 the chips — the part the panel exists for — were down
+      // to two rows on the smallest screen the app targets.
+      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f).align(Alignment.BottomCenter),
       shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 3.dp,
@@ -287,11 +310,19 @@ private fun TagEditorSheet(
           )
           TextButton(onClick = onDismiss) { Text("完成") }
         }
+        // Two nodes rather than one sentence: an existing test pins the first line verbatim, and
+        // the second warns about the button at the bottom instead of explaining labels further.
         Text(
           text = "标签只用于关注页筛选，会随关注列表一起同步到已配对的设备。",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.padding(vertical = 6.dp),
+          modifier = Modifier.padding(top = 6.dp),
+        )
+        Text(
+          text = "取消关注会把主播从列表里移除，它的标签只在关注页用，也会一起消失。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
         )
 
         if (known.isEmpty() && tags.isEmpty()) {
@@ -336,6 +367,29 @@ private fun TagEditorSheet(
               draft = ""
             },
           ) { Text("添加") }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(top = 6.dp, bottom = 2.dp))
+
+        // Left-aligned, and anchored there across both steps on purpose: the finger that armed the
+        // button is already on it, and a control that slides across the row for the confirming tap
+        // is a control the second tap misses.
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+          if (confirmingUnfollow) {
+            Button(
+              onClick = onUnfollow,
+              colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            ) { Text("确认取消关注") }
+            // The way back out of the confirmation. Labelled 保留关注 rather than 取消: next to
+            // 确认取消关注, a bare 取消 is the one a user is most likely to read as the dangerous
+            // button.
+            TextButton(onClick = { confirmingUnfollow = false }) { Text("保留关注") }
+          } else {
+            TextButton(
+              onClick = { confirmingUnfollow = true },
+              colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text("取消关注") }
+          }
         }
       }
     }
@@ -457,8 +511,9 @@ private fun SpecialPickerSheet(
  * The grid of followed rooms, two per row.
  *
  * The star on the card means "特别关注" here rather than "关注": every room in this grid is already
- * followed, so the follow toggle would be a button that only ever removes. Unfollowing stays
- * available from the room itself and from the home grid.
+ * followed, so the follow toggle would be a button that only ever removes. Removal is on the
+ * long-press panel instead, behind a confirmation — a tile that can drop its own follow record on a
+ * mis-timed tap is the one mistake this screen cannot offer to undo.
  */
 @Composable
 private fun FollowGrid(
