@@ -72,6 +72,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,17 +91,38 @@ import com.livehub.core.model.StreamVariant
 import kotlinx.coroutines.delay
 
 /**
+ * Whether the player belongs in full screen, and why rotation counts as a request.
+ *
+ * A landscape window on a phone is 360dp tall while the 16:9 picture alone is 360dp of it, so
+ * the portrait arrangement has nothing left for `RoomActionRow` or the danmaku list: they are
+ * pushed off the bottom. The overlay would not step in either — it is drawn only in full screen
+ * or over a full-bleed vertical stream — so a rotated phone showed a picture, three round
+ * buttons, and no danmaku at all, while `fullscreen` stayed false because nobody had pressed a
+ * button that is 3 seconds deep in an auto-hiding chrome.
+ *
+ * Deriving it from the window instead of a `LaunchedEffect` that flips the flag is what keeps
+ * the two in sync in both directions: rotate back and the portrait layout returns on its own,
+ * with no state to reset.
+ *
+ * Extracted rather than inlined so the rule can be asserted without composing a player: the
+ * composable that computes it (`PlayerScreen`) also builds an ExoPlayer, which no JVM test can
+ * do.
+ */
+internal fun playerFullscreen(landscapeWindow: Boolean, manualFullscreen: Boolean): Boolean =
+  landscapeWindow || manualFullscreen
+
+/**
  * Live room screen.
  *
  * Mirrors the reference player's shape:
  *
- *  * a pill-shaped glass header (back, identity, follow, close) above the video,
- *  * a 16:9 video surface,
+ *  * a 16:9 video surface with the way out floating over its top edge,
  *  * a vertical column of round controls (settings / reload / fullscreen) on the right,
  *  * the danmaku list filling the rest of the screen,
  *  * a settings sheet holding quality, line and every danmaku option, because those do
  *    not fit in a chip row without crowding the picture,
- *  * full screen keeping only video plus the floating overlay.
+ *  * full screen keeping only video plus the floating overlay — entered by the button *or* by
+ *    rotating the phone, see [playerFullscreen].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,14 +144,19 @@ fun PlayerScreen(
    */
   compact: Boolean = false,
 ) {
-  var fullscreen by remember { mutableStateOf(false) }
+  var manualFullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
   // In landscape the bottom sheet has only the height of a landscape window to work with,
   // and the settings list is taller than that. A left-hand drawer uses the axis that has
   // room instead — the same reason the reference client switches to a drawer there.
   val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+  val fullscreen = playerFullscreen(landscapeWindow = isLandscape, manualFullscreen = manualFullscreen)
 
-  BackHandler(enabled = fullscreen && !compact) { fullscreen = false }
+  // Only meaningful in a portrait window: there *is* a portrait layout to land in there. In
+  // landscape the same gesture is "step off the player", which is what `LiveHubRoot`'s handler
+  // does with it — leaving full screen would land back in the arrangement `playerFullscreen`
+  // exists to avoid.
+  BackHandler(enabled = fullscreen && !compact && !isLandscape) { manualFullscreen = false }
 
   Box(modifier = Modifier.fillMaxSize()) {
     // Swipe from the left edge to step off the player. It used to close the room; now it minimises
@@ -138,9 +166,10 @@ fun PlayerScreen(
         state = state,
         onAction = onAction,
         fullscreen = fullscreen,
-        onFullscreenChange = { fullscreen = it },
+        onFullscreenChange = { manualFullscreen = it },
         onOpenSettings = { showSettings = true },
         compact = compact,
+        landscapeWindow = isLandscape,
       )
     }
 
@@ -229,6 +258,24 @@ internal fun PlayerContent(
    * picture-in-picture gets the system's.
    */
   compact: Boolean = false,
+  /**
+   * True when the window is wider than it is tall.
+   *
+   * A landscape window has no portrait arrangement to return to, so the full-screen bar's
+   * leading button leaves the room rather than leaving full screen, and the side column drops
+   * its fullscreen toggle because there is nowhere for it to go. [PlayerScreen] reads this from
+   * the configuration; the chrome tests pass it directly.
+   */
+  landscapeWindow: Boolean = false,
+  /**
+   * The aspect to assume before the decoder has reported one, or null in the app.
+   *
+   * The screenshot harness and the chrome tests replace [videoSurface], and the real surface is
+   * what teaches this layout that a stream is vertical — so without a hint the full-bleed
+   * branch could not be rendered or asserted at all. A real decoder's report overwrites it;
+   * see the `onVideoAspectRatioChanged` call below.
+   */
+  videoAspectHint: Float? = null,
 ) {
   val variant: StreamVariant? = state.selectedVariant
   var controlsVisible by remember { mutableStateOf(true) }
@@ -241,9 +288,9 @@ internal fun PlayerContent(
   // The gesture detector below is created once per composition and reads `state` from *that*
   // composition; `rememberUpdatedState` is what keeps a double tap from toggling a stale value.
   val current by rememberUpdatedState(state)
-  // Learned from the decoder. Null until the first frame is sized, which keeps the
-  // surface at 16:9 instead of collapsing to zero height on open.
-  var videoAspect by remember(state.room?.key) { mutableStateOf<Float?>(null) }
+  // Learned from the decoder, or supplied by the caller. Null until the first frame is sized,
+  // which keeps the surface at 16:9 instead of collapsing to zero height on open.
+  var videoAspect by remember(state.room?.key) { mutableStateOf(videoAspectHint) }
   // Set when a CDN hostname cannot pass TLS; the same URL is retried over http.
   var httpFallbackUrl by remember(state.room?.key) { mutableStateOf<String?>(null) }
 
@@ -343,20 +390,26 @@ internal fun PlayerContent(
           )
         }
 
-        if (!compact && verticalFullBleed) {
-          // A vertical stream fills the screen, so there is no list underneath and the
-          // streamer name would have nowhere else to go. This one line is all that is
-          // left of the old header, and it carries no buttons.
-          StreamerLine(
+        // The way out of the player, and — over a vertical stream — the only follow control
+        // there is. Declared after the gesture layer so a tap on it is not swallowed (in a Box
+        // the last child wins the pointer events).
+        //
+        // Only over the picture and its two spinners: the offline and error states carry their
+        // own 返回 pill in the middle of the screen, and a second one in the corner would offer
+        // the same action twice on one screen — which is the reason the old pill header was
+        // removed in the first place.
+        val showsPicture = state.playerError == null &&
+          (
+            effectiveVariant != null ||
+              state.loading ||
+              (state.error == null && state.room?.isLive != false)
+            )
+        if (!compact && !fullscreen && showsPicture) {
+          PortraitTopBar(
             state = state,
-            modifier = Modifier
-              .align(Alignment.TopCenter)
-              .fillMaxWidth()
-              .background(
-                Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent)),
-              )
-              .padding(horizontal = 12.dp, vertical = 10.dp),
-            onSurface = Color.White,
+            onAction = onAction,
+            fullBleed = verticalFullBleed,
+            modifier = Modifier.align(Alignment.TopCenter),
           )
         }
 
@@ -364,7 +417,13 @@ internal fun PlayerContent(
         if (!compact && fullscreen && controlsVisible) {
           FullscreenBar(
             state = state,
-            onExit = { onFullscreenChange(false) },
+            // A landscape window has no portrait layout to go back to: leaving full screen
+            // there would restore exactly the arrangement [playerFullscreen] exists to avoid,
+            // so the leading button does what back does and steps off the player.
+            exitDescription = if (landscapeWindow) "返回" else "退出全屏",
+            onExit = {
+              if (landscapeWindow) onAction(UiAction.MinimizePlayer) else onFullscreenChange(false)
+            },
             onAction = onAction,
             modifier = Modifier.align(Alignment.TopCenter),
           )
@@ -422,6 +481,9 @@ internal fun PlayerContent(
         if (!compact && controlsVisible) {
           SideControls(
             fullscreen = fullscreen,
+            // Nowhere to go in a landscape window: see `playerFullscreen`. A button that
+            // changes nothing is worse than no button.
+            showFullscreenToggle = !landscapeWindow,
             onToggleFullscreen = {
               onFullscreenChange(!fullscreen)
               controlsVisible = true
@@ -454,17 +516,26 @@ internal fun PlayerContent(
 
 // ------------------------------------------------------------------- header ---
 
-// The portrait header used to be a floating pill with a back arrow, a star and a close
-// button. All three are gone on purpose:
+// The portrait header used to be a floating pill holding a back arrow, the streamer, a star and
+// a close button. The pill is still gone, and for the reasons it went:
 //
-//  * back and close both called `ClosePlayer`, so the screen carried two ways to do one
-//    thing while a third — the system back gesture, and the left-edge swipe in
-//    `LiveHubRoot` — already worked everywhere;
+//  * back and close both called `ClosePlayer`, so the screen carried two ways to do one thing
+//    while a third — the system back gesture, and the left-edge swipe in `LiveHubRoot` —
+//    already worked everywhere;
 //  * the star duplicated the 关注 button in `RoomActionRow`, which is larger, labelled and
 //    therefore the one a user can actually find.
 //
-// What the pill also showed (streamer, live dot, viewer count) was not decoration, so it
-// moved into `RoomActionRow` rather than disappearing with the container.
+// Two of those conclusions had a hole in them, closed by `PortraitTopBar`:
+//
+//  * "the gestures already work everywhere" is not an argument for having *no* control. The
+//    mini window got its × for exactly that reason, and the player had none, which is how a
+//    user ends up stuck on a screen whose only exit is a swipe they have never tried;
+//  * the star is only a duplicate when `RoomActionRow` is on screen. Over a vertical stream the
+//    row is not composed at all, so the star came back in that branch — for the case where it
+//    is the only follow control, not as a second one next to it.
+//
+// What the pill also showed (streamer, live dot, viewer count) was not decoration, so it moved
+// into `RoomActionRow`, and into `PortraitTopBar`'s bar for the vertical layout that has no row.
 
 /**
  * Streamer name plus live dot and viewer count.
@@ -511,9 +582,107 @@ private fun StreamerLine(
   }
 }
 
+/**
+ * The way out of the player in portrait, and — over a vertical stream — the only follow
+ * control there is.
+ *
+ * Portrait has no header bar; the exit used to be the left-edge swipe or the system back
+ * gesture, and the comment that removed the old pill said so on purpose. That is the same
+ * "a gesture nobody has discovered is not a control" this codebase refuses to accept for the
+ * mini window's ×, and a screen whose only way out is an undiscoverable gesture is a screen
+ * people get stuck on. Drawn over the picture, so it costs no layout height and cannot be
+ * scrolled out of reach.
+ *
+ * The star appears only while the picture fills the window: there `RoomActionRow` underneath is
+ * not composed at all, so its 关注 pill does not exist and this star is the only follow control
+ * left. Over an ordinary 16:9 picture that pill is two lines below and permanent, and a second
+ * identical button in the corner would be a duplicate rather than an addition.
+ */
+@Composable
+private fun PortraitTopBar(
+  state: UiState,
+  onAction: (UiAction) -> Unit,
+  fullBleed: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  if (!fullBleed) {
+    Box(modifier = modifier.fillMaxWidth().padding(8.dp)) {
+      PictureButton(
+        icon = Icons.AutoMirrored.Filled.ArrowBack,
+        description = "返回",
+        onClick = { onAction(UiAction.MinimizePlayer) },
+      )
+    }
+    return
+  }
+
+  val followed = state.room?.let { room -> state.followed.any { it.key == room.key } } == true
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .background(
+        Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent)),
+      )
+      // The picture runs under the status bar here (that is what "fills the window" means), but
+      // the controls must not: without this the bar sits under the clock and the cutout. The
+      // scrim stays above the inset so the top of the picture still has one.
+      .windowInsetsPadding(WindowInsets.statusBars)
+      .padding(horizontal = 6.dp, vertical = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    PictureButton(
+      icon = Icons.AutoMirrored.Filled.ArrowBack,
+      description = "返回",
+      onClick = { onAction(UiAction.MinimizePlayer) },
+    )
+    StreamerLine(state = state, onSurface = Color.White, modifier = Modifier.weight(1f))
+    PictureButton(
+      icon = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
+      description = if (followed) "取消关注" else "关注",
+      onClick = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
+    )
+  }
+}
+
+/**
+ * An icon floating over the picture: a 48dp target around an 18dp glyph on a dark disc.
+ *
+ * The disc is the difference between readable and invisible over a bright cover — the side
+ * column's translucent-white circles work because they sit on a scrimmed edge, and a bare white
+ * arrow on a white thumbnail is nothing at all. The description sits on the clickable node, not
+ * on the glyph, so the node a test (or TalkBack) reaches is the one that is 48dp, not the 34dp
+ * disc inside it.
+ */
+@Composable
+private fun PictureButton(
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  description: String,
+  onClick: () -> Unit,
+) {
+  Box(
+    modifier = Modifier
+      .size(48.dp)
+      .clip(CircleShape)
+      .clickable(onClick = onClick)
+      .semantics { contentDescription = description },
+    contentAlignment = Alignment.Center,
+  ) {
+    Icon(
+      imageVector = icon,
+      contentDescription = null,
+      tint = Color.White,
+      modifier = Modifier
+        .size(34.dp)
+        .background(Color.Black.copy(alpha = 0.38f), CircleShape)
+        .padding(8.dp),
+    )
+  }
+}
+
 @Composable
 private fun FullscreenBar(
   state: UiState,
+  exitDescription: String,
   onExit: () -> Unit,
   onAction: (UiAction) -> Unit,
   modifier: Modifier = Modifier,
@@ -524,6 +693,9 @@ private fun FullscreenBar(
     modifier = modifier
       .fillMaxWidth()
       .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent)))
+      // Same reason as `PortraitTopBar`: the picture is edge to edge in full screen, so without
+      // this inset the bar and its two 48dp targets sit under the status bar.
+      .windowInsetsPadding(WindowInsets.statusBars)
       .padding(horizontal = 6.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
@@ -532,7 +704,7 @@ private fun FullscreenBar(
     // never there. `size(34.dp)` on the *clickable* node shrank the target along with the icon.
     Icon(
       imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-      contentDescription = "退出全屏",
+      contentDescription = exitDescription,
       tint = Color.White,
       modifier = Modifier
         .size(48.dp)
@@ -687,6 +859,7 @@ private fun VideoSurface(
 @Composable
 private fun SideControls(
   fullscreen: Boolean,
+  showFullscreenToggle: Boolean,
   onToggleFullscreen: () -> Unit,
   onOpenSettings: () -> Unit,
   onReload: () -> Unit,
@@ -699,11 +872,13 @@ private fun SideControls(
   ) {
     ControlFab(icon = Icons.Filled.Settings, description = "播放设置", onClick = onOpenSettings)
     ControlFab(icon = Icons.Filled.Refresh, description = "刷新", onClick = onReload)
-    ControlFab(
-      icon = if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-      description = if (fullscreen) "退出全屏" else "全屏",
-      onClick = onToggleFullscreen,
-    )
+    if (showFullscreenToggle) {
+      ControlFab(
+        icon = if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+        description = if (fullscreen) "退出全屏" else "全屏",
+        onClick = onToggleFullscreen,
+      )
+    }
   }
 }
 

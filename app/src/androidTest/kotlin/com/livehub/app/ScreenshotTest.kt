@@ -821,6 +821,17 @@ class ScreenshotTest {
   )
 
   /**
+   * A vertical stream in portrait.
+   *
+   * The picture fills the window here, which means `RoomActionRow` — and with it the only 关注
+   * control the layout used to have — is not composed at all. Nothing had ever rendered this
+   * branch: no screenshot, no test, seven references in the source and every one of them in the
+   * product code. The bar's star is what makes a vertical room (every 抖音 room) followable.
+   */
+  @Test
+  fun playerVertical() = capture("17e-player-vertical", playerState(), videoAspect = 9f / 16f)
+
+  /**
    * The loading, offline and error renders must differ from the playing one.
    *
    * They used to be byte-identical to it: the harness hands `PlayerContent` a stand-in for
@@ -1068,6 +1079,14 @@ class ScreenshotTest {
     advanceMillis: Long = 0L,
     onScreenText: String? = null,
     scrollToText: String? = null,
+    /**
+     * The aspect the player should assume before a decoder reports one.
+     *
+     * A vertical stream is the only thing that puts the player into its full-bleed portrait
+     * layout, and that layout is chosen from the aspect the *real* surface reports — which the
+     * harness replaces. Without this the branch could not be rendered at all.
+     */
+    videoAspect: Float? = null,
     /** Clicks an icon-only control by its content description. */
     clickDescription: String? = null,
     /**
@@ -1107,6 +1126,7 @@ class ScreenshotTest {
           onFullscreenChange = {},
           onOpenSettings = {},
           videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
+          videoAspectHint = videoAspect,
         )
       } else {
         LiveHubRoot(state = state, onAction = { })

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -92,6 +93,8 @@ class PlayerChromeTest {
     state: UiState = uiState(),
     fullscreen: Boolean = false,
     compact: Boolean = false,
+    landscapeWindow: Boolean = false,
+    videoAspect: Float? = null,
     onAction: (UiAction) -> Unit = {},
   ) {
     composeRule.mainClock.autoAdvance = false
@@ -104,6 +107,8 @@ class PlayerChromeTest {
         onOpenSettings = {},
         videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
         compact = compact,
+        landscapeWindow = landscapeWindow,
+        videoAspectHint = videoAspect,
       )
     }
     composeRule.mainClock.advanceTimeByFrame()
@@ -274,5 +279,122 @@ class PlayerChromeTest {
     render(state = uiState().copy(playerPaused = true))
 
     composeRule.onNodeWithText("已暂停 · 双击继续").assertIsDisplayed()
+  }
+
+  // ------------------------------------------------------------- the way out ---
+  //
+  // Portrait has no header bar, and for three rounds the documented exit was "the left-edge
+  // swipe or the system back gesture". That left the screen with no control at all for leaving
+  // it — the same "gesture nobody has discovered" the mini window's × was added to avoid.
+
+  /**
+   * The portrait player carries a visible way out, over the picture, above the action row.
+   *
+   * Asserting existence alone would pass for a button parked under the picture or behind the
+   * danmaku list, so the position is checked against the action row: the picture is the 16:9
+   * band at the top, and the row starts underneath it.
+   */
+  @Test
+  fun `the portrait player shows a way out over the picture`() {
+    val actions = mutableListOf<UiAction>()
+    render(onAction = { actions += it })
+
+    val back = composeRule.onNodeWithContentDescription("返回").fetchSemanticsNode().boundsInRoot
+    val follow = composeRule.onNodeWithText("关注").fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "the back control ends at ${back.bottom} but the action row starts at ${follow.top}",
+      back.bottom <= follow.top,
+    )
+    assertTrue("the back control is not in the corner: ${back.left}", back.left < 120f)
+
+    composeRule.onNodeWithContentDescription("返回").performClick()
+    composeRule.waitForIdle()
+
+    assertEquals(1, actions.size)
+    assertTrue(
+      "leaving the player is 缩小 into the mini window, got ${actions.first()}",
+      actions.first() is UiAction.MinimizePlayer,
+    )
+  }
+
+  /**
+   * A landscape window puts the same way out on the full-screen bar.
+   *
+   * Nothing about the landscape player could be asserted before: its layout is derived from the
+   * window, and the only renderer runs at 320x640. Here the window is passed in, which is also
+   * how `PlayerScreen` decides — see `playerFullscreen`.
+   *
+   * The side column must lose its fullscreen toggle in the same breath: in a landscape window
+   * leaving full screen has no portrait arrangement to land in, so that button could only be a
+   * control that does nothing.
+   */
+  @Test
+  fun `a landscape window puts the way out on the bar`() {
+    val actions = mutableListOf<UiAction>()
+    render(fullscreen = true, landscapeWindow = true, onAction = { actions += it })
+
+    assertEquals("the bar keeps one back control", 1, count("返回"))
+    assertEquals("the fullscreen toggle has nowhere to go", 0, count("退出全屏"))
+
+    composeRule.onNodeWithContentDescription("返回").performClick()
+    composeRule.waitForIdle()
+
+    assertEquals(1, actions.size)
+    assertTrue(
+      "back leaves the room in landscape, got ${actions.first()}",
+      actions.first() is UiAction.MinimizePlayer,
+    )
+  }
+
+  /**
+   * A vertical stream fills the window, so the action row is not composed — and the star on the
+   * bar is the only follow control left.
+   *
+   * This branch had no test and no render at all: `videoAspect` is learned from the real
+   * decoder, and every harness replaces the surface. Before this it also had no follow control,
+   * which made a vertical room (every 抖音 room) impossible to follow without leaving it.
+   */
+  @Test
+  fun `a vertical stream keeps follow on the bar`() {
+    val actions = mutableListOf<UiAction>()
+    render(videoAspect = 9f / 16f, onAction = { actions += it })
+
+    assertEquals(
+      "the action row is not drawn for a full-bleed picture",
+      0,
+      composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size,
+    )
+    assertEquals("the bar offers the follow action", 1, count("关注"))
+    composeRule.onNodeWithText("一条小团团").assertIsDisplayed()
+
+    composeRule.onNodeWithContentDescription("关注").performClick()
+    composeRule.waitForIdle()
+
+    assertEquals(1, actions.size)
+    assertTrue("got ${actions.first()}", actions.first() is UiAction.ToggleFollow)
+  }
+
+  /**
+   * Rotating the phone is a request for full screen, and rotating back is a request to leave it.
+   *
+   * The rule is asserted on its own because the composable that applies it builds an ExoPlayer
+   * — the one thing a JVM test cannot construct. Without it, a landscape window renders the
+   * portrait arrangement: a 16:9 picture exactly as tall as the window, with the action row and
+   * the danmaku list pushed off the bottom and the overlay switched off.
+   */
+  @Test
+  fun `rotation decides full screen`() {
+    assertFalse(
+      "a portrait window is not full screen until the button is pressed",
+      playerFullscreen(landscapeWindow = false, manualFullscreen = false),
+    )
+    assertTrue(
+      "a landscape window is full screen with no button press",
+      playerFullscreen(landscapeWindow = true, manualFullscreen = false),
+    )
+    assertTrue(
+      "the button still works in portrait",
+      playerFullscreen(landscapeWindow = false, manualFullscreen = true),
+    )
   }
 }
