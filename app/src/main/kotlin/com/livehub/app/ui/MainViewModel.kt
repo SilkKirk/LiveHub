@@ -90,6 +90,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         blockedKeywords = settings.blockedKeywords,
         deviceName = preferences.deviceName,
         searchHistory = settings.searchHistory,
+        recentRooms = settings.recentRooms,
         followed = container.followStore.followed(),
         specialFollowKeys = container.followStore.specialKeys(),
         followTags = container.followStore.tagsByKey(),
@@ -1008,7 +1009,32 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   // --------------------------------------------------------------------- player
 
+  /**
+   * Puts [streamer] at the front of 最近看过, in the state and on disk.
+   *
+   * Both halves from one call: the state is what the search screen draws, the record is what
+   * survives the process. Writing only the record would leave the row stale until the next launch;
+   * writing only the state would lose it on the next launch.
+   *
+   * The list is read back from [com.livehub.app.di.UserPreferences] instead of being recomputed
+   * here because `update` publishes the new record to its cache *before* handing the disk write
+   * off, so this is exactly the value that was just stored — and "move to front, dedupe by key,
+   * keep 12" stays a single implementation rather than two that can drift.
+   */
+  private fun rememberRecentRoom(streamer: Streamer) {
+    container.preferences.addRecentRoom(streamer)
+    val recent = container.preferences.settings.recentRooms
+    _state.update { it.copy(recentRooms = recent) }
+  }
+
   private fun openRoom(streamer: Streamer) {
+    // Recorded on intent, before anything is resolved.
+    //
+    // The user pressed play on *this* room, and a room whose stream fails to resolve is still one
+    // they were looking for a second later. Recording after a successful resolve would also drop
+    // every visit that ended in a network error or a decoder that gave up — which on a bad
+    // connection is most of them, i.e. exactly the visits worth finding again.
+    rememberRecentRoom(streamer)
     playbackJob?.cancel()
     // Remember where the room was opened from so closing it returns there.
     //

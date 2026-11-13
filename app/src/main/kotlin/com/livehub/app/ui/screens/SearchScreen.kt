@@ -1,24 +1,30 @@
 package com.livehub.app.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.AssistChip
@@ -38,9 +44,15 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.EmptyState
@@ -56,7 +68,8 @@ import kotlinx.coroutines.flow.first
  * Search screen.
  *
  * Four distinct states, each rendered deliberately:
- *  * nothing searched yet  -> recent searches, plus a hint for what this platform accepts
+ *  * nothing searched yet  -> recent searches, recently opened rooms, plus a hint for what this
+ *                             platform accepts
  *  * searching             -> a skeleton of the result rows, not a bare spinner
  *  * results / no results  -> the list, or an empty state that offers to clear the query
  *  * failure               -> the platform's message and a retry
@@ -106,6 +119,15 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
         keywords = state.searchHistory,
         onPick = { onAction(UiAction.UseHistory(it)) },
         onClear = { onAction(UiAction.ClearSearchHistory) },
+      )
+    }
+
+    // Its own condition rather than part of the block above: browsing 首页 is the common way into
+    // a room, so a user can have a play history without ever having searched for anything.
+    if (idle && state.recentRooms.isNotEmpty()) {
+      RecentRooms(
+        rooms = state.recentRooms,
+        onPick = { onAction(UiAction.OpenRoom(it)) },
       )
     }
 
@@ -423,3 +445,100 @@ private fun RecentSearches(
     }
   }
 }
+
+/**
+ * The 最近看过 strip on the idle screen.
+ *
+ * A different question from 最近搜索 above it — that row is "what did I look for", this one is
+ * "what was I watching" — so they are two lists rather than one merged one. The room cards are the
+ * only way back into a room the user just closed without going to a platform at all, which is why
+ * this row is worth the vertical space on a screen whose other content is a hint.
+ */
+@Composable
+private fun RecentRooms(rooms: List<Streamer>, onPick: (Streamer) -> Unit) {
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Text(
+      text = "最近看过",
+      style = MaterialTheme.typography.titleSmall,
+      fontWeight = FontWeight.SemiBold,
+      modifier = Modifier.padding(horizontal = 12.dp),
+    )
+    LazyRow(
+      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      // Keyed by room rather than by position: opening a card from this row moves that room to the
+      // front, and without a key every card behind it would re-bind its image instead of the list
+      // simply moving one item.
+      items(rooms, key = { it.key }) { streamer ->
+        RecentRoomCard(streamer = streamer, onClick = { onPick(streamer) })
+      }
+    }
+  }
+}
+
+/**
+ * One visited room: a cover with a single name line under it.
+ *
+ * Smaller than a result row on purpose — this is a shortcut, not a browse surface, and up to
+ * twelve of them share one horizontal strip. The whole card is the tap target, and at
+ * [RECENT_ROOM_WIDTH_DP] wide it is already ~68dp of cover plus the name, so the 48dp minimum is
+ * met on both axes without an invisible box around it.
+ */
+@Composable
+private fun RecentRoomCard(streamer: Streamer, onClick: () -> Unit) {
+  Column(
+    modifier = Modifier
+      .width(RECENT_ROOM_WIDTH_DP.dp)
+      .clip(RoundedCornerShape(10.dp))
+      .clickable(onClick = onClick)
+      // Says *why* the card is here, which the visible name alone does not: on this screen a room
+      // could equally well be a search result.
+      .semantics { contentDescription = "最近看过 ${streamer.streamerName}" },
+  ) {
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .aspectRatio(16f / 9f)
+        .clip(RoundedCornerShape(10.dp))
+        .background(MaterialTheme.colorScheme.surfaceVariant),
+      contentAlignment = Alignment.Center,
+    ) {
+      val cover = streamer.coverUrl
+      if (cover.isNullOrBlank()) {
+        // The same rule the room cards follow: a tile whose image is missing still gets a
+        // deliberate glyph, because a strip of blank rectangles reads as a rendering bug.
+        Icon(
+          imageVector = Icons.Filled.PlayArrow,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(24.dp),
+        )
+      } else {
+        AsyncImage(
+          model = cover,
+          // The name is the text directly below; describing the image too would say it twice.
+          contentDescription = null,
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxSize(),
+        )
+      }
+    }
+    Text(
+      text = streamer.streamerName.ifBlank { "未知主播" },
+      style = MaterialTheme.typography.labelMedium,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
+    )
+  }
+}
+
+/**
+ * Card width on the 最近看过 strip.
+ *
+ * At the 320dp phone width this app targets, two full cards plus a sliver of the third fit in the
+ * window — the sliver is what tells the user the row scrolls, which a row of exactly-fitting cards
+ * does not.
+ */
+private const val RECENT_ROOM_WIDTH_DP = 120

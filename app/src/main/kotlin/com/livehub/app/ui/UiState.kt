@@ -141,6 +141,15 @@ data class UiState(
    */
   val searchFailures: Map<Platform, String> = emptyMap(),
   val searchHistory: List<String> = emptyList(),
+  /**
+   * Rooms the user opened recently, newest first.
+   *
+   * Local only, and deliberately separate from [followed]: 关注 answers "who do I want to keep up
+   * with", this answers "what was I just watching" — the second question is what the search
+   * screen's 最近看过 row exists for, since searching for a room you had open a minute ago is the
+   * one search this app can answer without going to a platform.
+   */
+  val recentRooms: List<Streamer> = emptyList(),
   /** Cursor for the next page of search results, null when exhausted. */
   val searchHasMore: Boolean = false,
   val room: Streamer? = null,

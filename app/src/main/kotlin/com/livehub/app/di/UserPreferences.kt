@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.livehub.core.model.Platform
+import com.livehub.core.model.Streamer
 import com.livehub.core.sync.DiscoveredPeer
 import com.livehub.core.sync.TrustedPeer
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +49,19 @@ data class UserSettings(
   val lastPlatform: String = Platform.DOUYU.id,
   /** Keywords the search screen shows, newest first. Local only — never synchronised. */
   val searchHistory: List<String> = emptyList(),
+  /**
+   * Rooms the user has opened, newest first. Local only — never synchronised.
+   *
+   * The default is mandatory, not cosmetic: this field is missing from every settings record
+   * written before it existed, and `decode` replaces a whole record it cannot read with
+   * `UserSettings()`. Without the default, upgrading would therefore reset the theme, the follow
+   * records and the login records of every existing installation in one go.
+   *
+   * A room is stored as the whole [Streamer] rather than as a key because the row is drawn before
+   * anything has been fetched — a key alone would leave it with no title and no cover until the
+   * room was opened again, which is precisely the moment the row exists for.
+   */
+  val recentRooms: List<Streamer> = emptyList(),
   /**
    * Serialised follow records, including tombstones: one record per followed room.
    *
@@ -228,6 +242,28 @@ class UserPreferences(private val context: Context) {
     update { it.copy(searchHistory = emptyList()) }
   }
 
+  /**
+   * Records a room the user opened, newest first.
+   *
+   * Reopening a room moves it back to the front rather than adding a second copy, so the row is a
+   * list of *rooms* and not of visits — the same rule [addSearchHistory] applies to keywords.
+   *
+   * The list is capped because [update] re-encodes the whole settings record on every call and
+   * this is the only field that grows with use: without a cap, a long browsing session would make
+   * every later settings write (a star tap, a slider drag) re-encode an ever-longer JSON document.
+   *
+   * A room without an id is refused for the same reason a blank keyword is: it cannot be reopened,
+   * so recording it would put a card in the row whose only possible outcome is a failed resolve.
+   */
+  fun addRecentRoom(streamer: Streamer) {
+    if (streamer.roomId.isBlank()) return
+    update { current ->
+      val next = (listOf(streamer) + current.recentRooms.filterNot { it.key == streamer.key })
+        .take(MAX_RECENT_ROOMS)
+      current.copy(recentRooms = next)
+    }
+  }
+
   fun setPreferredQuality(platform: Platform, quality: Int) {
     update { it.copy(preferredQuality = it.preferredQuality + (platform.id to quality)) }
   }
@@ -323,5 +359,12 @@ class UserPreferences(private val context: Context) {
   private companion object {
     /** Enough to be useful in the search field, short enough to stay readable. */
     const val MAX_SEARCH_HISTORY = 20
+
+    /**
+     * Twelve rooms: several screenfuls of the 120dp strip that reads this, which is many times
+     * over what "the room I had open a moment ago" needs. It also keeps the record at a few kB on
+     * disk, which matters because every other settings write re-encodes it.
+     */
+    const val MAX_RECENT_ROOMS = 12
   }
 }

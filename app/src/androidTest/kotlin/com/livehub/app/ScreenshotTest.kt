@@ -600,6 +600,24 @@ class ScreenshotTest {
     ),
   )
 
+  /**
+   * The idle screen with a play history: 最近搜索 above, 最近看过 below.
+   *
+   * The strip had no render in the round that added it — `baseState()` carries no history, so the
+   * row never composed in any artifact, and a shortcut nobody can see is a shortcut nobody uses
+   * (the lesson round 76 learned about the follow tags). `recentRooms` is populated here and
+   * `searchHistory` is left empty on purpose: it also shows that the two rows are independent, so a
+   * user who has only ever browsed 首页 still gets the rooms back.
+   */
+  @Test
+  fun searchRecentRooms() = capture(
+    "09c-search-recent-rooms",
+    baseState().copy(
+      screen = Screen.Search,
+      recentRooms = douyuRooms.take(4),
+    ),
+  )
+
   @Test
   fun searchResults() = capture(
     "11-search-results",
