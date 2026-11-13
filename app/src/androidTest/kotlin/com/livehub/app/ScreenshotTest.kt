@@ -18,11 +18,13 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.livehub.app.ui.LiveHubRoot
@@ -542,6 +544,47 @@ class ScreenshotTest {
   @Test
   fun followEmpty() = capture("08-follow-empty", baseState().copy(screen = Screen.Follow))
 
+  /**
+   * The tag chips, in the same row as the live and platform filters.
+   *
+   * The `#` prefix is the whole visual claim: a tag named after a platform ("斗鱼") has to stay
+   * distinguishable from the platform chip sitting next to it in that row.
+   */
+  @Test
+  fun followTags() = capture(
+    "07d-follow-tags",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = followRooms,
+      followTags = mapOf(
+        followRooms[0].key to listOf("常看"),
+        followRooms[1].key to listOf("常看", "英雄联盟"),
+      ),
+    ),
+  )
+
+  /**
+   * The tag editor, opened by a long press on a card.
+   *
+   * No state can express "sheet open", so the press is part of the render. `expectText` is the
+   * sheet's own 完成 button: without it, a press that opened nothing would still produce a
+   * plausible-looking screenshot of the grid underneath.
+   */
+  @Test
+  fun followTagEditor() = capture(
+    "07e-follow-tag-editor",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = followRooms,
+      followTags = mapOf(
+        followRooms[0].key to listOf("常看"),
+        followRooms[1].key to listOf("常看", "英雄联盟"),
+      ),
+    ),
+    longClickText = followRooms[0].title,
+    expectText = "完成",
+  )
+
   @Test
   fun searchIdle() = capture("09-search-idle", baseState().copy(screen = Screen.Search, searchQuery = ""))
 
@@ -1025,6 +1068,13 @@ class ScreenshotTest {
     scrollToText: String? = null,
     /** Clicks an icon-only control by its content description. */
     clickDescription: String? = null,
+    /**
+     * Long-presses a node carrying this text before capturing.
+     *
+     * The follow grid opens its tag editor on a long press, and a render of that panel is the only
+     * visual evidence the long press exists at all — no state can express "sheet open".
+     */
+    longClickText: String? = null,
     /** Asserts an icon-only control is present, for the same reason as [clickDescription]. */
     expectDescription: String? = null,
     /**
@@ -1070,6 +1120,12 @@ class ScreenshotTest {
     if (clickDescription != null) {
       // Icon-only controls have no text to match; the chevron is one of them.
       composeRule.onNodeWithContentDescription(clickDescription).performClick()
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.waitForIdle()
+    }
+
+    if (longClickText != null) {
+      composeRule.onNodeWithText(longClickText).performTouchInput { longClick() }
       composeRule.mainClock.advanceTimeByFrame()
       composeRule.waitForIdle()
     }
