@@ -142,15 +142,13 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
               // comparable, and the cards carry no platform label on purpose (they used to repeat
               // the search field's own label) — so in this mode the platform has to come from
               // somewhere. It comes from the section.
+              //
+              // The failure line is drawn whether or not the platform produced rows: a platform can
+              // answer page one and fail on page two, and "this section stopped growing" deserves
+              // the same explanation as "this platform answered nothing".
               Platform.entries.forEach { platform ->
                 val rooms = state.searchResults.filter { it.platform == platform }
-                if (rooms.isEmpty()) {
-                  state.searchFailures[platform]?.let { reason ->
-                    item(key = "failure-${platform.id}") {
-                      SearchFailureLine(platform = platform, reason = reason)
-                    }
-                  }
-                } else {
+                if (rooms.isNotEmpty()) {
                   item(key = "header-${platform.id}") {
                     PlatformHeader(platform = platform, count = rooms.size)
                   }
@@ -160,6 +158,11 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
                       followed = followedKeys.contains(streamer.key),
                       onAction = onAction,
                     )
+                  }
+                }
+                state.searchFailures[platform]?.let { reason ->
+                  item(key = "failure-${platform.id}") {
+                    SearchFailureLine(platform = platform, reason = reason)
                   }
                 }
               }

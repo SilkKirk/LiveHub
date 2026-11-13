@@ -43,16 +43,27 @@ class SearchAllPlatformsTest {
 
   private lateinit var viewModel: MainViewModel
 
+  /** Which cursor each platform was asked for, in order; null is the first page. */
+  private val douyuCalls = mutableListOf<String?>()
+  private val bilibiliCalls = mutableListOf<String?>()
+
   @Before
   fun setUp() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val container = AppContainer(
       context,
       adaptersOverride = listOf(
-        fake(Platform.DOUYU, rooms = listOf(room(Platform.DOUYU, "1"))),
+        fake(
+          Platform.DOUYU,
+          pages = listOf(
+            listOf(room(Platform.DOUYU, "1")),
+            listOf(room(Platform.DOUYU, "3")),
+          ),
+          calls = douyuCalls,
+        ),
         fake(Platform.HUYA, failure = "虎牙超时了"),
         fake(Platform.DOUYIN, failure = "抖音 2483：请先登录"),
-        fake(Platform.BILIBILI, rooms = listOf(room(Platform.BILIBILI, "2"))),
+        fake(Platform.BILIBILI, pages = listOf(listOf(room(Platform.BILIBILI, "2"))), calls = bilibiliCalls),
       ),
     )
     // DataStore is a process wide file, so the platform a previous test left behind would decide
@@ -105,7 +116,39 @@ class SearchAllPlatformsTest {
       state.searchFailures.keys,
     )
     assertEquals("抖音 2483：请先登录", state.searchFailures[Platform.DOUYIN])
-    assertFalse("four cursors would be needed; this mode is one page per platform", state.searchHasMore)
+  }
+
+  /**
+   * Reaching the bottom fetches the next page of every platform that has one, and only those.
+   *
+   * Each platform pages on its own cursor, so "load more" is up to four requests rather than one.
+   * The call log is what proves the second Bilibili page was not re-requested: a null cursor there
+   * would return page one again, and `distinctBy` would quietly drop it.
+   */
+  @Test
+  fun `reaching the bottom appends the next page of every platform that has one`() {
+    viewModel.onAction(UiAction.SelectSearchPlatform(null))
+    idle()
+    search("团团")
+    assertEquals(listOf("douyu:1", "bilibili:2"), state.searchResults.map { it.key })
+    assertTrue("斗鱼 reported a second page", state.searchHasMore)
+
+    viewModel.onAction(UiAction.LoadMoreSearch)
+    awaitCondition { !state.loadingMore && state.searchResults.size == 3 }
+
+    assertEquals(
+      "the new page joins the platform it belongs to",
+      listOf("douyu:1", "bilibili:2", "douyu:3"),
+      state.searchResults.map { it.key },
+    )
+    assertFalse("no platform has another page now", state.searchHasMore)
+    assertEquals(listOf(null, "1"), douyuCalls)
+    assertEquals("bilibili has no second page, so it must not be asked again", listOf(null), bilibiliCalls)
+    assertEquals(
+      "the platforms that failed are still named",
+      setOf(Platform.HUYA, Platform.DOUYIN),
+      state.searchFailures.keys,
+    )
   }
 
   @Test
@@ -148,8 +191,9 @@ class SearchAllPlatformsTest {
 
   private fun fake(
     platform: Platform,
-    rooms: List<Streamer> = emptyList(),
+    pages: List<List<Streamer>> = emptyList(),
     failure: String? = null,
+    calls: MutableList<String?> = mutableListOf(),
   ): LivePlatformAdapter = object : LivePlatformAdapter {
     override val platform: Platform = platform
 
@@ -159,8 +203,13 @@ class SearchAllPlatformsTest {
       RoomPage(rooms = emptyList())
 
     override suspend fun search(keyword: String, cursor: String?): RoomPage {
+      calls += cursor
       failure?.let { throw PlatformProtocolException(it, platform) }
-      return RoomPage(rooms = rooms)
+      val index = cursor?.toIntOrNull() ?: 0
+      return RoomPage(
+        rooms = pages.getOrNull(index).orEmpty(),
+        nextCursor = if (index + 1 < pages.size) "${index + 1}" else null,
+      )
     }
 
     override suspend fun roomDetail(roomId: String): Streamer? = null

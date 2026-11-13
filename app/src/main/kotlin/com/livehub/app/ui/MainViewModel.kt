@@ -44,7 +44,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private var followsJob: Job? = null
   private var pairingCountdownJob: Job? = null
   private var nextCursor: String? = null
-  private var searchCursor: String? = null
+    /**
+   * Where the next page of each platform's results starts.
+   *
+   * A map rather than one cursor: the cross-platform mode runs four searches, and each of them
+   * pages on its own. The single-platform mode simply keeps one entry in it.
+   */
+  private val searchCursors = mutableMapOf<Platform, String?>()
 
   /**
    * Identifies the newest follow-status refresh.
@@ -135,7 +141,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           // search for the erased keyword goes too, and the flags it owns have to be reset by
           // hand — a cancelled job never reaches its own `loading = false`.
           searchJob?.cancel()
-          searchCursor = null
+          searchCursors.clear()
           _state.update {
             it.copy(
               searchQuery = action.query,
@@ -320,7 +326,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     // Search results belong to the platform that produced them: leaving them on screen
     // after a switch labelled 斗鱼 rooms with 虎牙's name.
     searchJob?.cancel()
-    searchCursor = null
+    searchCursors.clear()
     _state.update {
       it.copy(
         platform = platform,
@@ -367,7 +373,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     if (alreadySelected) return
     if (platform != null) container.preferences.setLastPlatform(platform)
     searchJob?.cancel()
-    searchCursor = null
+    searchCursors.clear()
     // The field is the only source that can legitimately hold a keyword here. `lastSearchQuery` is
     // kept as a fallback rather than as the primary: 清空 (`UpdateQuery("")`) clears it together
     // with the results, so a cleared box means "nothing to search" and not "re-run the old one" —
@@ -602,7 +608,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       return
     }
     searchJob?.cancel()
-    searchCursor = null
+    searchCursors.clear()
+    // Captured once: the cursor belongs to the platform the query was sent to, even if the user
+    // switches the chips while the answer is in flight.
+    val platform = _state.value.platform
     searchJob = viewModelScope.launch {
       _state.update { current ->
         // Re-running the *same* keyword is a refresh: keep the list on screen and turn the
@@ -623,8 +632,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         )
       }
       try {
-        val page = container.platformRepository.search(_state.value.platform, query)
-        searchCursor = page.nextCursor
+        val page = container.platformRepository.search(platform, query)
+        searchCursors[platform] = page.nextCursor
         _state.update {
           it.copy(
             searchResults = page.rooms,
@@ -639,7 +648,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         // without this clause `searchJob?.cancel()` above set `error` to "Job was cancelled".
         throw cancelled
       } catch (error: Exception) {
-        searchCursor = null
+        searchCursors.clear()
         _state.update {
           // The results on screen no longer answer the keyword that was asked about, so they
           // go. Keeping them also hid the failure: the search screen only shows its error
@@ -669,13 +678,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * callers, and that has to show up as its own line next to the three that answered
    * ([UiState.searchFailures]) instead of emptying the page.
    *
-   * No paging here: every platform keeps its own cursor, and "load more" would need four of them
-   * plus a way to say which one ran out. Single-platform search keeps its paging; the cross-platform
-   * answer is one page per platform.
+   * Paging keeps one cursor per platform ([searchCursors]); `searchHasMore` means "at least one
+   * platform has another page", and reaching the bottom fetches the next page of each of them —
+   * see [loadMoreEverywhere].
    */
   private fun searchEverywhere(query: String) {
     searchJob?.cancel()
-    searchCursor = null
+    searchCursors.clear()
     searchJob = viewModelScope.launch {
       _state.update { current ->
         // Same rule as the single-platform path: re-running the same keyword keeps the list and
@@ -712,13 +721,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           .mapValues { (_, answer) -> answer.await() }
       }
       val rooms = answers.values.mapNotNull { it.getOrNull() }.flatMap { page -> page.rooms }
+      answers.forEach { (platform, answer) ->
+        answer.getOrNull()?.let { page -> searchCursors[platform] = page.nextCursor }
+      }
       val failures = answers.mapNotNull { (platform, answer) ->
         answer.exceptionOrNull()?.let { platform to (it.message ?: "搜索失败") }
       }.toMap()
       _state.update {
         it.copy(
           searchResults = rooms,
-          searchHasMore = false,
+          searchHasMore = searchCursors.values.any { cursor -> cursor != null },
           searchFailures = failures,
           loading = false,
           refreshing = false,
@@ -727,23 +739,31 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
-  /** Appends the next page of search results, if the platform reported one. */
+  /**
+   * Appends the next page of search results.
+   *
+   * One cursor in the single-platform mode, one per platform in the cross-platform one — see
+   * [loadMoreEverywhere] for the latter.
+   */
   private fun loadMoreSearch() {
     val current = _state.value
-    // One page per platform in the cross-platform mode; there is no shared cursor to continue.
-    if (current.searchAllPlatforms) return
-    // The keyword that produced `searchCursor`, not what the field says now: editing the
-    // field without submitting used to send the *new* text together with the *old* cursor,
-    // so the appended page belonged to a search the user never made.
+    if (current.searchAllPlatforms) {
+      loadMoreEverywhere()
+      return
+    }
+    // The keyword that produced the cursor, not what the field says now: editing the field without
+    // submitting used to send the *new* text together with the *old* cursor, so the appended page
+    // belonged to a search the user never made.
     val query = current.lastSearchQuery.trim()
-    val cursor = searchCursor
+    val platform = current.platform
+    val cursor = searchCursors[platform]
     if (query.isEmpty() || cursor == null || current.loading || current.loadingMore) return
 
     searchJob = viewModelScope.launch {
       _state.update { it.copy(loadingMore = true) }
       try {
-        val page = container.platformRepository.search(current.platform, query, cursor)
-        searchCursor = page.nextCursor
+        val page = container.platformRepository.search(platform, query, cursor)
+        searchCursors[platform] = page.nextCursor
         _state.update {
           it.copy(
             searchResults = (it.searchResults + page.rooms).distinctBy { room -> room.key },
@@ -757,6 +777,61 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         _state.update {
           it.copy(loadingMore = false, message = error.message ?: "加载更多失败")
         }
+      }
+    }
+  }
+
+  /**
+   * Fetches the next page of every platform that still has one.
+   *
+   * One trigger from the grid (reaching the bottom) turns into up to four requests, run together.
+   * A platform whose page fails loses its cursor and gets a line in [UiState.searchFailures]: a
+   * retry on the next scroll would be the same request again, and the user should see why a section
+   * stopped growing rather than watch it silently stop.
+   */
+  private fun loadMoreEverywhere() {
+    val current = _state.value
+    val query = current.lastSearchQuery.trim()
+    // Captured cursors rather than a re-read of the map: the request has to carry the cursor the
+    // decision was made on, and a platform with no cursor must not be asked for page one again
+    // (that answer would be dropped by `distinctBy` and look like a page that arrived empty).
+    val pending = searchCursors.mapNotNull { (platform, cursor) ->
+      cursor?.let { platform to it }
+    }.toMap()
+    if (query.isEmpty() || pending.isEmpty() || current.loading || current.loadingMore) return
+
+    searchJob = viewModelScope.launch {
+      _state.update { it.copy(loadingMore = true) }
+      val answers = coroutineScope {
+        pending
+          .mapValues { (platform, cursor) ->
+            async {
+              try {
+                Result.success(container.platformRepository.search(platform, query, cursor))
+              } catch (cancelled: CancellationException) {
+                throw cancelled
+              } catch (error: Exception) {
+                Result.failure(error)
+              }
+            }
+          }
+          .mapValues { (_, answer) -> answer.await() }
+      }
+      val added = answers.values.mapNotNull { it.getOrNull() }.flatMap { page -> page.rooms }
+      answers.forEach { (platform, answer) ->
+        answer.getOrNull()?.let { page -> searchCursors[platform] = page.nextCursor }
+        if (answer.isFailure) searchCursors.remove(platform)
+      }
+      val failures = answers.mapNotNull { (platform, answer) ->
+        answer.exceptionOrNull()?.let { platform to (it.message ?: "加载更多失败") }
+      }.toMap()
+      _state.update {
+        it.copy(
+          searchResults = (it.searchResults + added).distinctBy { room -> room.key },
+          searchHasMore = searchCursors.values.any { cursor -> cursor != null },
+          searchFailures = it.searchFailures + failures,
+          loadingMore = false,
+        )
       }
     }
   }
