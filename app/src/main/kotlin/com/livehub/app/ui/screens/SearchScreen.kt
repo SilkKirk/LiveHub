@@ -348,11 +348,13 @@ private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
   // restored from `lastPlatform` can be selected while nothing on screen says so — the same
   // "it exists, it is just off screen" shape round 76 fixed for the follow tags.
   //
-  // `scrollToItem`, not `animateScrollToItem`: the only time the selection moves from off
-  // screen is a restore, where an animation buys nothing and would leave the row mid-flight in
-  // a frozen-clock render.
+  // Only when it is not already there: tapping a chip that is under the finger must not scroll
+  // the row sideways, and on the frame a restore lands on there is nothing measured yet, which
+  // is exactly the case the scroll exists for. `scrollToItem`, not `animateScrollToItem`: an
+  // animation would leave a frozen-clock render mid-flight and buys nothing for a one-off jump.
   LaunchedEffect(selectedIndex) {
-    listState.scrollToItem(selectedIndex.coerceAtLeast(0))
+    val alreadyVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == selectedIndex }
+    if (!alreadyVisible) listState.scrollToItem(selectedIndex)
   }
 
   LazyRow(
