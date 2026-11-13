@@ -746,6 +746,17 @@ class ScreenshotTest {
   @Test
   fun settingsAbout() = capture("15b-settings-about", settingsState(), scrollToText = "LiveHub")
 
+  /**
+   * The 存储 card, which sits between the blocked keywords and the accounts.
+   *
+   * `15-settings` stops inside the keyword card and `15b` starts on this card's last line, so
+   * nothing showed 图片缓存 whole. The render is also the only place the `—`/number distinction can
+   * be looked at: a unit test cannot assert on Coil's caches, only on the string the card would
+   * print.
+   */
+  @Test
+  fun settingsCache() = capture("15c-settings-cache", settingsState(), scrollToText = "清除缓存")
+
   @Test
   fun settingsLoggedIn() = capture(
     "16-settings-logged-in",
