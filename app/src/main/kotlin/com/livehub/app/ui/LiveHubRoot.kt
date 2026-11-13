@@ -1,10 +1,12 @@
 package com.livehub.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -51,10 +55,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.screens.FollowScreen
 import com.livehub.app.ui.screens.HomeScreen
@@ -64,6 +70,7 @@ import com.livehub.app.ui.screens.SettingsScreen
 import com.livehub.app.ui.screens.SyncScreen
 import com.livehub.core.designsystem.LiveHubTheme
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Bottom bar destinations, in display order. */
 private enum class Dock(val screen: Screen, val label: String, val icon: ImageVector) {
@@ -166,17 +173,39 @@ fun LiveHubRoot(
           // video surface — a new decoder and a fresh resolve — every time the user steps off the
           // player screen, which is the one thing this shape exists to avoid.
           if (state.room != null) {
+            // The floating window can be thrown away as well as closed: a drag past 40% of its
+            // width drops it, anything shorter springs back. The × stays for the same reason it
+            // was added — a gesture nobody has discovered is not a control.
+            var dragOffset by remember(state.room?.key) { mutableFloatStateOf(0f) }
+            val settled by animateFloatAsState(targetValue = dragOffset, label = "mini-player-drag")
+
             Box(
               modifier = if (shellHidden) {
                 Modifier.fillMaxSize()
               } else {
                 Modifier
                   .align(Alignment.BottomEnd)
+                  .offset { IntOffset(settled.roundToInt(), 0) }
                   .padding(end = 12.dp, bottom = 12.dp)
                   .width(MINI_PLAYER_WIDTH)
                   .aspectRatio(16f / 9f)
                   .shadow(MINI_PLAYER_ELEVATION, RoundedCornerShape(MINI_PLAYER_CORNER))
                   .clip(RoundedCornerShape(MINI_PLAYER_CORNER))
+                  .pointerInput(Unit) {
+                    awaitEachGesture {
+                      val down = awaitFirstDown(requireUnconsumed = false)
+                      var total = 0f
+                      drag(down.id) { change ->
+                        total += change.positionChange().x
+                        dragOffset = total
+                        change.consume()
+                      }
+                      if (abs(total) > size.width * MINI_PLAYER_DISMISS_FRACTION) {
+                        onAction(UiAction.ClosePlayer)
+                      }
+                      dragOffset = 0f
+                    }
+                  }
               },
             ) {
               PlayerScreen(state = state, onAction = onAction, compact = compactPlayer)
@@ -195,6 +224,15 @@ private val MINI_PLAYER_WIDTH = 168.dp
 private val MINI_PLAYER_CORNER = 12.dp
 
 private val MINI_PLAYER_ELEVATION = 8.dp
+
+/**
+ * How far the floating window has to be thrown (as a fraction of its width) before it closes.
+ *
+ * 40% rather than "any drag": the window is small enough that a short horizontal drag is how a
+ * finger starts a scroll underneath it, and closing a stream because the list moved would be a
+ * destructive answer to a gesture the user did not mean that way.
+ */
+private const val MINI_PLAYER_DISMISS_FRACTION = 0.4f
 
 /**
  * What the mini window adds on top of the picture: a tap target the size of the window, and a way

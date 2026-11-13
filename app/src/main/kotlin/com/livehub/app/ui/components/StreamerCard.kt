@@ -2,6 +2,7 @@ package com.livehub.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -87,12 +88,19 @@ fun StreamerCard(
    * reader user would otherwise be told "取消关注" by a button that unfollows nothing.
    */
   starLabels: Pair<String, String> = "关注" to "取消关注",
+  /**
+   * A second tap gesture, for the screens that need one.
+   *
+   * Only the follow grid uses it (long-press opens the tag editor). Null on every other surface, so
+   * no card there has to answer for a gesture nobody defined.
+   */
+  onLongClick: (() -> Unit)? = null,
 ) {
   Surface(
     modifier = modifier
       .fillMaxWidth()
       .clip(CardShape)
-      .clickable(onClick = onClick),
+      .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     // A card is a *layer* now, not a tinted copy of the page: a real surface colour plus a soft
     // shadow. Before this the tile was `surfaceVariant` at 35% over a background of the same
     // family, so the only thing separating it from the page was its cover image.

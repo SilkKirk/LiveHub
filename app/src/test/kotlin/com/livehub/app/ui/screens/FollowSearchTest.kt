@@ -91,10 +91,10 @@ class FollowSearchTest {
   }
 
   @Test
-  fun `nothing matching says so and offers to clear the box`() {
+  fun `nothing matching says so and offers to clear the filters`() {
     render(state(count = 12, query = "不存在的主播"))
 
     composeRule.onNodeWithText("没有找到「不存在的主播」").assertIsDisplayed()
-    composeRule.onNodeWithText("清空搜索").assertIsDisplayed()
+    composeRule.onNodeWithText("清空筛选").assertIsDisplayed()
   }
 }

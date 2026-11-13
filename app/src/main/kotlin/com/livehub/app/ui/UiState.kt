@@ -104,6 +104,16 @@ data class UiState(
    * above are: opening a room and coming back used to reset everything the screen had selected.
    */
   val followQuery: String = "",
+  /**
+   * The user's own labels per followed room, keyed by `Streamer.key`.
+   *
+   * Read from the follow records rather than stored separately (they live on the record, so they
+   * sync with it). Kept here because the screen cannot read the store — it is a JVM module below
+   * this one.
+   */
+  val followTags: Map<String, List<String>> = emptyMap(),
+  /** The one tag the follow grid is narrowed to, or null for every room. */
+  val followTagFilter: String? = null,
   val searchQuery: String = "",
   /**
    * The keyword [searchResults] were searched with, and the one the next page is requested for.
@@ -300,6 +310,12 @@ sealed interface UiAction {
    * `FOLLOW_SEARCH_THRESHOLD` in `FollowScreen`.
    */
   data class SetFollowQuery(val query: String) : UiAction
+
+  /** Replaces the labels on one followed room; an empty list removes them all. */
+  data class SetRoomTags(val streamer: Streamer, val tags: List<String>) : UiAction
+
+  /** Narrows the follow grid to one tag, or clears the narrowing when null. */
+  data class SetFollowTagFilter(val tag: String?) : UiAction
 
   /** Shows a one-line explanation. Used where an action is refused for a reason worth stating. */
   data class ShowMessage(val text: String) : UiAction

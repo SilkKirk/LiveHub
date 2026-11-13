@@ -82,6 +82,32 @@ class FollowStore(preferences: UserPreferences) {
     )
   }
 
+  /**
+   * The user's labels per followed room, keyed by [Streamer.key].
+   *
+   * A map rather than a `List<TaggedStreamer>` for the same reason [specialKeys] is a key list: the
+   * follow screen already has the rooms and only needs one more fact about each of them.
+   */
+  fun tagsByKey(): Map<String, List<String>> {
+    val out = HashMap<String, List<String>>()
+    for (record in records()) {
+      if (record.deleted) continue
+      val key = LibraryKey.decode(record.key) as? LibraryKey.Room ?: continue
+      val value = record.value ?: continue
+      val tags = FollowCodec.tagsOf(value)
+      if (tags.isNotEmpty()) out[Streamer.keyOf(key.platform, key.roomId)] = tags
+    }
+    return out
+  }
+
+  /**
+   * Every tag in use, sorted.
+   *
+   * Sorted rather than in first-seen order so the filter row does not rearrange itself when a room
+   * is tagged or untagged; a row that jumps between taps is how a filter becomes unusable.
+   */
+  fun allTags(): List<String> = tagsByKey().values.flatten().distinct().sorted()
+
   // -------------------------------------------------------------------- writing
 
   /**
@@ -110,10 +136,50 @@ class FollowStore(preferences: UserPreferences) {
       value = FollowCodec.fromStreamer(
         streamer = streamer,
         now = now,
-        // Both survive the rewrite: this only flips one flag, it must not reset the arrangement
-        // the user made by dragging.
+        // All three survive the rewrite: this only flips one flag, it must not reset the
+        // arrangement the user made by dragging, nor forget the labels they typed.
         order = existingValue["order"],
         special = special,
+        tags = FollowCodec.tagsOf(existingValue),
+      ),
+      deleted = false,
+      hlc = hlc,
+      deviceId = deviceId,
+      updatedAt = now,
+    )
+    persist(records().filterNot { it.key == roomKey } + updated)
+    return true
+  }
+
+  /**
+   * Replaces the tags of one followed room.
+   *
+   * Tags are free-form user labels, stored on the room's own record next to `special` and `order`:
+   * the record already means "a room you follow", and everything the user decided about that room
+   * belongs with it. Emptying the list removes the field rather than writing `[]`, so untagging a
+   * room returns its record to the shape it had before it was ever tagged.
+   *
+   * Returns false when the room is not followed — there is no record to put the labels on.
+   */
+  fun setTags(streamer: Streamer, tags: List<String>, hlc: Hlc, deviceId: Long, now: Long): Boolean {
+    val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
+    val existing = records().firstOrNull { it.key == roomKey }
+    val existingValue = existing?.value
+    if (existing == null || existing.deleted || existingValue == null) return false
+
+    val cleaned = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    // Nothing to do: re-stamping the clock for an unchanged list would make two devices fight over
+    // the same value on every sync.
+    if (cleaned == FollowCodec.tagsOf(existingValue)) return true
+
+    val updated = SyncRecord(
+      key = roomKey,
+      value = FollowCodec.fromStreamer(
+        streamer = streamer,
+        now = now,
+        order = existingValue["order"],
+        special = FollowCodec.isSpecial(existingValue),
+        tags = cleaned,
       ),
       deleted = false,
       hlc = hlc,
@@ -165,14 +231,16 @@ class FollowStore(preferences: UserPreferences) {
     if (existing == null || existing.deleted) return
     val updated = SyncRecord(
       key = roomKey,
-      // Both the manual order *and* the 特别关注 mark survive the refresh. The worker rebuilds the
-      // record from a network `Streamer`, which knows nothing about either — dropping the flag here
-      // would quietly empty the avatar row every 30 minutes.
+      // The manual order, the 特别关注 mark *and* the tags survive the refresh. The worker rebuilds
+      // the record from a network `Streamer`, which knows nothing about any of them — dropping the
+      // flag here would quietly empty the avatar row every 30 minutes, and dropping the tags would
+      // erase labels the user typed.
       value = FollowCodec.fromStreamer(
         streamer = streamer,
         now = now,
         order = existing.value?.get("order"),
         special = FollowCodec.isSpecial(existing.value),
+        tags = FollowCodec.tagsOf(existing.value),
       ),
       deleted = false,
       hlc = hlc,

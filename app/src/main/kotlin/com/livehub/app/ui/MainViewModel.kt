@@ -92,6 +92,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         searchHistory = settings.searchHistory,
         followed = container.followStore.followed(),
         specialFollowKeys = container.followStore.specialKeys(),
+        followTags = container.followStore.tagsByKey(),
         peers = preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
       )
@@ -120,6 +121,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SetFollowLiveFilter -> _state.update { it.copy(followLiveFilter = action.filter) }
       is UiAction.SetFollowPlatformFilter -> _state.update { it.copy(followPlatformFilter = action.platform) }
       is UiAction.SetFollowQuery -> _state.update { it.copy(followQuery = action.query) }
+      is UiAction.SetRoomTags -> setRoomTags(action.streamer, action.tags)
+      is UiAction.SetFollowTagFilter -> _state.update { it.copy(followTagFilter = action.tag) }
       is UiAction.ShowMessage -> _state.update { it.copy(message = action.text) }
       UiAction.LoadMore -> loadMore()
       UiAction.Refresh -> refresh()
@@ -856,8 +859,44 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         followed = followed,
         // Unfollowing drops the room from the avatar row too, so the pair has to be read together.
         specialFollowKeys = store.specialKeys(),
+        // And its labels go with the record, so the map has to be re-read rather than edited.
+        followTags = store.tagsByKey(),
         message = if (followed.any { f -> f.key == streamer.key }) "已关注 ${streamer.streamerName}" else "已取消关注",
       )
+    }
+  }
+
+  /**
+   * Replaces one room's labels.
+   *
+   * Written through the store (which stamps the record with a fresh clock, so the change wins the
+   * next merge and travels to paired devices). The local view is re-read from the store afterwards
+   * instead of being patched, because "which tags exist at all" is derived from every room.
+   *
+   * The active tag filter is cleared if this was the last room carrying it: otherwise the grid would
+   * stay narrowed to a chip that no longer exists.
+   */
+  private fun setRoomTags(streamer: Streamer, tags: List<String>) {
+    val ok = container.followStore.setTags(
+      streamer = streamer,
+      tags = tags,
+      hlc = container.syncEngine.nextHlc(),
+      deviceId = container.preferences.deviceId,
+      now = System.currentTimeMillis(),
+    )
+    if (!ok) {
+      _state.update { it.copy(message = "先关注 ${streamer.streamerName}，才能给它加标签") }
+      return
+    }
+    _state.update { current ->
+      val byKey = container.followStore.tagsByKey()
+      val ready = current.copy(followTags = byKey)
+      val filter = current.followTagFilter
+      if (filter != null && byKey.values.none { filter in it }) {
+        ready.copy(followTagFilter = null)
+      } else {
+        ready
+      }
     }
   }
 
@@ -1599,6 +1638,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           peers = container.preferences.trustedPeers(),
           followed = container.followStore.followed(),
           specialFollowKeys = container.followStore.specialKeys(),
+          // Labels arrive inside the records, so a merge can add or remove them.
+          followTags = container.followStore.tagsByKey(),
           syncLog = container.syncEngine.logEntries(),
           message = summary.message,
         )

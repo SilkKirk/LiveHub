@@ -7,6 +7,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -94,17 +96,22 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val filter = state.followLiveFilter
   val platformFilter = state.followPlatformFilter
   val query = state.followQuery.trim()
+  val tagFilter = state.followTagFilter
   // Which panel is open is the only local state left: everything the screen *selects* lives in
   // `UiState` so it survives a round trip through the player.
   var pickerOpen by remember { mutableStateOf(false) }
+  var taggingRoom by remember { mutableStateOf<Streamer?>(null) }
 
   val platforms = remember(state.followed) { state.followed.map { it.platform }.distinct() }
+  val tags = state.followTags
+  val knownTags = remember(tags) { tags.values.flatten().distinct().sorted() }
 
-  val visible = remember(state.followed, filter, platformFilter, query) {
+  val visible = remember(state.followed, filter, platformFilter, query, tagFilter, tags) {
     state.followed
       .filter { platformFilter == null || it.platform == platformFilter }
       .filter(filter::matches)
       .filter { query.isEmpty() || it.matchesName(query) }
+      .filter { tagFilter == null || tags[it.key]?.contains(tagFilter) == true }
       // Live rooms first. The stored order is the user's manual arrangement, but burying whoever
       // is actually streaming under offline names defeated the point of the list. `sortedBy` is
       // stable, so manual order still breaks ties.
@@ -147,6 +154,9 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
           onPlatformChange = { onAction(UiAction.SetFollowPlatformFilter(it)) },
           query = state.followQuery,
           onQueryChange = { onAction(UiAction.SetFollowQuery(it)) },
+          tags = knownTags,
+          tagFilter = tagFilter,
+          onTagFilterChange = { onAction(UiAction.SetFollowTagFilter(it)) },
           special = special,
           onOpenSpecial = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
           onReorderSpecial = { streamer, index ->
@@ -164,27 +174,27 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
         )
 
         if (visible.isEmpty()) {
-          // The name filter gets its own copy: "关注的主播都没有在播" would be a lie when the real
-          // reason is that nothing in the list matches what was typed.
+          // The name filter and the tag filter each get their own copy: "关注的主播都没有在播" would be
+          // a lie when the real reason is that nothing matches what was typed or picked.
           EmptyState(
-            title = if (query.isNotEmpty()) {
-              "没有找到「$query」"
-            } else {
-              when (filter) {
-                FollowLiveFilter.LIVE -> "关注的主播都没有在播"
-                FollowLiveFilter.OFFLINE -> "所有关注的主播都在直播"
-                FollowLiveFilter.ALL -> "没有符合条件的关注"
-              }
+            title = when {
+              query.isNotEmpty() -> "没有找到「$query」"
+              tagFilter != null -> "没有带「$tagFilter」的主播"
+              filter == FollowLiveFilter.LIVE -> "关注的主播都没有在播"
+              filter == FollowLiveFilter.OFFLINE -> "所有关注的主播都在直播"
+              else -> "没有符合条件的关注"
             },
             description = when {
               query.isNotEmpty() -> "关注列表里没有名字或标题包含这两个字的主播。"
+              tagFilter != null -> "给直播间加标签可以在关注页按标签筛选。"
               platformFilter != null -> "当前只显示 ${platformFilter.displayName} 的主播"
               else -> null
             },
-            actionLabel = if (query.isNotEmpty()) "清空搜索" else "显示全部",
+            actionLabel = if (query.isNotEmpty() || tagFilter != null) "清空筛选" else "显示全部",
             onAction = {
-              if (query.isNotEmpty()) {
+              if (query.isNotEmpty() || tagFilter != null) {
                 onAction(UiAction.SetFollowQuery(""))
+                onAction(UiAction.SetFollowTagFilter(null))
               } else {
                 onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.ALL))
                 onAction(UiAction.SetFollowPlatformFilter(null))
@@ -202,6 +212,7 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
               specialKeys = specialKeys.toSet(),
               onClick = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
               onToggleSpecial = { streamer -> onAction(UiAction.ToggleSpecialFollow(streamer)) },
+              onLongPress = { streamer -> taggingRoom = streamer },
             )
           }
         }
@@ -215,6 +226,118 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
         onToggle = { streamer -> onAction(UiAction.ToggleSpecialFollow(streamer)) },
         onDismiss = { pickerOpen = false },
       )
+    }
+
+    // The tag editor: long-press a card to open it for that room.
+    taggingRoom?.let { room ->
+      TagEditorSheet(
+        streamer = room,
+        tags = tags[room.key].orEmpty(),
+        known = knownTags,
+        onTagsChange = { onAction(UiAction.SetRoomTags(room, it)) },
+        onDismiss = { taggingRoom = null },
+      )
+    }
+  }
+}
+
+/**
+ * Long-press editor for one room's labels.
+ *
+ * Long-press rather than a button on the card: the card already carries a tap (open) and a star
+ * (特别关注), and a third visible control would crowd a 140dp tile for something used once in a
+ * while. The sheet shows every tag already in use, so the second room you tag is one tap instead of
+ * typing the same word again.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TagEditorSheet(
+  streamer: Streamer,
+  tags: List<String>,
+  known: List<String>,
+  onTagsChange: (List<String>) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  BackHandler { onDismiss() }
+  var draft by remember { mutableStateOf("") }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.45f))
+        .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+    )
+    Surface(
+      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.55f).align(Alignment.BottomCenter),
+      shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+      color = MaterialTheme.colorScheme.surface,
+      tonalElevation = 3.dp,
+      shadowElevation = 8.dp,
+    ) {
+      Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+          Text(
+            text = streamer.streamerName.ifBlank { "未知主播" },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
+          TextButton(onClick = onDismiss) { Text("完成") }
+        }
+        Text(
+          text = "标签只用于关注页筛选，会随关注列表一起同步到已配对的设备。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(vertical = 6.dp),
+        )
+
+        if (known.isEmpty() && tags.isEmpty()) {
+          Text(
+            text = "还没有任何标签，先加一个试试。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        LazyColumn(modifier = Modifier.weight(1f)) {
+          item {
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              (known + tags).distinct().forEach { tag ->
+                val selected = tag in tags
+                FilterChip(
+                  selected = selected,
+                  onClick = {
+                    onTagsChange(if (selected) tags - tag else tags + tag)
+                  },
+                  label = { Text(tag) },
+                )
+              }
+            }
+          }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            label = { Text("新标签") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+          )
+          TextButton(
+            onClick = {
+              val tag = draft.trim()
+              if (tag.isNotEmpty() && tag !in tags) onTagsChange(tags + tag)
+              draft = ""
+            },
+          ) { Text("添加") }
+        }
+      }
     }
   }
 }
@@ -343,6 +466,7 @@ private fun FollowGrid(
   specialKeys: Set<String>,
   onClick: (Streamer) -> Unit,
   onToggleSpecial: (Streamer) -> Unit,
+  onLongPress: (Streamer) -> Unit,
 ) {
   val gridState = rememberLazyGridState()
   LazyVerticalGrid(
@@ -361,6 +485,7 @@ private fun FollowGrid(
         onClick = { onClick(streamer) },
         onToggleFollow = { onToggleSpecial(streamer) },
         starLabels = "设为特别关注" to "取消特别关注",
+        onLongClick = { onLongPress(streamer) },
       )
     }
   }
@@ -415,6 +540,9 @@ private fun FollowHeader(
   onPlatformChange: (Platform?) -> Unit,
   query: String,
   onQueryChange: (String) -> Unit,
+  tags: List<String>,
+  tagFilter: String?,
+  onTagFilterChange: (String?) -> Unit,
   special: List<Streamer>,
   onOpenSpecial: (Streamer) -> Unit,
   onReorderSpecial: (Streamer, Int) -> Unit,
@@ -462,7 +590,10 @@ private fun FollowHeader(
     // follow a second platform. The live filter narrows whenever there are both live and offline
     // rooms, which is exactly `liveCount in 1 until total`.
     val canNarrowByLive = liveCount in 1 until total
-    if (filter != FollowLiveFilter.ALL || platformFilter != null || platforms.size > 1 || canNarrowByLive) {
+    val canNarrowByTag = tags.isNotEmpty() || tagFilter != null
+    if (filter != FollowLiveFilter.ALL || platformFilter != null || platforms.size > 1 ||
+      canNarrowByLive || canNarrowByTag
+    ) {
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -482,6 +613,15 @@ private fun FollowHeader(
               label = { Text(platform.displayName) },
             )
           }
+        }
+        // Tags ride in the same row and carry a '#', so a tag named after a platform ("斗鱼")
+        // cannot be mistaken for the platform filter next to it.
+        items(tags) { tag ->
+          FilterChip(
+            selected = tagFilter == tag,
+            onClick = { onTagFilterChange(if (tagFilter == tag) null else tag) },
+            label = { Text("#$tag") },
+          )
         }
       }
     }
