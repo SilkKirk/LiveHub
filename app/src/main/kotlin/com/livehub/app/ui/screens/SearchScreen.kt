@@ -35,6 +35,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +50,7 @@ import com.livehub.app.ui.components.StreamerListSkeleton
 import com.livehub.app.ui.components.StreamerSearchCard
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
+import kotlinx.coroutines.flow.first
 
 /**
  * Search screen.
@@ -348,13 +350,18 @@ private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
   // restored from `lastPlatform` can be selected while nothing on screen says so — the same
   // "it exists, it is just off screen" shape round 76 fixed for the follow tags.
   //
-  // Only when it is not already there: tapping a chip that is under the finger must not scroll
-  // the row sideways, and on the frame a restore lands on there is nothing measured yet, which
-  // is exactly the case the scroll exists for. `scrollToItem`, not `animateScrollToItem`: an
-  // animation would leave a frozen-clock render mid-flight and buys nothing for a one-off jump.
+  // Nothing is measured before the row's first layout, and `layoutInfo` is empty until then. The
+  // first version treated that as "nothing visible" and scrolled unconditionally, which put 斗鱼
+  // — the *default* selection, visible all along — at the left edge and cut 全部 in half on the
+  // idle screen. Waiting for a measured layout is what makes this a repair rather than a nudge.
+  //
+  // `scrollToItem`, not `animateScrollToItem`: an animation would leave a frozen-clock render
+  // mid-flight and buys nothing for a one-off jump.
   LaunchedEffect(selectedIndex) {
-    val alreadyVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == selectedIndex }
-    if (!alreadyVisible) listState.scrollToItem(selectedIndex)
+    val measured = snapshotFlow { listState.layoutInfo }.first { it.visibleItemsInfo.isNotEmpty() }
+    if (measured.visibleItemsInfo.none { it.index == selectedIndex }) {
+      listState.scrollToItem(selectedIndex)
+    }
   }
 
   LazyRow(
