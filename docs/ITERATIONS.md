@@ -1429,6 +1429,63 @@ stop，所以这条路径不会误伤正在缩窗播放的流；它接住的是�
 - 小窗拖拽关闭 / 吸附。
 - 真机验证清单不变：小窗、PiP 三条路径、`onStop` 暂停、音频焦点、局域网配对、四平台弹幕。
 
+---
+
+## 第七十三轮迭代：把「48dp」变成 CI 能抓的东西
+
+这一轮没有功能，只有两件防回归的事。起因很具体：48dp 这条线在本项目被破过两次，而**两次都是
+读代码发现的，当时测试全绿**。
+
+### 静态那一半：`TouchTargetSizeCheck` 开成 error
+
+`app/build.gradle.kts` 里加了 `lint { error += "TouchTargetSizeCheck" }`。Compose 自带这条
+检查，本来就是 warning；提成 error 之后，第三次"`Modifier.size(32.dp)` 加在 `IconButton` 上"
+这类写法会在 `:app:lintDebug` 阶段就红。
+
+第一次跑就通过——说明现在没有静态可判的违规，它防的是下一次。
+
+### 动态那一半：真的点一下边缘
+
+`TouchTargetTest` 直接对卡片星标做触摸注入，而不是量语义边界：
+
+```kotlin
+onNodeWithContentDescription("关注").performTouchInput { click(Offset(6f, 24f)) }
+```
+
+6dp 在 40dp 之内、32dp 之外，正好把"padding 版本"和"现在"分开。
+
+**这条用例第一次是红的，而它红出来的事实比用例本身重要**：第一版点的是节点自框的 (4,4)，
+结果落到了卡片上——说明 Material3 的 `IconButton` 是 **48dp 节点 + 40dp state layer**，
+最外那圈**不属于指针区域**。
+
+所以第五十九/六十五轮那句「`size(48.dp)` 会让内层那个 40dp 被约束撑到 48dp」是错的：48 是
+**节点**尺寸，不是手指能到的地方。`size(48.dp)` 的真实收益是 40dp（Material 自己的 state
+layer），比 padding 版本的 32dp 好，也已经是这个组件能给的上限。代码注释和这条记录都按事实改了
+——留着一句听起来更漂亮的错话，下一次就会有人照着它推理。
+
+顺带核对另外三处触控修正：`PillButton`、全屏栏两个图标、小窗的 × 之外的两处，`clickable`
+都直接加在 48dp 的盒子上（全屏栏那个是 `size(48).clickable().padding(12)`，可点在外、内边距在
+内），所以它们是真的 48dp；只有 `IconButton` 受 40dp 上限约束。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error（含新提级的 `TouchTargetSizeCheck`） |
+| JVM 单元测试 | ✅ 775 个用例（新增 2 个） |
+| 仪器测试 | ✅ 46 张截图（这一轮不改渲染） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `712451c` 三个 job 全绿 |
+
+`33b6107` 红过一次，红的就是上面那条新用例——它是这一轮唯一一次"测试抓到了实现之外的真相"。
+
+### 下一轮
+
+- 关注分组/标签（会动 `FollowRecordSet` 的记录格式，得单独一轮）。
+- 小窗拖拽关闭 / 吸附。
+- 媒体通知 + 前台服务（要真机在环）。
+- 真机验证清单不变：小窗、PiP 三条路径、`onStop` 暂停、音频焦点、局域网配对、四平台弹幕。
+
 
 
 
