@@ -605,6 +605,19 @@ private fun FollowHeader(
             label = { Text(option.label) },
           )
         }
+        // Tags before platforms: the row scrolls horizontally, so whatever comes last is off screen
+        // on a 320dp phone. A tag is something the user made and came here to use; a platform chip
+        // only appears when they follow across platforms, and is one flick away either way.
+        //
+        // They carry a '#', so a tag named after a platform ("斗鱼") cannot be mistaken for the
+        // platform chip next to it.
+        items(tags) { tag ->
+          FilterChip(
+            selected = tagFilter == tag,
+            onClick = { onTagFilterChange(if (tagFilter == tag) null else tag) },
+            label = { Text("#$tag") },
+          )
+        }
         if (platforms.size > 1) {
           items(platforms) { platform ->
             FilterChip(
@@ -613,15 +626,6 @@ private fun FollowHeader(
               label = { Text(platform.displayName) },
             )
           }
-        }
-        // Tags ride in the same row and carry a '#', so a tag named after a platform ("斗鱼")
-        // cannot be mistaken for the platform filter next to it.
-        items(tags) { tag ->
-          FilterChip(
-            selected = tagFilter == tag,
-            onClick = { onTagFilterChange(if (tagFilter == tag) null else tag) },
-            label = { Text("#$tag") },
-          )
         }
       }
     }

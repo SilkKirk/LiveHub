@@ -547,15 +547,17 @@ class ScreenshotTest {
   /**
    * The tag chips, in the same row as the live and platform filters.
    *
-   * The `#` prefix is the whole visual claim: a tag named after a platform ("斗鱼") has to stay
-   * distinguishable from the platform chip sitting next to it in that row.
+   * A single-platform fixture on purpose: the row scrolls horizontally, so with four platform chips
+   * in front of them the tags sat past the right edge and the first version of this render proved
+   * nothing (it showed a chip row with no tags in it). `#` is the other half of the claim — a tag
+   * named after a platform ("斗鱼") has to stay distinguishable from a platform chip.
    */
   @Test
   fun followTags() = capture(
     "07d-follow-tags",
     baseState().copy(
       screen = Screen.Follow,
-      followed = followRooms,
+      followed = followRooms.take(3),
       followTags = mapOf(
         followRooms[0].key to listOf("常看"),
         followRooms[1].key to listOf("常看", "英雄联盟"),
