@@ -1692,3 +1692,127 @@ v0.20.0 之后紧接着的一次补丁发版。原因是 v0.20.0 的 tag 打在�
 
 
 
+
+
+---
+
+## 第七十七轮迭代：播放页的三种形态收敛成一套 chrome
+
+本轮不是从待办里挑的，是一次界面审计的结果（第七十六轮结束时待办只剩"媒体通知"这条要真机的，
+但审计逐张核对 48 张截图 + 参考项目截图 + UI 源码后，发现播放页还有三个"进得去、出不来、
+关注不了"的形态）。三条同源：**chrome 只承认按钮，不承认窗口与平台。**
+
+### 缺陷是什么
+
+1. **横屏播放页只剩一块视频。** 360dp 高的横屏窗口里，16:9 画面
+   （`fillMaxWidth().aspectRatio(16f/9f)`）正好吃满高度，`RoomActionRow` 和弹幕列表被挤到
+   窗口外；弹幕层要求 `fullscreen || verticalFullBleed`，而 `fullscreen` 只由按钮置位，
+   所以横屏下**没有弹幕、没有关注、没有退出全屏**，屏幕上只剩视频 + 右侧三个圆钮，也不能滚动。
+2. **竖屏直播铺满时没有关注按钮。** `verticalFullBleed` 分支只画主播名一行，`RoomActionRow`
+   被 `if (!compact && !fullscreen && !verticalFullBleed)` 整个排除，而关注按钮只存在于那一行。
+   抖音的直播基本都是竖屏，等于"进去之后关注不了"。
+3. **竖屏播放页没有任何可见的返回。** `PlayerScreen.kt` 的原注释写得很清楚：
+   "closing the player is the left-edge swipe or the system back gesture"。而同一个仓库给迷你窗
+   加 × 的理由正是「a gesture nobody has discovered is not a control」（`LiveHubRoot.kt`）。
+
+### 为什么会这样
+
+三处都不是笔误，是三个各自合理、合起来不成立的决定：
+
+- 第 1 条：`fullscreen` 是 `remember` 的一个布尔，只由按钮写。布局按"竖屏 + 按钮"设计，
+  没人把"窗口变矮"当成一次输入 —— 而横屏正是唯一会让竖屏布局放不下的窗口形态。
+- 第 2 条：全宽分支是为了"竖屏直播填满屏幕"加的，加的时候把操作行连同它下面的弹幕列表一起
+  排除了。操作行里除了关注还有标题与分区，被排除是合理的；**唯一没被搬到别处的是关注**。
+- 第 3 条：删掉旧胶囊头时，"返回和关闭都调 `ClosePlayer`，而且系统返回与左边缘滑动已经到处都能用"
+  这个判断本身没错，但它被当成了"不需要控件"的理由。第 2 条与第 3 条叠在一起，就是竖屏直播态
+  既不能关注也不能退。
+
+而且**这三条都看不见**：`ScreenshotTest` 固定 320×640（第三十五轮明确决定不加横屏截图），
+竖屏分支需要真解码器报告宽高比（`videoSurface` 一被替换就永远拿不到），所以它们一次都没进过
+任何截图或断言。
+
+### 怎么修的
+
+- **横屏 = 全屏。** 新增 `playerFullscreen(landscapeWindow, manualFullscreen)`：窗口是横的
+  即进入全屏，`fullscreen` 由它派生，不再需要 `LaunchedEffect` 去翻标志（也就没有"转回竖屏时
+  忘记复位"这个状态）。横屏下：侧栏不画「退出全屏」（没有竖屏布局可退，按钮点了也不会变），
+  全屏栏的返回改为「返回」= 缩小（与系统返回一致），`BackHandler` 在横屏下让位给
+  `LiveHubRoot` 的返回。
+- **`PortraitTopBar`。** 16:9 时只有左上角一个 48dp 返回；全宽时是 `[返回][主播名][关注星]`
+  一行，带渐变遮罩。关注星**只在全宽时出现**：那时操作行不存在，它是唯一入口；
+  16:9 时操作行里那颗药丸就在两行之下，再画一个只是重复。
+- **错误/离线态不画返回。** 那两种状态自带居中的「返回」，同一屏两个同一动作是旧胶囊头被删的
+  原因。判据按 `VideoSurface` 的 `when` 顺序重算：有画面、`loading`、或"既没 loading 也没
+  error"的解析中态才画。
+- **两个浮层顶栏补 `WindowInsets.statusBars`。** 画面在横屏/全宽下是 edge-to-edge 的，
+  此前顶栏压在状态栏下面（真机上被时钟压住）。截图里 inset 为 0，所以这条**只有真机才验证得到**。
+- **`PlayerContent` 新增两个参数。** `landscapeWindow`（横屏语义，决定返回键去哪）与
+  `videoAspectHint`（解码器报宽高比之前先假定一个）。后者是这一轮能拍到竖屏分支的唯一办法，
+  和已有的 `videoSurface` 参数同一类：harness 需要。
+
+### 踩了什么坑
+
+- **`videoAspect` 只能由真解码器教会。** `PlayerContent` 的 stub surface 不走
+  `onVideoAspectRatioChanged`，所以 `verticalFullBleed` 在测试与截图里永远为 false —— 这才是
+  这条分支七十六轮零覆盖的机械原因，不是"没人想到要测"。解法是加一个只作为初值的 hint，
+  真解码器一报就覆盖。
+- **第一版判据写漏了一种状态。** 先写的是 `effectiveVariant != null || state.loading`，漏掉了
+  "既不 loading 也没有 error"的解析中态（那个分支显示的是同一个 spinner）——一个永远转圈、
+  没有出口的屏幕。按 `VideoSurface` 的 `when` 逐支重算后才对。
+- **`17b` / `17c` 逐字节未变**，说明截图环境里 `WindowInsets.statusBars` 是 0：状态栏 inset
+  这一条在 CI 上证明不了，只能记下来留给真机。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error（Build & test job） |
+| JVM 单元测试 | ✅ **790** 个用例（上轮 786，本轮新增 4 条），0 失败 |
+| 仪器测试 | ✅ **49** 张截图（新增 `17e-player-vertical`），逐张看过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `938ce47` 三个 job 全绿 |
+
+新增/变化的截图：
+
+| 图 | 变化 | 原因 |
+| --- | --- | --- |
+| `17e-player-vertical` | 新增 | 竖屏直播全宽分支此前零截图；这张同时证明「返回 + 主播名 + 关注」一行 |
+| `17-player`、`17d-player-bilibili` | 变了 | 16:9 画面左上角多了一个 48dp 返回 |
+| `18-player-loading` | 变了 | 转圈时也有出口了 |
+| `19-` / `19b-` / `19c-` | 逐字节未变 | 错误与离线态自带「返回」，故意不画第二个 |
+| 其余 43 张 | 逐字节未变 | 本轮只动播放页 |
+
+`PlayerChromeTest` 新增 4 条，全部断言**位置或动作**而不是存在性：
+
+- `the portrait player shows a way out over the picture`：返回按钮的 `boundsInRoot` 必须在
+  操作行之上（探针：停在画面外的按钮在语义树里照样存在，第七十五轮那张图就是这么漏的），
+  点击必须发出 `MinimizePlayer`；
+- `a landscape window puts the way out on the bar`：横屏下恰好一个「返回」、零个「退出全屏」，
+  点击 = 缩小；
+- `a vertical stream keeps follow on the bar`：全宽时操作行不画（文本「关注」0 个）、
+  星形按钮 1 个、点击发出 `ToggleFollow`；
+- `rotation decides full screen`：纯函数三条，横屏 / 竖屏 / 手动。
+
+### 没做到的
+
+- **横屏的真实观感**仍然没有截图。Robolectric 里 `w640dp-h360dp` 只能断言控件在不在，看不到
+  16:9 画面在 640×360 里怎么排、弹幕层叠在什么位置。真要做视觉回归，还得按第三十五轮说的
+  在 CI 矩阵里加一台横屏模拟器。
+- **状态栏 inset 只有真机能验**（见上）。
+- **平板横屏**：`playerFullscreen` 用的是 `orientation`，所以 1024×768 的平板一进播放页就是全屏。
+  它仍有返回/关注/弹幕层，只少了标题与分区那两行（在操作行里）。若以后要区分"手机转屏"与
+  "平板本就横着"，判据应改成窗口高度而不是方向。
+
+### 下一轮
+
+审计里剩下这些（按我判断的优先级）：
+
+- **首页平台 tab 在 320dp 上把「哔哩哔哩」裁成「哔哩」**（`01-home.png` 可复核）：4 个 tab
+  平分 264dp，`Text(maxLines = 1)` 默认 `Clip`。参考项目底部导航写的是「B站」——平台短名有现成先例。
+- **搜索页平台 chip 折成 4+1 两行**：`SearchScreen` 用 `FlowRow`，而首页/关注页的同类行都是
+  `LazyRow`。同一类控件两种行为才是根因。
+- **关注页不能取关**：星标在那一页是「特别关注」，长按是标签，没有取关入口。
+- chip 选中态是 `secondaryContainer`（青），与品牌红并存；`labelSmall` 10sp 偏小；
+  卡片上每张都画 LIVE 角标（首页全是直播中）。
+- 功能面：播放历史、分享直播间链接、后台刷新开关、自动同步。
+- 媒体通知 + 前台服务仍然要真机在环。
