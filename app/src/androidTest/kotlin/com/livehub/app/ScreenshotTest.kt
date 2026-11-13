@@ -458,6 +458,20 @@ class ScreenshotTest {
     baseState().copy(rooms = emptyList(), loading = false, error = "无法连接到服务器，请检查网络后重试"),
   )
 
+  /**
+   * The mini window, over the browse screen.
+   *
+   * Every other render of the player is a full-window surface; this is the only one of it shrunk
+   * into the corner, and it is what proves the picture did not end up as a 16:9 band at the top of
+   * the first page instead.
+   *
+   * The picture itself is the resolve spinner. `capture` renders `LiveHubRoot` for this state, and
+   * the video-surface stub the harness passes is only wired into `PlayerContent`'s own renders — a
+   * real `SurfaceView` captures as solid black anyway, which would hide the window's shape.
+   */
+  @Test
+  fun homeMiniPlayer() = capture("06b-home-mini-player", baseState().copy(room = douyuRooms[0]))
+
   private val followRooms = listOf(
     douyuRooms[0], douyuRooms[1], douyuRooms[2],
     streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
