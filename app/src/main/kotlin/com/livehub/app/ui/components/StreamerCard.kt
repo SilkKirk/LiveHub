@@ -95,6 +95,16 @@ fun StreamerCard(
    * no card there has to answer for a gesture nobody defined.
    */
   onLongClick: (() -> Unit)? = null,
+  /**
+   * Whether a live room draws the "LIVE" badge on its cover.
+   *
+   * This is a property of the *list*, not of the room. The home and search grids are filled from a
+   * platform's "on air now" listing, so every tile in them is live and the badge says the same
+   * word once per card — the premise of the whole page, repeated. The follow grid is the one list
+   * that mixes live and offline rooms (an offline card says 未开播 instead), so there the badge is
+   * the thing that lets the two be told apart at a glance.
+   */
+  showLiveBadge: Boolean = true,
 ) {
   Surface(
     modifier = modifier
@@ -119,7 +129,7 @@ fun StreamerCard(
       ) {
         CoverImage(streamer = streamer)
 
-        if (streamer.isLive) {
+        if (streamer.isLive && showLiveBadge) {
           Surface(
             color = LiveBadgeColor,
             shape = PillShape,
@@ -144,7 +154,9 @@ fun StreamerCard(
               )
             }
           }
-        } else {
+        // `else if`, not `else`: a live room on a list that suppresses the badge must draw nothing
+        // at all, and a plain `else` would label it 未开播 — the one reading that is actually false.
+        } else if (!streamer.isLive) {
           Surface(
             color = Color.Black.copy(alpha = 0.5f),
             shape = PillShape,
@@ -302,6 +314,8 @@ fun StreamerSearchCard(
   onClick: () -> Unit,
   onToggleFollow: () -> Unit,
   modifier: Modifier = Modifier,
+  /** The same per-list rule as [StreamerCard]: search results all come from rooms on air. */
+  showLiveBadge: Boolean = true,
 ) {
   Surface(
     modifier = modifier
@@ -325,18 +339,22 @@ fun StreamerSearchCard(
       ) {
         CoverImage(streamer = streamer)
 
-        Surface(
-          color = if (streamer.isLive) LiveBadgeColor else Color.Black.copy(alpha = 0.55f),
-          shape = RoundedCornerShape(4.dp),
-          modifier = Modifier.padding(5.dp).align(Alignment.TopStart),
-        ) {
-          Text(
-            text = if (streamer.isLive) "LIVE" else "未开播",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            fontWeight = if (streamer.isLive) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-          )
+        // Only the LIVE label is scene-dependent: an offline row still says 未开播, wherever the
+        // row is drawn, because that is news the list itself does not carry.
+        if (!streamer.isLive || showLiveBadge) {
+          Surface(
+            color = if (streamer.isLive) LiveBadgeColor else Color.Black.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(4.dp),
+            modifier = Modifier.padding(5.dp).align(Alignment.TopStart),
+          ) {
+            Text(
+              text = if (streamer.isLive) "LIVE" else "未开播",
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White,
+              fontWeight = if (streamer.isLive) FontWeight.Bold else FontWeight.Normal,
+              modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+          }
         }
       }
 

@@ -15,6 +15,7 @@ import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -155,5 +156,83 @@ class CardInformationDensityTest {
     // 英雄联盟 belongs to the *category row* here, not to a badge — exactly one occurrence means
     // no card drew it as well.
     assertEquals(1, composeRule.onAllNodesWithText("英雄联盟").fetchSemanticsNodes().size)
+  }
+
+  /**
+   * The home grid draws no LIVE badge, because every room in it is already on air.
+   *
+   * The badge was not wrong, it was redundant: a platform's listing *is* the set of rooms whose
+   * streamers are broadcasting right now, so each tile printed the same word under its title. The
+   * reference client's home screen prints none either — it spends the corner of the cover on the
+   * audience figure instead.
+   */
+  @Test
+  fun `the home grid draws no live badge`() {
+    val state = UiState(
+      screen = Screen.Home,
+      platform = Platform.DOUYU,
+      categories = categories,
+      selectedCategory = categories.first(),
+      rooms = listOf(streamer("主播甲", 129_000), streamer("主播乙", 96_000)),
+    )
+
+    composeInSmallWindow { HomeScreen(state = state, onAction = {}) }
+
+    // The grid really rendered. Without this, "no LIVE anywhere" would also be true of a screen
+    // that drew nothing at all, and this test would pass on a broken layout.
+    composeRule.onNodeWithText("直播标题 主播甲").assertExists()
+    composeRule.onNodeWithText("直播标题 主播乙").assertExists()
+    val badges = composeRule.onAllNodesWithText("LIVE").fetchSemanticsNodes()
+    assertTrue("the home grid drew ${badges.size} LIVE badges", badges.isEmpty())
+  }
+
+  /**
+   * The follow grid still draws it — the other half of the pair above.
+   *
+   * Follow is the only list that mixes live and offline rooms, so the badge is what tells the two
+   * apart at a glance (an offline card says 未开播 in its place). Asserting it here is what proves
+   * the flag is set per screen rather than the badge being deleted outright.
+   */
+  @Test
+  fun `the follow grid still draws the live badge`() {
+    val state = UiState(
+      screen = Screen.Follow,
+      followed = listOf(
+        streamer("一条小团团", 129_000),
+        streamer("旭旭宝宝", 320_000, live = false),
+      ),
+    )
+
+    composeInSmallWindow { FollowScreen(state = state, onAction = {}) }
+
+    composeRule.onNodeWithText("直播标题 一条小团团").assertExists()
+    assertTrue(
+      "the follow grid lost its LIVE badge",
+      composeRule.onAllNodesWithText("LIVE").fetchSemanticsNodes().isNotEmpty(),
+    )
+  }
+
+  /**
+   * Search rows drop it for the same reason the home grid does: a keyword search only ever returns
+   * rooms that are broadcasting, so the label would repeat itself down the whole list. The row is a
+   * different composable (`StreamerSearchCard`), which is why it needs its own assertion.
+   */
+  @Test
+  fun `a search result row draws no live badge`() {
+    val state = UiState(
+      screen = Screen.Search,
+      platform = Platform.DOUYU,
+      searchQuery = "主播",
+      lastSearchQuery = "主播",
+      searchResults = listOf(streamer("主播甲", 129_000)),
+    )
+
+    composeInSmallWindow { SearchScreen(state = state, onAction = {}) }
+
+    composeRule.onNodeWithText("直播标题 主播甲").assertExists()
+    assertTrue(
+      "a search row must not badge a room that is live by definition of being in the results",
+      composeRule.onAllNodesWithText("LIVE").fetchSemanticsNodes().isEmpty(),
+    )
   }
 }

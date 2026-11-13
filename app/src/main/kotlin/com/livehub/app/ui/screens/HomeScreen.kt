@@ -330,6 +330,9 @@ private fun RoomGrid(
         followed = followedKeys.contains(streamer.key),
         onClick = { onAction(UiAction.OpenRoom(streamer)) },
         onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
+        // Everything here is on air — that is what a platform's listing is — so the badge printed
+        // the same word on every tile. The follow grid, which mixes live and offline rooms, keeps it.
+        showLiveBadge = false,
       )
     }
     if (state.loadingMore) {

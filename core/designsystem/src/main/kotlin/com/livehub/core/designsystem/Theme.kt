@@ -46,8 +46,14 @@ private val LightScheme: ColorScheme = lightColorScheme(
   onPrimaryContainer = Color(0xFF41000D),
   secondary = BrandTeal,
   onSecondary = Color.White,
-  secondaryContainer = Color(0xFFC8EDF4),
-  onSecondaryContainer = Color(0xFF00212A),
+  // `secondaryContainer` is not "a second brand colour" in practice — it is the fill Material 3
+  // gives a *selected* `FilterChip`, and the chips are the app's main selection control. As the
+  // teal pair they put a cyan chip under a red tab indicator, beside a red LIVE badge and a red
+  // follow star; the pair now shares the primary container family so selection reads as one colour
+  // across the app. `secondary` itself stays teal: this is about what a selected chip is filled
+  // with, not about the palette's second hue.
+  secondaryContainer = Color(0xFFFFDDE3),
+  onSecondaryContainer = Color(0xFF41000D),
   background = BackgroundLight,
   onBackground = Color(0xFF1B1B1F),
   surface = SurfaceLight,
@@ -70,8 +76,10 @@ private val DarkScheme: ColorScheme = darkColorScheme(
   onPrimaryContainer = Color(0xFFFFDDE3),
   secondary = BrandTealDark,
   onSecondary = Color(0xFF00363D),
-  secondaryContainer = Color(0xFF004F58),
-  onSecondaryContainer = Color(0xFFC8EDF4),
+  // Same reasoning as the light scheme: this is the selected-chip fill, held to the primary
+  // container family so a chip does not go cyan while every other selected thing goes brand red.
+  secondaryContainer = Color(0xFF8A0022),
+  onSecondaryContainer = Color(0xFFFFDDE3),
   background = BackgroundDark,
   onBackground = Color(0xFFE7E3EA),
   surface = SurfaceDark,

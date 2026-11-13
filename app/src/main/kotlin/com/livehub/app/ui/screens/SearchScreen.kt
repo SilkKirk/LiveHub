@@ -223,6 +223,9 @@ private fun SearchResultRow(
     followed = followed,
     onClick = { onAction(UiAction.OpenRoom(streamer)) },
     onToggleFollow = { onAction(UiAction.ToggleFollow(streamer)) },
+    // Search only ever returns rooms that are on air, so the LIVE label would repeat itself on
+    // every row; the follow grid is where live-vs-offline is actually worth marking.
+    showLiveBadge = false,
   )
 }
 
