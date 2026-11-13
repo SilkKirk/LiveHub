@@ -100,6 +100,20 @@ android {
             isReturnDefaultValues = true
         }
     }
+
+    lint {
+        /**
+         * The 48dp touch minimum has been broken twice in this project, both times in a way that
+         * looked fixed: `size(32.dp)` on an `IconButton` (round 61), and then
+         * `size(48.dp).padding(8.dp)` — a 48dp semantics node around a 32dp clickable area,
+         * because `IconButton` applies Material's minimum *inside* the caller's modifier
+         * (round 65). Neither was caught by a test; both were caught by reading the code.
+         *
+         * Compose's own lint check knows this rule, so the third occurrence should be caught by
+         * CI instead of by whoever happens to miss the button.
+         */
+        error += "TouchTargetSizeCheck"
+    }
 }
 
 kotlin {
