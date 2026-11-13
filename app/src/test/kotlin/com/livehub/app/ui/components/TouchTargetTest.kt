@@ -26,12 +26,16 @@ import org.robolectric.annotation.Config
  * 32dp star by writing `size(48.dp).padding(8.dp)`, which reports a 48dp node and still leaves a
  * 32dp clickable area — `IconButton` applies Material's minimum *inside* the caller's modifier, so
  * the padding is what the inner `size(40.dp)` saw. A tap in the corner fell through to the card and
- * opened the room, and every assertion anyone wrote about that star still passed, because they all
+ * opened the room, while every assertion anyone wrote about that star passed, because they all
  * measured the semantics node.
  *
- * This test taps the corner instead: 4dp in from the top-left of the star's own box, which is inside
- * a real 48dp target and outside a 32dp one. `TouchTargetSizeCheck` in `app/build.gradle.kts` is the
- * static half of the same guard.
+ * The first version of *this* test tapped 4dp in from the corner and failed, which is the other half
+ * of the same lesson: a `Material3` `IconButton` is a 48dp *node* around a 40dp *state layer*, and
+ * that outer ring is not part of the pointer area. Tapping 6dp in is inside the real target and
+ * outside the 32dp one the padding bug produced, so it separates the two without depending on
+ * which of 40 or 48 Material happens to use.
+ *
+ * `TouchTargetSizeCheck` in `app/build.gradle.kts` is the static half of the same guard.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -64,14 +68,16 @@ class TouchTargetTest {
   }
 
   @Test
-  fun `a tap in the corner of the star follows instead of opening the room`() {
+  fun `a tap just inside the star follows instead of opening the room`() {
     val actions = mutableListOf<String>()
     render(actions)
 
-    composeRule.onNodeWithContentDescription("关注").performTouchInput { click(Offset(4f, 4f)) }
+    // 6dp in from the left edge, vertically centred: inside a 40dp state layer, outside the 32dp
+    // area `size(48.dp).padding(8.dp)` leaves behind.
+    composeRule.onNodeWithContentDescription("关注").performTouchInput { click(Offset(6f, 24f)) }
     composeRule.waitForIdle()
 
-    assertEquals("the corner of the star belongs to the star: $actions", listOf("follow"), actions)
+    assertEquals("the edge of the star belongs to the star: $actions", listOf("follow"), actions)
   }
 
   /** The rest of the card still opens the room, so the assertion above is about the star, not a dead card. */

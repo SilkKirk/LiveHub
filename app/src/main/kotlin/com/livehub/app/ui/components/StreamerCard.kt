@@ -203,15 +203,19 @@ fun StreamerCard(
           }
         }
 
-        // 48dp, and *only* 48dp.
+        // `size(48.dp)`, and no padding.
         //
         // The trap is that `IconButton`'s own `minimumInteractiveComponentSize()` sits **inside**
         // the caller's modifier, so anything that constrains the button from the outside also
-        // constrains the touch target: `size(32.dp)` gave a 32dp target, and the previous fix —
-        // `size(48.dp).padding(8.dp)` — reported a 48dp semantics node while leaving the clickable
-        // area at 32dp, because the padding is what the inner `size(40.dp)` saw. A plain
-        // `size(48.dp)` forces that inner box to 48dp, which is the number the finger actually gets.
-        // The 19dp disc is centred either way, so the card looks unchanged.
+        // constrains what the finger can reach: `size(32.dp)` gave a 32dp target, and
+        // `size(48.dp).padding(8.dp)` — the first attempt at fixing it — reported a 48dp semantics
+        // node while leaving the pointer area at 32dp, because the padding is what the inner
+        // `size(40.dp)` saw.
+        //
+        // What `size(48.dp)` buys is Material's own state layer: 40dp of pointer area centred in a
+        // 48dp node. The outer 4dp ring belongs to the node, not to the button — a tap there falls
+        // through to the card. That is the component's design, not something this call can change;
+        // `TouchTargetTest` taps 6dp in precisely because that ring is inert.
         IconButton(
           onClick = onToggleFollow,
           modifier = Modifier.align(Alignment.TopEnd).size(48.dp),
@@ -370,9 +374,9 @@ fun StreamerSearchCard(
         }
       }
 
-      // 48dp for the same reason — and with the same trap — as the grid tile's star: a caller's
-      // `size(36.dp)` used to constrain Material's own minimum from the outside, so the target was
-      // 36dp on the row's outermost control, where a miss opens the room instead of following it.
+      // `size(48.dp)` for the same reason as the grid tile's star: a caller's `size(36.dp)` used to
+      // constrain Material's own minimum from the outside, so the pointer area was 36dp on the
+      // row's outermost control — where a miss opens the room instead of following it.
       IconButton(onClick = onToggleFollow, modifier = Modifier.size(48.dp)) {
         Icon(
           imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
