@@ -33,6 +33,7 @@ import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.BiliLoginUi
 import com.livehub.app.ui.screens.PlayerContent
 import com.livehub.app.ui.screens.PlayerSettings
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Category
 import com.livehub.core.model.DanmakuMessage
 import com.livehub.core.model.Platform
@@ -741,11 +742,12 @@ class ScreenshotTest {
   // `surfaceVariant` chip on a `surface` card, the LIVE badge over a dark cover) could not show
   // up in any artifact.
   //
-  // Only the screens that go through `LiveHubRoot` are captured: that is the only place
-  // `LiveHubTheme` is applied, and `PlayerContent` — the branch a `Screen.Player` state takes
-  // here — is composed *outside* it. A dark player render would therefore be the light scheme
-  // with a black video box, which is exactly the kind of screenshot that looks like coverage
-  // without being any.
+  // Only the screens that go through `LiveHubRoot` get their theme from it. A player render is
+  // composed straight from `PlayerContent` — the branch `capture` takes for `Screen.Player` — so
+  // `capture` wraps that branch in `LiveHubTheme` itself; before it did, every player artifact
+  // (chrome, pills, danmaku names, the settings panel) was drawn in **default Material 3 colours**
+  // rather than the app's, which is exactly the kind of screenshot that looks like coverage
+  // without being any. `23d-player-dark` is the render that proves the wrapper works.
   @Test
   fun homeDark() = capture(
     "23-home-dark",
@@ -765,6 +767,21 @@ class ScreenshotTest {
       screen = Screen.Sync,
       themeMode = com.livehub.core.designsystem.ThemeMode.Dark,
     ),
+  )
+
+  /**
+   * The player in the dark scheme, which no render could produce before this round.
+   *
+   * `capture` used to leave the `Screen.Player` branch outside any theme, so every player artifact
+   * was default Material 3 — grey pills, purple danmaku names — instead of the app's palette. With
+   * the branch wrapped in `LiveHubTheme` this render is genuine, and it doubles as the check that
+   * the wrapper is applied rather than merely written: the action row, the 分享 pill and the
+   * danmaku names have to come out in the brand colours, which the light render could not prove.
+   */
+  @Test
+  fun playerDark() = capture(
+    "23d-player-dark",
+    playerState().copy(themeMode = com.livehub.core.designsystem.ThemeMode.Dark),
   )
 
   /**
@@ -947,7 +964,7 @@ class ScreenshotTest {
       "22b-player-settings-douyin",
       state,
       content = {
-        MaterialTheme {
+        LiveHubTheme(mode = state.themeMode) {
           Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
@@ -974,7 +991,7 @@ class ScreenshotTest {
       "22c-player-settings-bilibili",
       state,
       content = {
-        MaterialTheme {
+        LiveHubTheme(mode = state.themeMode) {
           Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
@@ -1023,7 +1040,7 @@ class ScreenshotTest {
       "22-player-settings-huya",
       state,
       content = {
-        MaterialTheme {
+        LiveHubTheme(mode = state.themeMode) {
           Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
@@ -1113,21 +1130,28 @@ class ScreenshotTest {
         // Rendered through PlayerContent so the screenshot does not depend on the sheet
         // state, and so a fullscreen render is reachable without a real gesture.
         //
+        // Wrapped in the app's theme here, because this branch is the one place a render does not
+        // go through `LiveHubRoot` — and without it the chrome, the pills and the danmaku names
+        // were all drawn in default Material 3 colours. `state.themeMode` is what the app would
+        // read, so a dark render is genuine rather than a light one over a black box.
+        //
         // The video surface is replaced: `captureToImage` cannot read a SurfaceView (its
         // pixels are composited by SurfaceFlinger, not drawn into the window), so a real
         // player always captures as solid black and the render would prove nothing about
         // the chrome around it. PlayerContent only substitutes it for a room that is
         // actually playing, so the loading / offline / error states still render their own
         // content.
-        PlayerContent(
-          state = state,
-          onAction = {},
-          fullscreen = fullscreen,
-          onFullscreenChange = {},
-          onOpenSettings = {},
-          videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
-          videoAspectHint = videoAspect,
-        )
+        LiveHubTheme(mode = state.themeMode) {
+          PlayerContent(
+            state = state,
+            onAction = {},
+            fullscreen = fullscreen,
+            onFullscreenChange = {},
+            onOpenSettings = {},
+            videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
+            videoAspectHint = videoAspect,
+          )
+        }
       } else {
         LiveHubRoot(state = state, onAction = { })
       }
