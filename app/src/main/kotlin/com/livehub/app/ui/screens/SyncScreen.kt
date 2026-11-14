@@ -22,6 +22,10 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Sensors
+import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +57,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
+import com.livehub.app.ui.components.PageHeader
 import com.livehub.app.ui.components.SectionHeader
 import com.livehub.app.ui.components.listRowColors
 import com.livehub.app.ui.UiAction
@@ -67,6 +73,11 @@ import java.util.Date
  * Laid out like WeChat's input-method pairing: this device shows a six digit matching
  * code, the other device types it, and no address is ever read out or retyped. The
  * scopes and the exchange log sit below the device list.
+ *
+ * The page opens with the shared masthead (`PageHeader`), and every row below it starts with an
+ * icon: what a user is looking at here is a *kind* of thing — this device, a device already paired,
+ * a device discovery happened to see — before it is a sentence, and the icons are what makes that
+ * readable at a glance instead of line by line.
  */
 @Composable
 fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
@@ -91,9 +102,28 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(16.dp),
+    // No top inset any more: the masthead below brings its own 14dp above the title, the way 首页
+    // and 关注 open. Keeping the old 16dp as well would put 30dp of nothing above the page's name.
+    contentPadding = PaddingValues(
+      start = PAGE_INSET,
+      top = 0.dp,
+      end = PAGE_INSET,
+      bottom = PAGE_INSET,
+    ),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
+    // The masthead, first. This page used to open with the 本机 card, so 同步 was named only by the
+    // tab that got you here — 设置 had the same hole, and 关注 had a title welded to its counter.
+    //
+    item {
+      PageHeader(
+        title = "同步",
+        subtitle = "同一 Wi-Fi 下与已配对设备增量同步",
+        // The list already insets every child by 16dp; PageHeader's own inset would add a second.
+        inset = 0.dp,
+      )
+    }
+
     item { ThisDeviceCard(shownState, onAction) }
 
     item { SyncActionsRow(state, onAction, onOpenMatchingCode = { showCodeDialog = true }) }
@@ -414,15 +444,16 @@ private fun ScopeCard() {
  * matters here, because the alternative a user would fear is a socket that stays open with the app
  * in their pocket.
  *
- * The row itself is the official `ListItem` (round 103). "One title, one explanation, one control at
- * the end" is exactly the shape the component exists for, and it brings the two-line height, the
- * 16dp insets and the merged semantics for a screen reader with it. Deliberately no padding of our
- * own: `ListItem` already carries its own, and wrapping it would double the inset.
+ * The row itself is the official `ListItem` (round 103). "A leading icon, one title, one explanation,
+ * one control at the end" is exactly the shape the component exists for, and it brings the two-line
+ * height, the 16dp insets and the merged semantics for a screen reader with it. Deliberately no
+ * padding of our own: `ListItem` already carries its own, and wrapping it would double the inset.
  */
 @Composable
 private fun AutoSyncCard(state: UiState, onAction: (UiAction) -> Unit) {
   Card(modifier = Modifier.fillMaxWidth()) {
     ListItem(
+      leadingContent = { RowIcon(Icons.Outlined.Sync) },
       headlineContent = { Text("自动同步") },
       // `style = labelSmall` on every supporting line on this page — here and in the three rows
       // below. The project's type scale is a pinned decision (`TypographyFloorTest` names the sync
@@ -465,6 +496,7 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
 
       // This device is listed first, the way WeChat's page shows 本机 above the others.
       ListItem(
+        leadingContent = { RowIcon(Icons.Outlined.Smartphone) },
         headlineContent = { Text(state.deviceName.ifBlank { "LiveHub 设备" }) },
         supportingContent = { Text("本机", style = MaterialTheme.typography.labelSmall) },
         colors = listRowColors(),
@@ -483,6 +515,7 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
           // card with 本机, and a line is what separates rows inside one surface.
           HorizontalDivider()
           ListItem(
+            leadingContent = { RowIcon(Icons.Outlined.Devices) },
             headlineContent = { Text(peer.deviceName.ifBlank { "未知设备" }) },
             supportingContent = {
               Text(
@@ -607,6 +640,7 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
       } else {
         candidates.forEach { peer ->
           ListItem(
+            leadingContent = { RowIcon(Icons.Outlined.Sensors) },
             headlineContent = { Text(peer.deviceName.ifBlank { "未命名设备" }) },
             supportingContent = {
               Text(
@@ -626,6 +660,42 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
       }
     }
   }
+}
+
+/**
+ * The page's 16dp margin, used twice: as the list's horizontal content padding, and as the amount
+ * the masthead item is pulled back out of it (`PageHeader` brings the same 16dp with it).
+ */
+private val PAGE_INSET = 16.dp
+
+/**
+ * The icon at the head of a row on this page.
+ *
+ * 同步 was a list of sentences before it was a list of kinds of thing: this device, the devices
+ * already paired with it, and the devices discovery has merely seen. The only thing telling those
+ * three apart was the second line of text, so the page had to be read to be understood; with an
+ * icon in front of each row it can be skimmed.
+ *
+ * The icons carry no `contentDescription` on purpose. `ListItem` merges its descendants into one
+ * node for a screen reader, and that node already reads "Pixel 7, 本机" — describing the icon as
+ * well would make every row say itself twice. The tint is `onSurfaceVariant`, which is the token
+ * `ListItemDefaults` resolves a leading icon to anyway; it is stated rather than inherited so the
+ * icon cannot drift to full-contrast `onSurface` if that default ever moves, because these icons
+ * are an index, not content. 22dp rather than the 24dp list-item leading-icon token, so the mark
+ * sits beside the 16sp headline instead of competing with it.
+ *
+ * The exchange log's rows are the exception and get no icon from here: they already lead with the
+ * ↑/↓ arrow, which carries their direction and whether the transfer failed, and that one *is*
+ * described because neither fact is in the row's text. A second icon would only push it inwards.
+ */
+@Composable
+private fun RowIcon(icon: ImageVector) {
+  Icon(
+    imageVector = icon,
+    contentDescription = null,
+    modifier = Modifier.size(22.dp),
+    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+  )
 }
 
 /**

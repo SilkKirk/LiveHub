@@ -9,11 +9,11 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,7 +27,11 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -72,13 +76,24 @@ import com.livehub.core.designsystem.LiveHubTheme
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** Bottom bar destinations, in display order. */
-private enum class Dock(val screen: Screen, val label: String, val icon: ImageVector) {
-  HOME(Screen.Home, "首页", Icons.Filled.Home),
-  FOLLOW(Screen.Follow, "关注", Icons.Filled.Star),
-  SEARCH(Screen.Search, "搜索", Icons.Filled.Search),
-  SYNC(Screen.Sync, "同步", Icons.Filled.Sync),
-  SETTINGS(Screen.Settings, "设置", Icons.Filled.Settings),
+/**
+ * Bottom bar destinations, in display order.
+ *
+ * Two glyphs per tab: filled while the tab is the current one, outlined while it is not. That is
+ * the convention the platform itself uses, and it gives selection a second signal beside the pill
+ * — which matters because the pill is a container and the label under it is 12sp.
+ */
+private enum class Dock(
+  val screen: Screen,
+  val label: String,
+  val icon: ImageVector,
+  val restIcon: ImageVector,
+) {
+  HOME(Screen.Home, "首页", Icons.Filled.Home, Icons.Outlined.Home),
+  FOLLOW(Screen.Follow, "关注", Icons.Filled.Star, Icons.Outlined.Star),
+  SEARCH(Screen.Search, "搜索", Icons.Filled.Search, Icons.Outlined.Search),
+  SYNC(Screen.Sync, "同步", Icons.Filled.Sync, Icons.Outlined.Sync),
+  SETTINGS(Screen.Settings, "设置", Icons.Filled.Settings, Icons.Outlined.Settings),
 }
 
 @Composable
@@ -346,53 +361,73 @@ internal fun BackSwipeContainer(
 }
 
 /**
- * The bottom bar.
+ * The bottom bar: a floating pill, not a full-width slab.
  *
- * Standard `NavigationBar` + `NavigationBarItem` with its built-in indicator: the selected item
- * gets the Material 3 pill behind its icon for free, and the bar keeps the platform's own insets,
- * ripple and TalkBack behaviour. The only thing configured here is colour — labels a step quieter
- * than icons, so the bar does not out-shout a screen full of video thumbnails.
+ * Material 3's `NavigationBar` is designed to touch the window edges. Inset from them — 12dp on
+ * each side, 10dp above the system gesture area, one 28dp corner radius — it becomes an object on
+ * the page instead of the page's floor, which is the one thing this app's chrome needed: the grid
+ * behind it is a wall of pictures, and a wall that ends in a hard edge looks cut rather than
+ * finished.
+ *
+ * Everything inside is still the official component: `NavigationBar` (with its insets handed to the
+ * box around it, so the pill does not grow a second bottom margin), `NavigationBarItem` with
+ * Material's own indicator, and filled-vs-outlined glyphs for the selected tab.
  */
 @Composable
 private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
-  Column {
-    HorizontalDivider(
-      thickness = 1.dp,
-      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-    )
-    NavigationBar(
-      containerColor = MaterialTheme.colorScheme.surface,
+  Box(
+    modifier = Modifier
+      .fillMaxWidth()
+      .navigationBarsPadding()
+      .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+  ) {
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(26.dp),
+      color = MaterialTheme.colorScheme.surfaceContainer,
+      shadowElevation = 8.dp,
       tonalElevation = 0.dp,
     ) {
-      Dock.entries.forEach { dock ->
-        // No extra clause for the home tab: `Screen.Category` used to be OR-ed in here, but nothing
-        // ever set it, so the check was dead. See the `Screen` declaration.
-        val selected = state.screen == dock.screen
-        NavigationBarItem(
-          selected = selected,
-          onClick = { onAction(UiAction.Navigate(dock.screen)) },
-          icon = {
-            Icon(
-              imageVector = dock.icon,
-              contentDescription = dock.label,
-              modifier = Modifier.size(22.dp),
-            )
-          },
-          label = {
-            Text(
-              text = dock.label,
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            )
-          },
-          colors = NavigationBarItemDefaults.colors(
-            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            selectedTextColor = MaterialTheme.colorScheme.primary,
-            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-          ),
-        )
+      NavigationBar(
+        containerColor = Color.Transparent,
+        tonalElevation = 0.dp,
+        // The inset is the box's job now; inside the pill it would draw a taller rounded shape
+        // with a band of nothing under the labels.
+        windowInsets = WindowInsets(0, 0, 0, 0),
+      ) {
+        Dock.entries.forEach { dock ->
+          // No extra clause for the home tab: `Screen.Category` used to be OR-ed in here, but
+          // nothing ever set it, so the check was dead. See the `Screen` declaration.
+          val selected = state.screen == dock.screen
+          NavigationBarItem(
+            selected = selected,
+            onClick = { onAction(UiAction.Navigate(dock.screen)) },
+            icon = {
+              Icon(
+                imageVector = if (selected) dock.icon else dock.restIcon,
+                contentDescription = dock.label,
+                modifier = Modifier.size(22.dp),
+              )
+            },
+            label = {
+              // `labelMedium` (12sp) rather than the 11sp `labelSmall` this used to draw: the bar
+              // is a navigation surface, not a caption on a card, and Material's own token for it
+              // is the larger of the two.
+              Text(
+                text = dock.label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+              )
+            },
+            colors = NavigationBarItemDefaults.colors(
+              selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              selectedTextColor = MaterialTheme.colorScheme.primary,
+              unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+              unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+              indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+            ),
+          )
+        }
       }
     }
   }

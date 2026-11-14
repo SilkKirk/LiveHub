@@ -14,9 +14,17 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -32,12 +40,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import coil3.SingletonImageLoader
 import com.livehub.app.BuildConfig
 import com.livehub.app.sync.FollowRefreshWorker
+import com.livehub.app.ui.components.PageHeader
 import com.livehub.app.ui.components.SectionHeader
 import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.components.listRowColors
@@ -51,6 +61,11 @@ import kotlinx.coroutines.withContext
 
 /**
  * Settings screen: theme, danmaku, blocked keywords, the image cache and accounts.
+ *
+ * The page opens with the app's shared masthead (`PageHeader`): until this round 设置 was named only
+ * by the tab that got you here, and the page itself began with the 外观 eyebrow. The setting rows
+ * lead with an icon as well — the switches and the blocked words — so the page can be skimmed by
+ * shape (外观, 弹幕, 屏蔽词, 后台刷新, 存储) instead of being read row by row.
  *
  * The cards are M3 `Card`s full of `ListItem`s rather than hand-built `Row`s of two `Text`s and a
  * trailing control. The difference is not cosmetic: a `ListItem` owns its 16dp insets, its
@@ -75,9 +90,28 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(16.dp),
+    // No top inset any more: the masthead below brings its own 14dp above the title, the way 首页
+    // and 关注 open. Keeping the old 16dp as well would put 30dp of nothing above the page's name.
+    contentPadding = PaddingValues(
+      start = PAGE_INSET,
+      top = 0.dp,
+      end = PAGE_INSET,
+      bottom = PAGE_INSET,
+    ),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
+    // The masthead, first — above the 外观 eyebrow, because it names the page and the eyebrow only
+    // names a group inside it.
+    //
+    item {
+      PageHeader(
+        title = "设置",
+        subtitle = "外观、弹幕、缓存与账号",
+        // The list already insets every child by 16dp; PageHeader's own inset would add a second.
+        inset = 0.dp,
+      )
+    }
+
     item {
       SectionHeader("外观")
       Card(modifier = Modifier.fillMaxWidth()) {
@@ -106,6 +140,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
         HorizontalDivider()
         ListItem(
           colors = listRowColors(),
+          leadingContent = { RowIcon(Icons.Outlined.Palette) },
           headlineContent = { Text("动态取色") },
           supportingContent = {
             Text(
@@ -138,6 +173,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
       Card(modifier = Modifier.fillMaxWidth()) {
         ListItem(
           colors = listRowColors(),
+          leadingContent = { RowIcon(Icons.Outlined.ChatBubbleOutline) },
           headlineContent = { Text("显示弹幕") },
           supportingContent = {
             Text("关闭后仅播放画面", style = MaterialTheme.typography.labelSmall)
@@ -190,6 +226,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
             state.blockedKeywords.forEach { keyword ->
               ListItem(
                 colors = listRowColors(),
+                leadingContent = { RowIcon(Icons.Outlined.Block) },
                 headlineContent = { Text(keyword) },
                 trailingContent = {
                   TextButton(
@@ -288,6 +325,7 @@ private fun BackgroundRefreshCard(state: UiState, onAction: (UiAction) -> Unit) 
   Card(modifier = Modifier.fillMaxWidth()) {
     ListItem(
       colors = listRowColors(),
+      leadingContent = { RowIcon(Icons.Outlined.Refresh) },
       headlineContent = { Text("后台刷新开播状态") },
       supportingContent = {
         Text(
@@ -306,6 +344,7 @@ private fun BackgroundRefreshCard(state: UiState, onAction: (UiAction) -> Unit) 
     HorizontalDivider()
     ListItem(
       colors = listRowColors(),
+      leadingContent = { RowIcon(Icons.Outlined.Wifi) },
       headlineContent = { Text("仅 Wi-Fi 下刷新") },
       supportingContent = {
         Text(
@@ -357,6 +396,7 @@ private fun ImageCacheCard(onAction: (UiAction) -> Unit) {
   Card(modifier = Modifier.fillMaxWidth()) {
     ListItem(
       colors = listRowColors(),
+      leadingContent = { RowIcon(Icons.Outlined.Storage) },
       headlineContent = { Text("图片缓存") },
       supportingContent = {
         Text(
@@ -487,3 +527,38 @@ private val THEME_OPTIONS = listOf(
   "深色" to com.livehub.core.designsystem.ThemeMode.Dark,
   "浅色" to com.livehub.core.designsystem.ThemeMode.Light,
 )
+
+/**
+ * The page's 16dp margin, used twice: as the list's horizontal content padding, and as the amount
+ * the masthead item is pulled back out of it (`PageHeader` brings the same 16dp with it).
+ */
+private val PAGE_INSET = 16.dp
+
+/**
+ * The icon at the head of a settings row.
+ *
+ * A settings page is a list of things that can be changed, and most of them are recognised by their
+ * subject before their sentence: the wallpaper palette, danmaku, the words that are filtered out, the
+ * background check, the network it is allowed to use, and the disk cache. Until this round the only
+ * way to find one was to read — six rows of "title over explanation" all look alike at a glance.
+ *
+ * No `contentDescription`, on purpose: `ListItem` merges its descendants into one node for a screen
+ * reader, so the row already reads "显示弹幕, 关闭后仅播放画面" — describing the icon as well would
+ * make it say itself twice. The tint is `onSurfaceVariant`, the token `ListItemDefaults` resolves a
+ * leading icon to anyway; it is stated rather than inherited so the icon keeps matching the
+ * supporting line under it if that default ever moves. 22dp rather than the 24dp list-item
+ * leading-icon token, so the mark sits beside the 16sp headline instead of competing with it.
+ *
+ * Two rows deliberately keep none. The blocklist's input is a form field in its card's header row
+ * rather than a row to recognise and tap, so an icon there would sit on the field's label; and 关于
+ * is a document about the app rather than a setting — prose, not a switch.
+ */
+@Composable
+private fun RowIcon(icon: ImageVector) {
+  Icon(
+    imageVector = icon,
+    contentDescription = null,
+    modifier = Modifier.size(22.dp),
+    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+  )
+}

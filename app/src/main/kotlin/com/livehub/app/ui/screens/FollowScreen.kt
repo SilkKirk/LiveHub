@@ -71,6 +71,7 @@ import com.livehub.app.ui.components.collapsibleHeaderScroll
 import com.livehub.app.ui.components.rememberCollapsibleHeaderState
 import com.livehub.app.ui.components.CardMinWidth
 import com.livehub.app.ui.components.EmptyState
+import com.livehub.app.ui.components.PageHeader
 import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.SpecialFollowRow
 import com.livehub.app.ui.components.StreamerCard
@@ -79,7 +80,8 @@ import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 
 /**
- * Follow list: the 特别关注 avatar row on top, the rest of the follows as a two-column grid.
+ * Follow list: a masthead, the 特别关注 avatar row under it, then the rest of the follows as a
+ * two-column grid.
  *
  * The layout is the reference client's (`screenshots/home.jpeg`, which is a *follow list*, not a
  * home page): circular avatars across the top, then covers two per row. The old single-column row
@@ -658,6 +660,27 @@ private fun FollowSearchField(query: String, onQueryChange: (String) -> Unit) {
 private fun Streamer.matchesName(query: String): Boolean =
   streamerName.contains(query, ignoreCase = true) || title.contains(query, ignoreCase = true)
 
+/**
+ * The page's masthead, and the controls that narrow the grid under it.
+ *
+ * The title used to be a `Row` of `Text("关注")` and `Text("  $liveCount/$total 正在直播")`: the
+ * counter was welded to the page's name on the same baseline, so 关注 opened with a sentence instead
+ * of with a name. It is a `PageHeader` now — the same block 同步 and 设置 open with — a 24sp title
+ * with the counter dropped to a `labelMedium` line underneath it, where it reads as the state of the
+ * list rather than as part of what the page is called.
+ *
+ * The subtitle's wording is a contract rather than a style choice, and it is worth knowing before
+ * rewording it: `DesignLanguageTest` matches "2/2 正在直播" verbatim, and `CollapsibleHeaderUiTest`
+ * proves this header folds and comes back by counting the nodes whose text contains 正在直播. The
+ * counter *is* how those two tests find this header, so a tidied-up subtitle would fail assertions
+ * that are not about wording at all.
+ *
+ * Everything below the masthead keeps the order it had, because that order is how the page is used:
+ * a search box once the list is long enough to need one, the 特别关注 strip (drawn even while empty,
+ * since its ＋ is the only way into the picker), then the live/platform chips and the tag chips. The
+ * masthead is asked for a 12dp inset so it lines up with the avatar strip and chip rows under it
+ * (`PageHeader` defaults to 16dp, which is what 设置 and 同步 — whose cards sit at 16dp — get).
+ */
 @Composable
 private fun FollowHeader(
   total: Int,
@@ -677,18 +700,15 @@ private fun FollowHeader(
   onReorderSpecial: (Streamer, Int) -> Unit,
   onAddSpecial: () -> Unit,
 ) {
-  Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Text("关注", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-      Text(
-        text = "  $liveCount/$total 正在直播",
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
+  // No vertical padding here any more. `PageHeader` brings 14dp above the title and 6dp under the
+  // subtitle; the 8dp this Column used to add above the old title row would now stack on top of that
+  // and cost the grid room for nothing. This is the tallest header in the app — masthead, search box,
+  // avatar strip and two chip rows — and it folds away on scroll for exactly that reason: every dp
+  // above the first cover is a dp the user has to scroll past to reach it.
+  Column(modifier = Modifier.fillMaxWidth()) {
+    // 12dp, matching the avatar strip and chip rows under it: this page's content runs at 12dp,
+    // unlike 设置/同步 whose cards sit at 16dp.
+    PageHeader(title = "关注", subtitle = "$liveCount/$total 正在直播", inset = 12.dp)
 
     // The name filter, once the list is long enough for scrolling alone to be a problem.
     //

@@ -1,7 +1,10 @@
 package com.livehub.app.di
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import com.livehub.app.ui.Screen
@@ -153,6 +156,9 @@ class SyncScopesTest {
     }
     composeRule.waitForIdle()
 
+    // The page gained a masthead in round 104, so the 同步内容 card is now a scroll away on the
+    // default Robolectric window instead of sitting just above the fold.
+    composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("关注列表 · 登录状态"))
     composeRule.onNodeWithText("关注列表 · 登录状态").assertExists()
     composeRule.onNodeWithText("播放与弹幕设置").assertDoesNotExist()
     composeRule.onNodeWithText("搜索历史").assertDoesNotExist()

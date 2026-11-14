@@ -2,7 +2,6 @@ package com.livehub.app.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,7 +55,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -390,6 +388,13 @@ private fun RoomGrid(
  * and exposes `Tab` semantics (so `assertIsSelected` and TalkBack both work without extra wiring).
  * The pager is driven from the same `selectedTabIndex`, which is what keeps a swipe and a tap
  * looking identical.
+ *
+ * **This row is the home page's masthead.** The redesign gives 关注/同步/设置 a `PageHeader`; 首页
+ * keeps this instead, because the tabs already read as the page's title and because a masthead here
+ * would cost 52dp of the smallest screen — the one thing rounds 22/78 spent a lot of effort
+ * removing (`HomeCategoryDensityTest` pins the chip rows above 190dp from the top). 刷新 stays at
+ * the end of the row for the same reason it was there before: it is the only control on this
+ * screen that is not a tab, and the row has room for it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -409,8 +414,7 @@ private fun PlatformTabs(
       divider = {},
       indicator = {
         // The default indicator is a full-width bar under the tab. This one is narrower and sits
-        // just under the label, which reads as an underline rather than as a second divider —
-        // there is already a hairline between the tabs and the grid.
+        // just under the label, which reads as an underline rather than as a second divider.
         Box(
           modifier = Modifier
             .tabIndicatorOffset(pagerState.currentPage, matchContentSize = false)
@@ -454,7 +458,11 @@ private fun PlatformTabs(
       }
     }
     IconButton(onClick = { onAction(UiAction.Refresh) }) {
-      Icon(Icons.Filled.Refresh, contentDescription = "刷新", modifier = Modifier.size(20.dp))
+      Icon(
+        imageVector = Icons.Filled.Refresh,
+        contentDescription = "刷新",
+        modifier = Modifier.size(20.dp),
+      )
     }
   }
 }
