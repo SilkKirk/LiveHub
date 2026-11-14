@@ -4,10 +4,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
@@ -89,12 +91,24 @@ class HomeHeaderCollapseUiTest {
   private fun groupRowCount(): Int =
     composeRule.onAllNodesWithText("网游").fetchSemanticsNodes().size
 
+  /**
+   * The room grid, as opposed to the chip rows above it.
+   *
+   * Both are scrollable, and a gesture has to start *inside* the one it means to scroll: the first
+   * version swiped on the root, which starts at the very top of the window — inside the platform tab
+   * row — so the fold worked (any downward scroll does) but the unfold never received the gesture.
+   * The cards are what distinguishes the grid from the chips.
+   */
+  private fun grid() = composeRule.onNode(
+    hasScrollAction() and hasAnyDescendant(hasText("直播标题", substring = true)),
+  )
+
   @Test
   fun `swiping the grid up folds the category tree away`() {
     composeHome()
     assertTrue("the tree starts open", groupRowCount() == 1)
 
-    composeRule.onRoot().performTouchInput { swipeUp() }
+    grid().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
 
     assertTrue(
@@ -107,11 +121,11 @@ class HomeHeaderCollapseUiTest {
   fun `swiping back down brings it back`() {
     composeHome()
 
-    composeRule.onRoot().performTouchInput { swipeUp() }
+    grid().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
     assertTrue("folded first", groupRowCount() == 0)
 
-    composeRule.onRoot().performTouchInput { swipeDown() }
+    grid().performTouchInput { swipeDown() }
     composeRule.waitForIdle()
 
     assertTrue("scrolling back up must bring the tree back", groupRowCount() == 1)
