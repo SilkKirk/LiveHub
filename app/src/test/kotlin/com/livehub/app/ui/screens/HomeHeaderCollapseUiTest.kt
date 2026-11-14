@@ -93,7 +93,7 @@ class HomeHeaderCollapseUiTest {
     composeRule.waitForIdle()
 
     assertTrue(
-      "after a downward scroll the group row must be gone, found $groupRowCount()",
+      "after a downward scroll the group row must be gone, found ${groupRowCount()}",
       groupRowCount() == 0,
     )
   }
