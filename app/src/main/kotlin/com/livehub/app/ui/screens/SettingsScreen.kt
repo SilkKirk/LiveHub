@@ -30,10 +30,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil3.SingletonImageLoader
 import com.livehub.app.BuildConfig
+import com.livehub.app.sync.FollowRefreshWorker
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import java.util.Locale
@@ -150,6 +152,11 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item {
+      SectionTitle("后台刷新")
+      BackgroundRefreshCard(state = state, onAction = onAction)
+    }
+
+    item {
       SectionTitle("存储")
       ImageCacheCard(onAction = onAction)
     }
@@ -212,6 +219,64 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
         showDouyinLogin = false
       },
     )
+  }
+}
+
+/**
+ * The background refresh card: the switch that lets the app check the follow list on its own, and
+ * the restriction that keeps those checks off mobile data.
+ *
+ * The interval in the subtitle comes from [FollowRefreshWorker.INTERVAL_MINUTES] rather than a
+ * literal, so the sentence cannot promise a different cadence than the one actually scheduled.
+ */
+@Composable
+private fun BackgroundRefreshCard(state: UiState, onAction: (UiAction) -> Unit) {
+  Card(modifier = Modifier.fillMaxWidth()) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("后台刷新开播状态", style = MaterialTheme.typography.bodyLarge)
+          Text(
+            text = "每 ${FollowRefreshWorker.INTERVAL_MINUTES} 分钟检查一次关注列表里谁开播了",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Switch(
+          checked = state.backgroundRefreshEnabled,
+          onCheckedChange = { onAction(UiAction.SetBackgroundRefresh(it)) },
+          modifier = Modifier.testTag(BACKGROUND_REFRESH_SWITCH_TAG),
+        )
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("仅 Wi-Fi 下刷新", style = MaterialTheme.typography.bodyLarge)
+          Text(
+            text = "移动数据下不检查，避免在不知情时用掉流量。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Switch(
+          checked = state.refreshOnWifiOnly,
+          onCheckedChange = { onAction(UiAction.SetRefreshOnWifiOnly(it)) },
+          // Disabled, not removed, while the switch above is off. A row that disappeared would
+          // read as "this option never existed" and hide the fact that the choice is remembered
+          // and will apply again the moment the first switch goes back on.
+          enabled = state.backgroundRefreshEnabled,
+          modifier = Modifier.testTag(WIFI_ONLY_SWITCH_TAG),
+        )
+      }
+    }
   }
 }
 
@@ -307,6 +372,17 @@ internal fun formatCacheSize(bytes: Long): String {
 private const val CACHE_KB = 1024L
 private const val CACHE_MB = 1024L * CACHE_KB
 private const val CACHE_GB = 1024L * CACHE_MB
+
+/**
+ * Identifiers for the two background-refresh switches.
+ *
+ * The label next to each switch is a separate semantics node, so `onNodeWithText` finds the text
+ * and never the control — and "is the Wi-Fi switch disabled while the feature is off?" is exactly
+ * an assertion about the control. The tags are `internal` so the test refers to the same constant
+ * the screen uses instead of a string that could drift from it.
+ */
+internal const val BACKGROUND_REFRESH_SWITCH_TAG = "backgroundRefreshSwitch"
+internal const val WIFI_ONLY_SWITCH_TAG = "wifiOnlySwitch"
 
 /** Log tag for the two cache calls; a failed read or clear should not disappear silently. */
 private const val CACHE_TAG = "SettingsScreen"

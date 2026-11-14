@@ -1,8 +1,10 @@
 package com.livehub.app.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.livehub.app.di.AppContainer
+import com.livehub.app.sync.FollowRefreshWorker
 import com.livehub.app.sync.SyncController
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
@@ -88,6 +90,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         danmakuAreaFraction = settings.danmakuAreaFraction,
         landscapeDanmakuFontScale = settings.landscapeDanmakuFontScale,
         blockedKeywords = settings.blockedKeywords,
+        // Read here rather than in the settings screen: `LiveHubApplication` consults the same
+        // preference before it schedules anything, so the page has to show what is actually
+        // scheduled instead of a switch that only describes itself.
+        backgroundRefreshEnabled = settings.backgroundRefresh,
+        refreshOnWifiOnly = settings.refreshOnWifiOnly,
         deviceName = preferences.deviceName,
         searchHistory = settings.searchHistory,
         recentRooms = settings.recentRooms,
@@ -178,6 +185,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.SetDanmakuOpacity -> setDanmakuOpacity(action.opacity)
       is UiAction.SetLandscapeDanmakuFontScale -> setLandscapeDanmakuFontScale(action.scale)
       is UiAction.SetBlockedKeywords -> setBlockedKeywords(action.keywords)
+      is UiAction.SetBackgroundRefresh -> setBackgroundRefresh(action.enabled)
+      is UiAction.SetRefreshOnWifiOnly -> setRefreshOnWifiOnly(action.wifiOnly)
       UiAction.RefreshPeers -> refreshPeers()
       is UiAction.UnpairPeer -> unpair(action.deviceId)
       is UiAction.PairWithCode -> pairWithCode(action.code)
@@ -1366,6 +1375,53 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     _state.update { it.copy(blockedKeywords = normalized) }
   }
 
+  /**
+   * Persists the background-refresh switch and makes `WorkManager` agree with it.
+   *
+   * All three steps matter: the preference is what the worker reads on its next run, the state is
+   * what the switch renders, and the schedule/cancel is what stops a job that is already enqueued
+   * from waking the process every half hour to do nothing. Writing the preference without
+   * cancelling would leave the switch looking off over a job that still runs.
+   */
+  private fun setBackgroundRefresh(enabled: Boolean) {
+    container.preferences.setBackgroundRefresh(enabled)
+    _state.update { it.copy(backgroundRefreshEnabled = enabled) }
+    applyBackgroundRefreshSchedule(enabled)
+  }
+
+  /**
+   * Persists the Wi-Fi restriction.
+   *
+   * No scheduling here on purpose: the worker re-reads this preference on every run, so asking
+   * `WorkManager` for a new request would only restart the interval that is already counting down
+   * (`ExistingPeriodicWorkPolicy.KEEP` would drop it anyway, which makes the call pure noise).
+   */
+  private fun setRefreshOnWifiOnly(wifiOnly: Boolean) {
+    container.preferences.setRefreshOnWifiOnly(wifiOnly)
+    _state.update { it.copy(refreshOnWifiOnly = wifiOnly) }
+  }
+
+  /**
+   * Enqueues or cancels the periodic refresh job.
+   *
+   * `runCatching` because `WorkManager.getInstance` throws when its initializer never ran — which
+   * is the normal state in unit tests and possible in restricted profiles. The switch has already
+   * been persisted by the time this runs, so a failure here leaves the preference authoritative
+   * (the next launch enqueues from it) instead of leaving the user with a tap that did nothing.
+   */
+  private fun applyBackgroundRefreshSchedule(enabled: Boolean) {
+    val context = container.preferences.appContext
+    runCatching {
+      if (enabled) {
+        FollowRefreshWorker.schedule(context)
+      } else {
+        FollowRefreshWorker.cancel(context)
+      }
+    }.onFailure { error ->
+      Log.w(BACKGROUND_WORK_TAG, "后台刷新任务启停失败，下次启动时按偏好重新调度", error)
+    }
+  }
+
   // ------------------------------------------------------------- peer discovery
 
   private var discoveryJob: Job? = null
@@ -1691,6 +1747,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
   private companion object {
     const val MAX_DANMAKU_BUFFER = 200
+
+    /** Log tag for the `WorkManager` calls, which fail on platforms where it is unavailable. */
+    const val BACKGROUND_WORK_TAG = "MainViewModel"
     const val DISCOVERY_POLLS = 15
     const val DISCOVERY_POLL_INTERVAL_MILLIS = 2_000L
     const val LOGIN_POLL_ATTEMPTS = 100

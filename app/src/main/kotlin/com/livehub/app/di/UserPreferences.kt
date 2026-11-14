@@ -95,6 +95,23 @@ data class UserSettings(
    * across restarts. Generated once on first pairing.
    */
   val selfSecret: String = "",
+  /**
+   * Whether the periodic background refresh of the follow list may run at all.
+   *
+   * On by default: that is exactly what the app did before this switch existed, and defaulting to
+   * off would silently remove the feature from every existing installation on upgrade. The
+   * default is also what a record written before the field existed decodes to, and the decode
+   * falls back to `UserSettings()` for a record it cannot read — so a missing default here would
+   * reset every other setting along with it.
+   */
+  val backgroundRefresh: Boolean = true,
+  /**
+   * Whether the periodic refresh is restricted to Wi-Fi networks.
+   *
+   * Off by default because it is a restriction, not a behaviour: "off" is what the app always did
+   * (refresh on whatever network is up), so turning it on has to be a deliberate choice.
+   */
+  val refreshOnWifiOnly: Boolean = false,
 )
 
 /**
@@ -136,6 +153,18 @@ class UserPreferences(private val context: Context) {
     java.util.concurrent.ConcurrentHashMap.newKeySet()
 
   @Volatile private var cached: UserSettings? = null
+
+  /**
+   * The context this store was built with, which is the container's application context.
+   *
+   * [AppContainer] keeps its own `applicationContext` private and offers no accessor, but
+   * `MainViewModel` has to hand a context to `WorkManager` when the user switches the background
+   * refresh on or off. Going through the container keeps the context coming from the same place
+   * every other dependency gets it; the alternative was a static `LiveHubApplication.instance`
+   * holder, and process-wide mutable state is worse — every Robolectric test would inherit
+   * whichever application the previous test happened to build.
+   */
+  internal val appContext: Context get() = context
 
   val settings: UserSettings
     get() = cached ?: loadSettings().also { cached = it }
@@ -217,6 +246,28 @@ class UserPreferences(private val context: Context) {
 
   fun setDanmakuEnabled(enabled: Boolean) {
     update { it.copy(danmakuEnabled = enabled) }
+  }
+
+  /**
+   * Switches the periodic follow refresh on or off.
+   *
+   * Only the preference is written here: scheduling and cancelling the `WorkManager` job needs a
+   * context, which this class hands out as [appContext] precisely because `AppContainer` has no
+   * accessor for its own — and deciding to enqueue belongs to whoever owns the setting
+   * (`MainViewModel`), not to the store.
+   */
+  fun setBackgroundRefresh(enabled: Boolean) {
+    update { it.copy(backgroundRefresh = enabled) }
+  }
+
+  /**
+   * Restricts the periodic refresh to Wi-Fi.
+   *
+   * The worker reads this on every run rather than being rescheduled, so changing it takes effect
+   * at the next wake-up and does not restart the 30-minute timer.
+   */
+  fun setRefreshOnWifiOnly(wifiOnly: Boolean) {
+    update { it.copy(refreshOnWifiOnly = wifiOnly) }
   }
 
   fun setBlockedKeywords(keywords: List<String>) {

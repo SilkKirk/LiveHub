@@ -237,6 +237,16 @@ data class UiState(
    * is worse than no value; the tests now assert on [themeMode] itself.
    */
   val themeMode: com.livehub.core.designsystem.ThemeMode = com.livehub.core.designsystem.ThemeMode.System,
+  /**
+   * Whether the periodic background refresh of the follow list is switched on.
+   *
+   * Mirrors `UserSettings.backgroundRefresh`. Default on because that is what the app did before
+   * the switch existed — a state that started out false would have the settings page claim the
+   * feature is off on a fresh install that is in fact about to schedule it.
+   */
+  val backgroundRefreshEnabled: Boolean = true,
+  /** Whether that refresh is restricted to Wi-Fi networks. */
+  val refreshOnWifiOnly: Boolean = false,
   val bilibiliLogin: com.livehub.app.ui.components.BiliLoginUi = com.livehub.app.ui.components.BiliLoginUi(),
   /**
    * True when a Douyin web session is stored.
@@ -405,6 +415,23 @@ sealed interface UiAction {
   data class SetLandscapeDanmakuFontScale(val scale: Float) : UiAction
 
   data class SetBlockedKeywords(val keywords: List<String>) : UiAction
+
+  /**
+   * Turns the periodic follow-status refresh on or off.
+   *
+   * The preference alone is not enough: the worker honours it on every run, but a job that is
+   * still enqueued keeps waking the process every 30 minutes to answer "off" and return. The
+   * handler therefore also schedules or cancels the work.
+   */
+  data class SetBackgroundRefresh(val enabled: Boolean) : UiAction
+
+  /**
+   * Restricts the periodic refresh to Wi-Fi, or lets it use mobile data.
+   *
+   * No scheduling here, in contrast to [SetBackgroundRefresh]: the worker re-reads this value on
+   * every run, so re-enqueueing would only reset the 30-minute interval already counting down.
+   */
+  data class SetRefreshOnWifiOnly(val wifiOnly: Boolean) : UiAction
 
   data object RefreshPeers : UiAction
 
