@@ -2221,3 +2221,123 @@ Coil 3 默认拿可用空间的 2% 做磁盘缓存，而应用既不显示它、
 - 后台刷新开关（固定 30 分钟、无开关、无 Wi-Fi 限制）与自动同步：都要动 `MainViewModel`，
   顺序做，不能并行。
 - 媒体通知 + 前台服务仍然要真机在环。
+
+
+---
+
+## 第八十五轮迭代：密度/位置断言改在应用主题下量
+
+第三批并行两件事之一（另一件是第八十六轮）。提交：`2dd65d7`（85）、`043563f`（86）、
+`57d4c73`（修 CI 首红）。
+
+### 缺陷是什么
+
+第八十二轮查出来的盲区：那批 320dp"密度/位置"测试**没有一个装了 `LiveHubTheme`**——9 个里
+7 个连 `MaterialTheme` 都没包（沿用 Compose 默认 `Typography()`），2 个包的是裸 M3。于是它们
+量的是 M3 的 `bodySmall` 12sp，而应用是 13sp：阈值描述的是 fixture，不是产品。字号改动既不会
+让它们红，它们也拦不住字号改动。
+
+### 怎么修的
+
+- 9 个文件统一成 `setContent { LiveHubTheme { Box(size(...)) { Screen(...) } } }`（与
+  `LiveHubRoot` 同形）：`HomeCategoryDensityTest`（两个 setContent 入口都套）、
+  `CardInformationDensityTest`、`FollowTagsTest`、`PlayerChromeTest`、`DanmakuListOrderTest`、
+  `LongListReachabilityTest`、`SyncDialogSpaceTest`、`FollowFilterReachabilityTest`、
+  `AggregateCategoryChipTest`。
+- 每个文件写一句"为什么进主题"的注释（位置只有在该字阶下才有意义）。
+- **阈值一条没动、断言一条没删**（逐文件计数前后一致）。理由有几何依据：这两套字阶在
+  `labelLarge`(14/20)、`titleMedium`(16/24)、`labelMedium`、`labelSmall`、`bodyMedium` 上
+  逐字段相同，只有 `bodySmall`（12/16 → 13/18）会推进布局，而它只出现在
+  `SyncDialogSpaceTest` 的对话框注释与 `DanmakuListOrderTest` 的弹幕行里。
+
+### 本轮验证
+
+CI 一次通过（这两处都没有被 13sp 顶破）：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 836 个用例（+13，全部来自第八十六轮），0 失败 |
+| 仪器测试 | ✅ 52 张截图 |
+| Release assembly（R8） | ✅ |
+
+### 留下的
+
+- 同类盲区还剩三处（都是新加的测试，只断言存在性/顺序，不量位置）：
+  `RecentRoomsRowTest`、`CacheSettingsTest`、`BackgroundRefreshTest` 仍用裸 `MaterialTheme`。
+  它们不受字阶影响，收进主题是"统一"而不是"修缺陷"，留到下一次碰它们时顺手做。
+- 深色的 `themeMode` 路径仍没有 JVM 覆盖（这 9 个都用默认参数）。
+
+---
+
+## 第八十六轮迭代：后台刷新开关 + 仅 Wi-Fi
+
+### 缺陷是什么
+
+`FollowRefreshWorker` 固定每 30 分钟把每个关注房间的状态拉一遍：**没有开关、没有 Wi-Fi 限制**。
+100 个关注 = 每 30 分钟 100 个请求；移动数据下照跑；用户既不知道、也关不掉。设置页没有任何
+后台相关的东西。
+
+### 怎么修的
+
+- `UserSettings` 加 `backgroundRefresh = true` / `refreshOnWifiOnly = false`。两个默认值都是
+  硬要求——旧记录缺字段时 `decode` 会整条回落成 `UserSettings()`，默认写错等于让升级重置设置。
+- 判据抽成 `shouldRefresh(backgroundRefresh, wifiOnly, onWifi: Boolean?)`：`onWifi = null`
+  （无活动网络 / VPN 隧道 / 查询抛异常）**放行**。刷新本来就在所有网络上跑过，把"判断不出来"
+  读成"不是 Wi-Fi"会静默关掉这些用户的功能——失败要开不要闭。
+- `doWork()` 里两种拒绝都返回 **`Result.success()`**：用户关掉、或用户要 Wi-Fi 但在移动数据，
+  等下去不会变成相反答案；`retry` 只会按 backoff 反复重问还费电，而且 WorkManager 把 retry
+  记成失败，一次"故意的跳过"会显示成坏掉的任务。
+- 设置页新卡「后台刷新」（在「存储」之前）：两个 Switch，第一行关掉时第二行 **disabled 而不是
+  隐藏**（选择被记住，重新打开就生效）。副标题里的 "每 30 分钟" 直接读
+  `FollowRefreshWorker.INTERVAL_MINUTES`，避免说的和排的不一样。
+- 关掉时同时 `cancel` 已入队的任务：只写偏好会让开关看着是关的、任务却还在跑。
+- `LiveHubApplication` 只在开启时 `schedule`：否则用户关掉后重启，任务又回来了——开关会以
+  唯一要紧的方式失效（电池与唤醒）。失败一律 `runCatching` + 默认开，读不到设置不该拦住启动。
+
+### 两处新约定（值得沿用）
+
+1. **`testTag` 首次进入产品代码**（`BACKGROUND_REFRESH_SWITCH_TAG` / `WIFI_ONLY_SWITCH_TAG`）：
+   标签文字与 Switch 是两个不同的语义节点，`onNodeWithText` 打不到控件，而"关掉第一行时第二行
+   是否 disabled"只能问控件本身。常量 `internal`，测试复用同一个而不是复制字符串。
+2. **`UserPreferences.appContext`（internal）**：`AppContainer` 的 `applicationContext` 是
+   private 且无 accessor，而开关要传 context 给 `WorkManager`。否决了
+   `LiveHubApplication.instance` 那种进程级静态——Robolectric 里每个测试都会继承上一个测试的
+   Application。
+
+### 本轮验证
+
+`BackgroundRefreshTest` 13 条：`shouldRefresh` 真值表（含 null 放行）、旧记录解码后两个新字段
+取默认且 `themeMode` 没被顺带重置、设置页两个 Switch 与 disabled / enabled 两态、
+「后台刷新卡在存储卡之前」、ViewModel 写偏好并**新建 `AppContainer` 后仍为 false**（真的落盘）。
+
+### CI 首红：错在测试，不在代码
+
+第一次推送 `Build & test` 红在：
+
+```
+both background refresh switches are on the settings page
+The component ... contains '每 30 分钟检查一次关注列表里谁开播了' is not displayed!
+```
+
+`performScrollToNode(标题)` 一看到标题就不再滚，副标题还在折叠线下；`assertIsDisplayed` 对
+"被折叠线裁掉"的节点就是失败。改法是**滚到副标题本身再断言**（与标题同一行的 Switch 改成在
+标题可见时先断言）。这条与第七十五/七十六轮那条教训同类：**断言什么就先滚到什么**。
+`57d4c73` 全绿。
+
+### 没做到的（agent 主动列出的三处未测）
+
+- `doWork()` 里那道 gate、`schedule/cancel` 的调用、`LiveHubApplication` 的启动开关都没有
+  端到端测试：`WorkerParameters` 是 `@RestrictTo`（用它会撞 lint `RestrictedApi`），而
+  `work-testing`（`WorkManagerTestInitHelper`）不在依赖里。可测的接缝（`shouldRefresh`）已全部
+  钉住，`doWork` 里只剩"查网络 + 一行 if + return"。
+- `ConnectivityManager` 的查询依赖平台，只在真机上才有真实取值。
+- 后台刷新的 **30 分钟真机上是否按预期跑**，仍然要真机验证。
+
+### 下一轮
+
+- **自动同步**（必须两台设备都停在同步页）是待办清单最后一条功能项；它和后台刷新一样要动
+  `MainViewModel`，所以只能单独一轮。
+- 媒体通知 + 前台服务仍然要真机在环。
+- 顺带记一条测量口径的问题：本轮三张关注页截图（`07b`/`07c`/`07d`）比上一轮多了 1–10 字节，
+  内容看不出差别——**这几张渲染不是逐字节稳定的**，以后拿"逐字节未变"当证据时要避开它们。
