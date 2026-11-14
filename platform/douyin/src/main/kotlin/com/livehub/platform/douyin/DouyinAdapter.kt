@@ -84,15 +84,23 @@ class DouyinAdapter(
 
     val partitioned = runCatching {
       api.rooms(partition = partition, partitionType = partitionType, page = page)
-    }.getOrNull()
-    if (partitioned != null && partitioned.first.isNotEmpty()) {
+    }
+    val answered = partitioned.getOrNull()
+    // An empty *answer* is not a failed request. "This partition has nothing on right now" has to
+    // stay empty — including the last page of a longer list, which the grid appends to the rooms it
+    // already has. Only a failure earns the fallback; the previous code treated both the same, so a
+    // quiet partition (and every page past the end) silently showed 推荐 content under the
+    // partition's name.
+    if (answered != null) {
       return RoomPage(
-        rooms = partitioned.first,
-        nextCursor = if (partitioned.second) (page + 1).toString() else null,
+        rooms = answered.first,
+        nextCursor = if (answered.second) (page + 1).toString() else null,
       )
     }
 
-    // Fallback: the feed only serves one page, so no cursor is offered.
+    // The signature was rejected (an expired `msToken`, or Douyin tightening the check again).
+    // This is a genuine degradation, not the normal path: the feed ignores the partition, so the
+    // tab shows 推荐 content under a partition label.
     val feed = runCatching { api.feed(offset = (page - 1) * DouyinApi.PAGE_SIZE, count = DouyinApi.PAGE_SIZE) }
       .getOrDefault(emptyList<Streamer>() to false)
     return RoomPage(rooms = feed.first, nextCursor = null)
