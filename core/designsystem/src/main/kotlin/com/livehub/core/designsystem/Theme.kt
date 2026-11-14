@@ -62,7 +62,12 @@ private val LightScheme: ColorScheme = lightColorScheme(
   onSurfaceVariant = Color(0xFF5A5560),
   surfaceContainer = SurfaceContainerLight,
   surfaceContainerHigh = Color(0xFFE9E6EF),
-  surfaceContainerLow = Color(0xFFFBFAFD),
+  // Material's filled `Card` takes this one, and at `0xFFFBFAFD` it was the page background with a
+  // hair more white in it: a screen of settings cards read as one flat sheet with text floating on
+  // it. The page is `BackgroundLight` (a cool near-white) and the cards are pure white, so a card
+  // is a thing sitting on the page rather than a tint of it — the same relationship the room tiles
+  // already use (`StreamerCard` is `surface` over `background`).
+  surfaceContainerLow = SurfaceLight,
   outline = Color(0xFF9A94A3),
   outlineVariant = OutlineLight,
   error = Color(0xFFBA1A1A),
@@ -88,7 +93,7 @@ private val DarkScheme: ColorScheme = darkColorScheme(
   onSurfaceVariant = Color(0xFFB9B2C1),
   surfaceContainer = SurfaceContainerDark,
   surfaceContainerHigh = Color(0xFF2E2B36),
-  surfaceContainerLow = Color(0xFF161419),
+  surfaceContainerLow = SurfaceDark,
   outline = Color(0xFF6E6878),
   outlineVariant = OutlineDark,
   error = Color(0xFFFFB4AB),

@@ -31,11 +31,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil3.SingletonImageLoader
 import com.livehub.app.BuildConfig
 import com.livehub.app.sync.FollowRefreshWorker
+import com.livehub.app.ui.components.SectionHeader
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import java.util.Locale
@@ -58,7 +58,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     item {
-      SectionTitle("外观")
+      SectionHeader("外观")
       Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
           Text("主题", style = MaterialTheme.typography.bodyLarge)
@@ -83,7 +83,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item {
-      SectionTitle("弹幕")
+      SectionHeader("弹幕")
       Card(modifier = Modifier.fillMaxWidth()) {
         Row(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -106,7 +106,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item {
-      SectionTitle("弹幕屏蔽词")
+      SectionHeader("弹幕屏蔽词")
       Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Row(verticalAlignment = Alignment.CenterVertically) {
@@ -152,17 +152,17 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item {
-      SectionTitle("后台刷新")
+      SectionHeader("后台刷新")
       BackgroundRefreshCard(state = state, onAction = onAction)
     }
 
     item {
-      SectionTitle("存储")
+      SectionHeader("存储")
       ImageCacheCard(onAction = onAction)
     }
 
     item {
-      SectionTitle("账号")
+      SectionHeader("账号")
       Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         com.livehub.app.ui.components.BilibiliLoginCard(
           state = state.bilibiliLogin,
@@ -179,7 +179,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item {
-      SectionTitle("关于")
+      SectionHeader("关于")
       Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Row(
@@ -280,15 +280,6 @@ private fun BackgroundRefreshCard(state: UiState, onAction: (UiAction) -> Unit) 
   }
 }
 
-@Composable
-private fun SectionTitle(text: String) {
-  Text(
-    text = text,
-    style = MaterialTheme.typography.titleSmall,
-    fontWeight = FontWeight.SemiBold,
-    modifier = Modifier.padding(top = 4.dp),
-  )
-}
 
 /**
  * The image cache card: what Coil is holding on disk and in memory, and the one control that

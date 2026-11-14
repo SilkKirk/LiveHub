@@ -2,8 +2,6 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -51,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
+import com.livehub.app.ui.components.SectionHeader
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.sync.SyncLogEntry
@@ -106,7 +105,7 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
     item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
     item {
-      Text("同步记录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+      SectionHeader("同步记录")
     }
 
     if (state.syncLog.isEmpty()) {
@@ -138,58 +137,63 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
 }
 
 /**
- * The three actions at the top of the page: 立即同步, 关联设备 and the peer-list refresh.
+ * The actions at the top of the page: 立即同步 as the one primary action, 关联设备 and the peer-list
+ * refresh beside it as secondary ones.
  *
- * A `FlowRow`, not a `Row`, because these are three *actions* with one tap target each. A `Row`
- * measures its children against whatever width is left, so at 1.5× the text scale it squeezed
- * 「关联设备」into one character per line and the 48dp refresh icon into a sliver — the icon was
- * still in the tree and simply not on the screen (`31-sync-large-font`). A wrapping row moves what
- * does not fit onto the next line instead, so every action keeps its own width and its own touch
- * target, and all three stay within a thumb's reach of where they were.
+ * **Why not three buttons in a row.** By Material's own tokens three of them need about
+ * 134 + 8 + 134 + 8 + 48 ≈ 332dp while the 320dp render window leaves 288dp, so at 1.0× the refresh
+ * icon was squeezed to a sliver — it was in the tree and simply not on screen, which is why `13-sync`
+ * never showed it. Wrapping them (`FlowRow`) fixed that but produced a 48dp icon alone on a second
+ * line, which reads as a leftover rather than as a control.
  *
- * The two alternatives are worse for the same reason:
- *  * a horizontal scroll keeps one line by pushing the last action off the screen, and an action
- *    that has to be scrolled for is the one nobody finds;
- *  * shrinking the labels would fit the row by making it harder to read, which is the opposite of
- *    what someone who raised the system font size asked for.
- *
- * **The 1.0× margin is negative, and it was already.** By Material's own tokens the row needs about
- * 134 + 8 + 134 + 8 + 48 ≈ 332dp — two buttons at 24dp of side padding each plus a 24dp leading icon
- * and a 14sp four-character label, one 48dp icon button, two 8dp gaps — while the 320×640 device the
- * screenshots are rendered on leaves 320 - 2 × 16 = 288dp. That is ~44dp over budget at 1.0×, so the
- * old `Row` was squeezing the refresh icon there as well, which is why `13-sync` does not show it
- * complete. Wrapping repairs that too — the icon drops to a second line at its full size — and on a
- * wider phone (411dp leaves 379dp) the row still fits on one line with roughly 45dp to spare, which
- * is where the 1.0× render is unchanged.
+ * The row is now a hierarchy instead of a queue: the primary action takes the full width (it is the
+ * only one that changes data), and the two setup actions share the line below, one of them weighted
+ * so the icon keeps its 48dp and nothing can be squeezed to zero. At 1.5× the secondary row still
+ * holds both, which is what `31-sync-large-font` checks.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SyncActionsRow(
   state: UiState,
   onAction: (UiAction) -> Unit,
   onOpenMatchingCode: () -> Unit,
 ) {
-  FlowRow(
-    modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
+  // One primary action, then one row of secondary ones — not three buttons of equal weight.
+  //
+  // 立即同步 is what this page exists for and it is the only one that changes data; 关联设备 and the
+  // refresh are setup and housekeeping. Three same-sized buttons in a row said the opposite, and at
+  // 320dp they did not fit anyway (the refresh icon was squeezed out of the row entirely at 1.0×,
+  // and the whole block fell apart at 1.5× — `13-sync` / `31-sync-large-font`). A full-width primary
+  // also gives the page an anchor: the eye lands on the one thing that does something before it
+  // reads the card of numbers above it.
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Button(
       onClick = { onAction(UiAction.SyncNow) },
       enabled = state.peers.isNotEmpty() && !state.syncing,
+      modifier = Modifier.fillMaxWidth(),
     ) {
       Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
       Text(if (state.syncing) "同步中…" else "立即同步")
     }
-    OutlinedButton(
-      onClick = onOpenMatchingCode,
-      enabled = !state.pairing,
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-      Text(if (state.pairing) "匹配中…" else "关联设备")
-    }
-    IconButton(onClick = { onAction(UiAction.RefreshPeers) }) {
-      Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+      OutlinedButton(
+        onClick = onOpenMatchingCode,
+        enabled = !state.pairing,
+        modifier = Modifier.weight(1f),
+      ) {
+        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+        Text(if (state.pairing) "匹配中…" else "关联设备")
+      }
+      // The peer list's own refresh sits at the end of the row rather than in a line by itself: it
+      // is the smallest action here, and an orphaned 48dp icon under two buttons reads as a
+      // leftover. A `Row` is safe now — the two items above it are weighted and full-width, so
+      // nothing can be squeezed to zero the way three fixed-size buttons were.
+      IconButton(onClick = { onAction(UiAction.RefreshPeers) }) {
+        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+      }
     }
   }
 }
