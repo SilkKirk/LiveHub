@@ -24,8 +24,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -262,6 +264,14 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
  * 取消关注 lives down here for the same reason. It is the one action on this screen that throws a
  * record away, and there is no third place on the card to put it, so it goes behind a gesture and
  * behind a second tap rather than on the tile.
+ *
+ * Laid out in three bands: the title row fixed, then the two explanations and the chips scrolling,
+ * then the 新标签 field and 取消关注 fixed at the bottom. Which band is allowed to move is the design
+ * decision here, not an implementation detail — a tag list you have to scroll through is still a
+ * list, while a 取消关注 you have to scroll to find is a button that does not exist. The fixed rows
+ * used to include the paragraphs, and a 1.5× render showed what that costs: the text took every dp
+ * the sheet had, the chip list was measured at zero height, and the divider with the unfollow row
+ * was laid out behind the sheet's bottom edge.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -289,16 +299,20 @@ private fun TagEditorSheet(
         .pointerInput(Unit) { detectTapGestures { onDismiss() } },
     )
     Surface(
-      // Taller than this panel used to be: the unfollow row and its warning are fixed height and
-      // sit below the chip list, and at 0.55 the chips — the part the panel exists for — were down
-      // to two rows on the smallest screen the app targets.
-      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f).align(Alignment.BottomCenter),
+      // 0.7 rather than the 0.6 this panel carried. At 1.5× the fixed rows — title, the 新标签 field,
+      // the divider and the unfollow row — come to about 173dp, and the six lines of explanation
+      // that now scroll need 176 more before the first chip can be drawn. Under 0.6 the band was
+      // 179dp: the text filled it exactly and the chips sat below the fold, which is what the fix
+      // would look like if it had not moved the panel with it. Not full height, either — the grid
+      // behind the scrim is the context this panel is about, and the sheet is a detour from it.
+      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.7f).align(Alignment.BottomCenter),
       shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 3.dp,
       shadowElevation = 8.dp,
     ) {
       Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // Band 1, fixed: which room this is, and the way out.
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
           Text(
             text = streamer.streamerName.ifBlank { "未知主播" },
@@ -310,48 +324,59 @@ private fun TagEditorSheet(
           )
           TextButton(onClick = onDismiss) { Text("完成") }
         }
-        // Two nodes rather than one sentence: an existing test pins the first line verbatim, and
-        // the second warns about the button at the bottom instead of explaining labels further.
-        Text(
-          text = "标签只用于关注页筛选，会随关注列表一起同步到已配对的设备。",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.padding(top = 6.dp),
-        )
-        Text(
-          text = "取消关注会把主播从列表里移除，它的标签只在关注页用，也会一起消失。",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
-        )
-
-        if (known.isEmpty() && tags.isEmpty()) {
+        // Band 2, the only part that scrolls: the text that explains the labels, and the labels.
+        // These are the two things with no ceiling — 1.5× text turns a paragraph into three lines,
+        // and tags accumulate with use — so they are the ones that have to give way.
+        Column(
+          modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        ) {
+          // Two nodes rather than one sentence: an existing test pins the first line verbatim, and
+          // the second warns about the button at the bottom instead of explaining labels further.
           Text(
-            text = "还没有任何标签，先加一个试试。",
+            text = "标签只用于关注页筛选，会随关注列表一起同步到已配对的设备。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
           )
-        }
-        LazyColumn(modifier = Modifier.weight(1f)) {
-          item {
-            FlowRow(
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-              verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              (known + tags).distinct().forEach { tag ->
-                val selected = tag in tags
-                FilterChip(
-                  selected = selected,
-                  onClick = {
-                    onTagsChange(if (selected) tags - tag else tags + tag)
-                  },
-                  label = { Text(tag) },
-                )
-              }
+          Text(
+            text = "取消关注会把主播从列表里移除，它的标签只在关注页用，也会一起消失。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+          )
+
+          if (known.isEmpty() && tags.isEmpty()) {
+            Text(
+              text = "还没有任何标签，先加一个试试。",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          // A FlowRow rather than the LazyColumn this used to be. A lazy list inside a scroll
+          // container is measured with an infinite height and throws; the tags in use are a short
+          // list, so nothing wants laziness here.
+          FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            (known + tags).distinct().forEach { tag ->
+              val selected = tag in tags
+              FilterChip(
+                selected = selected,
+                onClick = {
+                  onTagsChange(if (selected) tags - tag else tags + tag)
+                },
+                label = { Text(tag) },
+              )
             }
           }
         }
 
+        // Band 3, fixed: writing a tag, and dropping the follow. Neither may scroll away.
         Row(verticalAlignment = Alignment.CenterVertically) {
           OutlinedTextField(
             value = draft,

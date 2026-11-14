@@ -125,6 +125,25 @@ class FollowUnfollowTest {
   }
 
   /**
+   * The tags are on the panel's first screen, not behind a fold.
+   *
+   * A 1.5× render of this panel is what produced the scrolling band in `TagEditorSheet`: the two
+   * explanations grew to six lines, the chip list was measured at zero height and the unfollow row
+   * was laid out past the sheet's bottom edge. The JVM cannot reproduce that — Robolectric's text
+   * measurement is a stub, so the same paragraphs come out a couple of pixels tall here — so this
+   * pins the half that is reproducible: at 1.0× the tags are inside the panel and inside the window.
+   * If a later change pushes them below the fold at the default text size, this goes red before the
+   * large-font render does.
+   */
+  @Test
+  fun `the tags sit on the panel's first screen`() {
+    render()
+    openPanel()
+
+    composeRule.onNodeWithText("常看").assertIsDisplayed()
+  }
+
+  /**
    * The first tap arms the button and stops there.
    *
    * This is the assertion the whole feature hangs on: a version that unfollowed on the first tap
