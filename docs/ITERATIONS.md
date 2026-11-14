@@ -2455,3 +2455,107 @@ bind 端口（`navigate()` 里 start、离开时 stop）。于是"再加一台�
 2. **媒体通知 + 前台服务**（要真机在环；开播提醒按用户要求搁置）。
 3. 两处可选的小尾巴：同步页那张新卡没有 UI 测试（见第八十七轮"没做到的"）；
    `onAppForeground` 的 `start()` 还在主线程。
+
+
+---
+
+## 第八十九轮迭代：同步收尾（bind 出主线程 + 自动同步卡的 UI 测试）
+
+### 缺陷是什么
+
+第八十七轮留下的两处：`SyncController.start()` 在**主线程**同步 bind `ServerSocket`，而它现在
+每次回前台都会调；同步页那张新的「自动同步」卡零测试。
+
+### 怎么修的
+
+- **`startAsync()`**：bind 在 `Dispatchers.IO`，**地址在同一次跳里读回**（端口可能是临时端口，
+  出了那一跳就过时）。`startMutex` 串行化 bind；`stopGeneration` 在跳**之前**捕获、在发布前的
+  临界区校验——"前台 start 紧接着退后台"不会复活一个没人持有的 listener，而是把新 socket 关掉。
+- **`MainViewModel`**：单飞 job + `awaitSyncServer()` 表达"什么时候可以读地址"；
+  `UiState.localAddress` 成为唯一可信来源；`autoSyncIfDue` 先等服务器起来再交换（否则自动那次会以
+  "同步服务未启动"空跑，而它没有 snackbar 可以解释）。
+- **同步版 `start()` 保留**：instrumented 的 `SyncOffMainThreadTest` 依赖"调完就真"的语义，注释
+  写明它为什么还在，免得下一个人以为是漏改。
+- **卡片 UI 测试**（`SyncAutoCardTest` 3 条）：加 `internal` testTag，断言卡片与副标题够得着且
+  bounds 在 320×640 内、Switch 跟随 `autoSyncEnabled`、点一下发出 `SetAutoSync(false)`（反向发 true）。
+
+`AutoSyncTest` 里 5 处"调完立刻读 `isRunning`"改成 `awaitCondition`，**断言一条没删**。
+
+### 没做到的
+
+- **"bind 真的不在主线程"没有测试**。Robolectric 不开 StrictMode，而"调用后立刻
+  `isRunning == false`"本身是竞态的。正解是在 instrumented 的 `SyncOffMainThreadTest` 里加一条
+  （在 `runOnMainSync` 里调 `onAppForeground()`，断言不抛 `NetworkOnMainThreadException`），
+  但那个文件不在本轮写作用域里——留给下一轮或真机。
+- `UiState.localAddress` 的时序没有断言（需要容忍"没有局域网接口"这一情形，CI 上不稳）。
+
+---
+
+## 第九十轮迭代：大字号可见性（harness 加 fontScale）
+
+审计里一直挂着"fontScale 从没验证过"，而第八十二轮刚把字阶调大。**JVM 测试量不了这件事**
+（Robolectric 字宽是桩：两字标签的内在宽度 2.5px），真实字体只存在于仪器测试，所以入口是截图。
+
+- `capture()` 新增 `fontScale: Float = 1f`，用
+  `CompositionLocalProvider(LocalDensity provides Density(density, fontScale))` **局部**覆盖——
+  不改模拟器全局显示设置（第三十五轮：改了它会让 38 张竖屏渲染全变）。
+- **1f 时不提供任何 local**，所以既有 52 张图逐字节不变——这一条当轮就验证了：r90 与 r88 相比，
+  52 张里只有 3 张变，而它们是第八十六轮记过的"逐字节不稳定"那三张（差 1–10 字节）。
+- 四张 1.5×：`24-home`、`25-search`、`26-follow`、`27-settings`。1.5 是系统辅助功能里 stock UI
+  的 large 档。
+
+### 当轮就抓到两个缺陷
+
+1. **`25-search-large-font` 直接让 instrumented job 红了**：
+   `IllegalArgumentException: performMeasureAndLayout called during measure layout`。根因是第七十八
+   轮写的平台行自动滚动——`snapshotFlow{layoutInfo}` 会在**产出快照的那次布局里**恢复，
+   `scrollToItem` 于是请求"在测量中再测量"。**为什么现在才炸**：1.0× 下被选中的 chip 大多已在屏内，
+   滚动是空操作；1.5× 下第五个 chip 才真的在屏外。也就是说**真机大字用户点开搜索页会崩**。
+2. **`24-home-large-font` 里四个平台 tab 每个只剩一个字**（斗 / 虎 / 抖 / B）——第七十八轮同一个
+   截断在放大字号后重现（那次是四个字的「哔哩哔哩」，这次是两个字的短名）。
+
+---
+
+## 第九十一轮迭代：修大字号下的两处（崩溃 + 截断）
+
+### 崩溃：自动滚动不能在布局里请求测量
+
+改成 `withFrameNanos { }` 之后再读 `layoutInfo`——帧回调跑在组合与测量之前，之后的
+`scrollToItem` 是合法的测量请求。注释里写了这条因果，免得以后有人"优化"掉那一帧。
+修完 `25-search-large-font` 通过，同时 `the restored platform is scrolled into view`（第七十八轮
+那条 JVM 用例）仍然绿——滚动照旧发生，只是晚一帧。
+
+### 截断：tab 标签用 `autoSize`
+
+两个汉字在 24sp（1.5× 下的 `titleMedium`）要 48dp，而每个 tab 的内容宽度只有约 34dp。
+改成 `autoSize = TextAutoSize.StepBased(minFontSize = 11.sp, maxFontSize = 标题字阶)`：**放不下就缩，
+缩到放得下为止**，下限是应用里最小的一级字号。取舍写在代码里：导航标签切掉一半比小一号难用得多。
+修完 `24-home-large-font` 四个标签完整可读。
+
+### 再看两处静态排查里最可疑的
+
+- **`28-player-large-font`（操作行 关注/分享/弹幕）**：静态排查算出"距溢出约 24dp"，**实测没溢出**。
+  标题按预期折两行、弹幕行正常。这条预测是错的，记下来。
+- **`29-follow-special-large-font`（特别关注头像行）**：名字被省略号截成「一条…」「旭旭…」。
+  这是全仓唯一一处"固定槽位里的名字"（头像 56dp、整行 86dp，1.5× 下文字行 24dp 正好顶格）。
+  **接受**，理由：这一行是快捷入口，头像才是标识，名字只是辅助；要看全名可以点首页的「添加」
+  打开选择面板（那里是全宽行）。若哪天要改，办法是给名字两行而不是加宽槽位。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ **852** 个用例（+3，全部来自第八十九轮的卡片 UI 测试），0 失败 |
+| 仪器测试 | ✅ **58** 张截图（52 → +4 张 1.5× → +2 张），逐张看过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `d5987ac` 三个 job 全绿 |
+
+### 留下的
+
+- **1.0× 的 52 张图里，只有那三张"逐字节不稳定"的在变**，其余 49 张在 harness 改造后逐字节不变——
+  `capture()` 的改动是安全的。
+- 大字号只覆盖了 6 个屏幕（4 + 玩家 + 特别关注行），**弹幕列表、标签编辑面板、同步页、搜索空态**
+  还没在 1.5× 下拍过；`fontScale` 参数已经就位，以后加一行即可。
+- 2.0×（系统最大档）没拍。静态排查认为 `PrimaryTabRow` 的 48dp 与底部导航的 80dp 会在 2.0×
+  顶满，但没有图。
