@@ -1135,6 +1135,30 @@ class ScreenshotTest {
   @Test
   fun settingsLargeFont() = capture("27-settings-large-font", settingsState(), fontScale = 1.5f)
 
+  /**
+   * The player at 1.5×: the action row (关注 / 分享 / 弹幕) and the danmaku list.
+   *
+   * The action row is the one `Row` in the app with three fixed-size children and no wrap, and the
+   * static review predicted it to be within ~24dp of overflowing at this scale. Whether it does is
+   * a picture, not an argument.
+   */
+  @Test
+  fun playerLargeFont() = capture("28-player-large-font", playerState(), fontScale = 1.5f)
+
+  /**
+   * The 特别关注 avatar row at 1.5×: the one place a name is drawn in a fixed 56dp slot.
+   *
+   * Every other text block in the app either wraps, ellipsizes or scrolls; this row is `size(56.dp)`
+   * per avatar with the name underneath, so "一条小团团" gets about three characters. That is the
+   * static review's worst prediction, and it is not visible in any other render.
+   */
+  @Test
+  fun followSpecialLargeFont() = capture(
+    "29-follow-special-large-font",
+    followTagsState().copy(specialFollowKeys = listOf(followRooms[0].key, followRooms[1].key)),
+    fontScale = 1.5f,
+  )
+
   // -------------------------------------------------------------------- helpers ---
 
   /**

@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -61,6 +62,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.livehub.app.ui.components.CardMinWidth
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.ErrorState
@@ -401,11 +403,22 @@ private fun PlatformTabs(
             // `shortName`, not `displayName`: four tabs share 66dp each on a 320dp phone, and
             // "哔哩哔哩" was drawn as "哔哩" — clipped silently, because a one-line `Text`
             // defaults to `TextOverflow.Clip`. See `Platform.shortName`.
+            //
+            // `autoSize` for the same reason one font step up: at the system's 1.5× text size the
+            // two CJK glyphs of a short name need 48dp of the tab's ~34dp of content width, and the
+            // render `24-home-large-font` showed every label cut down to its first character —
+            // "斗", "虎", "抖", "B". Shrinking to fit is the right trade for a navigation label:
+            // half a character is unusable, a slightly smaller one is not, and the floor keeps it
+            // from going below the size the rest of the app draws its small text at.
             Text(
               text = platform.shortName,
               style = MaterialTheme.typography.titleMedium,
               fontWeight = if (pagerState.currentPage == index) FontWeight.Bold else FontWeight.Medium,
               maxLines = 1,
+              autoSize = TextAutoSize.StepBased(
+                minFontSize = 11.sp,
+                maxFontSize = MaterialTheme.typography.titleMedium.fontSize,
+              ),
             )
           },
         )
