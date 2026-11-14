@@ -3258,3 +3258,39 @@ README 去掉"按名字/标题过滤"。
    才敢改。
 9. 抖音 `has_more` 缺失时仍用「映射后条数 >= 20」猜到底（实测分区每页 15 条），与第
    23/26/27 轮修过的是同一类缺陷，抖音没有跟进。
+
+### 补充（同一轮，审计报告回来之后）
+
+六个审计里的最后一份（状态层）在主体工作已经推送、CI 已经绿了之后才回来，其中一条必须
+立刻修：**本轮新增的 `InlineErrorNotice` 让一条旧缺陷第一次变成用户可见的文本**。
+
+`MainViewModel` 里有 7 处显式重抛 `CancellationException`，另有 5 处 `catch (Exception)`
+把它一起吞掉（`loadCategories` / `loadRooms` / `openRoom` / `selectQuality` /
+`startBilibiliLogin`）。每个可取消槽位都是「取消旧的 → 立刻启动新的并写
+`loading = true, error = null`」，而被取消的协程要等到下一个挂起点才恢复——那时新请求的状态
+已经写进去了，于是它把 state 覆盖成 `error = "Job was cancelled"`，同时把新请求的
+`loading`/`refreshing` 一起关掉。以前这个字段没有渲染出口，所以只是"内部脏值"；本轮给首页
+加了那条失败提示之后，它会变成**网格上方的一行英文 Kotlin 异常**。B 站扫码登录点「取消」是最
+短的一条复现路径：卡片上直接显示 `Job was cancelled`。
+
+五处各补三行，与已有七处一致。新增 `CancelledRequestStateTest` 钉住"被替换的加载不留失败、
+真失败仍要上报"这一对不变量。
+
+**这一节的测试写了三版才对，值得记下来**：
+
+1. 第一版用「门控假适配器 + 断言取消后 error 为 null」。CI 三个用例全部
+   `condition not met within 5000ms`。根因是门控把 `categories()` 也挡住了，而
+   `MainViewModel` 构造时就要 `loadCategories` → 构造本身被挂起，测试永远等不到第一次请求。
+2. 第二版只挡 `rooms()`，仍然超时：让协程在主线程上 `await()` 会把 Robolectric 的 looper
+   一起卡住，`idle()` 推进不了它。真实适配器走 OkHttp 回调线程，**不会**占住调用方
+   dispatcher——假件必须复现这一点，也就是把等待放到 `Dispatchers.IO` 上。
+3. 第三版不再依赖时序：假适配器按次数失败/恢复，断言那条与调度无关的不变量（替换后状态干净 +
+   真失败仍上报）。**教训**：测试替身要复刻的是"在哪个线程挂起"，不是"挂起多久"；用门控去
+   制造竞态，往往只是把不确定性从产品代码搬进了测试。
+
+另外两条同轮修正：`:app` 是 JUnit 4（message 在**第一位**），我在这条新测试里写反了一次；
+两次都发生在**新建**测试文件时——运行手册那条"先看 import 再写断言"应当扩大到"新建文件
+默认先确认 JUnit 版本"。
+
+最终 CI：`f9e206e`（主体）与 `f01743b`（取消语义 + 测试）两次三个 job 全绿。
+
