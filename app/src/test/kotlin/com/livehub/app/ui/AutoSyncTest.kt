@@ -166,8 +166,10 @@ class AutoSyncTest {
     pairDevice()
 
     viewModel.onAppForeground()
-    idle()
-
+    // The bind moved off the main thread (every foreground entry used to bind a socket there),
+    // so "running" is a condition to wait for rather than a value to read on the next line. The
+    // assertion below is unchanged — the wait is what makes reading it meaningful again.
+    awaitCondition { container.syncController.isRunning }
     assertTrue(
       "with a device paired and the switch on, the foreground must open the port",
       container.syncController.isRunning,
@@ -203,7 +205,8 @@ class AutoSyncTest {
   fun `the switch takes the port down and puts it back`() {
     pairDevice()
     viewModel.onAppForeground()
-    idle()
+    // Same reason as above: the start it asks for is a coroutine now.
+    awaitCondition { container.syncController.isRunning }
     assertTrue(container.syncController.isRunning)
 
     viewModel.onAction(UiAction.SetAutoSync(false))
@@ -219,6 +222,9 @@ class AutoSyncTest {
     viewModel.onAction(UiAction.SetAutoSync(true))
     idle()
 
+    // The switch's own start is asynchronous too, so this waits for the same condition instead of
+    // reading it a statement later.
+    awaitCondition { container.syncController.isRunning }
     assertTrue(
       "switching it back on must reopen the port",
       container.syncController.isRunning,
@@ -237,7 +243,7 @@ class AutoSyncTest {
   fun `the sync page still listens with automatic sync switched off`() {
     pairDevice()
     viewModel.onAppForeground()
-    idle()
+    awaitCondition { container.syncController.isRunning }
     assertTrue("the policy must have opened the port to begin with", container.syncController.isRunning)
 
     viewModel.onAction(UiAction.Navigate(Screen.Sync))
@@ -282,6 +288,7 @@ class AutoSyncTest {
     viewModel.onAppForeground()
     idle()
 
+    awaitCondition { container.syncController.isRunning }
     assertTrue("the page must be listening again", container.syncController.isRunning)
     assertEquals(
       "a new six digit code must be on screen",
@@ -308,10 +315,12 @@ class AutoSyncTest {
     pairDevice()
 
     viewModel.onAppForeground()
-    // The exchange hops to `Dispatchers.IO` for its sockets, so `syncing` is the honest signal that
-    // it is both started and finished — the assertion is about the settled outcome. The budget is
-    // generous because an unreachable peer costs the locator's own three second sweep.
-    assertTrue("the automatic exchange must start", viewModel.state.value.syncing)
+    // "It has started" is no longer readable synchronously: the automatic run first waits for the
+    // bind (which is off the main thread now) and only then begins the exchange. The log row is the
+    // monotone proof that the exchange *ran*, which is the stronger claim, and it is written when
+    // the run finishes — so the budget also covers the locator's three second sweep for a peer that
+    // is not there.
+    awaitCondition(timeoutMillis = 20_000) { viewModel.state.value.syncLog.isNotEmpty() }
     awaitCondition(timeoutMillis = 20_000) { !viewModel.state.value.syncing }
 
     assertNull(
@@ -335,7 +344,11 @@ class AutoSyncTest {
   fun `a second foreground entry does not start another exchange`() {
     pairDevice()
     viewModel.onAppForeground()
-    awaitCondition(timeoutMillis = 20_000) { !viewModel.state.value.syncing }
+    // Waits for the first exchange to have *finished*: `!syncing` alone returns immediately now,
+    // because the run only begins after the bind it waits for.
+    awaitCondition(timeoutMillis = 20_000) {
+      viewModel.state.value.syncLog.isNotEmpty() && !viewModel.state.value.syncing
+    }
     val entriesAfterFirstRun = viewModel.state.value.syncLog.size
     assertTrue("the first entry must have exchanged something", entriesAfterFirstRun > 0)
 

@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -384,6 +385,7 @@ private fun AutoSyncCard(state: UiState, onAction: (UiAction) -> Unit) {
       Switch(
         checked = state.autoSyncEnabled,
         onCheckedChange = { onAction(UiAction.SetAutoSync(it)) },
+        modifier = Modifier.testTag(AUTO_SYNC_SWITCH_TAG),
       )
     }
   }
@@ -546,3 +548,13 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
     }
   }
 }
+
+/**
+ * Tag for the 自动同步 switch, for `SyncAutoCardTest`.
+ *
+ * The card exists since round 87 with no test at all, and it cannot be found by text alone on the
+ * smallest phone: the page is a `LazyColumn` and an item below the fold is not composed, so the
+ * switch has to be scrolled to before it can be matched. Same shape as the settings screen's switch
+ * tags (`BACKGROUND_REFRESH_SWITCH_TAG`), which exist for the same reason.
+ */
+internal const val AUTO_SYNC_SWITCH_TAG = "autoSyncSwitch"

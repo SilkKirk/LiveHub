@@ -27,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -74,6 +76,35 @@ class SyncController(
   private val discoveryJob = mutableListOf<kotlinx.coroutines.Job>()
 
   /**
+   * Serialises the bind itself, not the whole lifecycle.
+   *
+   * The foreground callback, the sync page and the automatic exchange can all ask for a server
+   * within the same frame. Two binds racing would take the preferred port from each other (the
+   * loser falls back to an ephemeral one) and leave a listener nobody holds a reference to, so the
+   * bind runs one at a time and the second caller finds the first one's server already up.
+   */
+  private val startMutex = Mutex()
+
+  /**
+   * Guard for the publish step at the end of a bind.
+   *
+   * Binds and `stop()` now run on different threads (bind on [Dispatchers.IO], stop wherever the
+   * activity calls it), so "is this server still wanted?" has to be answered atomically with
+   * publishing it. See [stopGeneration].
+   */
+  private val lifecycleLock = Any()
+
+  /**
+   * How many times [stop] has run.
+   *
+   * A bind in flight captures this when the caller *asks* — before any thread hop — and refuses to
+   * publish itself if the number changed meanwhile. Without it, "start on foreground entry, stop
+   * one frame later" could leave a listener running that nothing tracks: exactly the background
+   * socket the foreground policy exists to prevent.
+   */
+  @Volatile private var stopGeneration: Int = 0
+
+  /**
    * The code shown on this device, with its expiry and failed-attempt budget.
    *
    * Owned here rather than in the UI so a recomposition cannot silently mint a new code
@@ -94,6 +125,15 @@ class SyncController(
   @Volatile var listeningPort: Int = 0
     private set
 
+  /**
+   * `"192.168.1.23:47653"` — where peers can reach this device — or null while nothing listens.
+   *
+   * **Only meaningful after [startAsync] has returned.** The port does not exist until the bind
+   * landed, and it can be an ephemeral one, so a reader that asks earlier gets null (or the
+   * previous run's port). That is the whole reason [startAsync] returns the address itself: the app
+   * publishes it as `UiState.localAddress` in the same hop, and that field — not this getter — is
+   * what the UI and the rest of the ViewModel read.
+   */
   val serverAddress: String?
     get() = PeerAddressBook.preferredLocalAddress()?.let { "$it:$listeningPort" }
 
@@ -113,20 +153,66 @@ class SyncController(
     addressBook.forget(deviceId)
   }
 
+  /**
+   * True once a bind has completed and not been undone since.
+   *
+   * A *polled* fact, not a promise that a [start] or [startAsync] call has taken effect: since the
+   * bind moved off the caller's thread, it can still be in flight when the caller asks. Anything
+   * that has to react to "the server is up" awaits [startAsync] (which returns only after the bind
+   * landed) or polls this.
+   */
   val isRunning: Boolean get() = server?.isRunning == true
 
   /**
-   * Starts discovery and the LAN server.
+   * Starts discovery and the LAN server **on the calling thread**.
    *
-   * Idempotent, because every arrival in the foreground calls it: a server that is already
-   * listening is left exactly as it is rather than rebound (the second bind would fail, and the
-   * port the peers were told about would stop being the real one).
+   * Kept for the instrumented test (`SyncOffMainThreadTest`), which drives it from an
+   * instrumentation thread and asserts "running" on the next line — a fire-and-forget variant would
+   * turn that assertion into a race. Everything in the app goes through [startAsync] instead: the
+   * bind is a blocking socket call, and this controller is now asked to start from `onStart()`.
+   *
+   * Idempotent, because every arrival in the foreground asks: a server that is already listening is
+   * left exactly as it is rather than rebound (the second bind would fail, and the port the peers
+   * were told about would stop being the real one).
    *
    * Pairing is a two-step flow: [beginPairing] shows a code on one device, the other
    * device types it into [pairByCode], and both sides store the resulting
    * [TrustedPeer].
    */
   fun start() {
+    startWithRequest(stopGeneration)
+  }
+
+  /**
+   * Starts the server with the bind on [Dispatchers.IO] and returns the address peers can use
+   * (`"192.168.1.23:47653"`), or an empty string when nothing ended up listening.
+   *
+   * **The address is read in the same hop as the bind, on purpose.** The port does not exist until
+   * `ServerSocket` bound and it can be an ephemeral one, so a caller that read [serverAddress]
+   * afterwards would be racing the bind it just asked for. That is why this returns the address
+   * instead of nothing: the caller publishes it, and `UiState.localAddress` becomes the app's only
+   * source of truth for "where can peers reach me".
+   *
+   * Cancellation cannot undo an already-running bind, so the operation is guarded by the
+   * stop generation rather than by the job handle: a [stop] that lands while the bind is in flight
+   * makes this close the new server instead of publishing it.
+   */
+  suspend fun startAsync(): String {
+    // Captured *before* the thread hop: `stop()` runs on the caller's thread, so this is the
+    // earliest moment the request can be identified, and the only one a stop cannot slip past.
+    val requestedAt = stopGeneration
+    return withContext(Dispatchers.IO) {
+      startMutex.withLock { startWithRequest(requestedAt) }
+      if (isRunning) serverAddress.orEmpty() else ""
+    }
+  }
+
+  /**
+   * The one implementation behind [start] and [startAsync].
+   *
+   * @param requestedAt the [stopGeneration] the caller saw when it asked for the server.
+   */
+  private fun startWithRequest(requestedAt: Int) {
     if (isRunning) return
     val deviceId = preferences.deviceId
     val deviceName = preferences.deviceName
@@ -202,42 +288,67 @@ class SyncController(
           preferences.trustedPeers().firstOrNull { it.deviceId == deviceId }
       },
     )
-    listeningPort = httpServer.start()
-    server = httpServer
-    // Published before discovery starts, so the mDNS record carries the port the server
-    // really bound (it falls back to an ephemeral one when the preferred port is taken).
-    onListening(listeningPort)
+    // THE blocking call. Everything above is cheap object construction; this binds a socket and
+    // starts its accept loop, which is why [start] may only be used where blocking is acceptable.
+    val boundPort = httpServer.start()
 
-    transport = LanSyncTransport(
+    val startedTransport = LanSyncTransport(
       deviceId = deviceId,
       deviceName = deviceName,
       localSecret = selfSecret(),
       peersProvider = { preferences.trustedPeers() },
       addressProvider = { peer -> addressBook.addressFor(peer) },
-      localPort = listeningPort,
+      localPort = boundPort,
     )
     // Same transport, exposed as the one-method shape CodePairing probes candidates with.
-    transport?.let { lan ->
-      httpTransport = LanSyncHttpTransport(lan, addressProvider = { addressBook.addressFor(it) })
-    }
+    val startedHttpTransport =
+      LanSyncHttpTransport(startedTransport, addressProvider = { addressBook.addressFor(it) })
 
-    // mDNS advertises only while the flow is collected, so keep one collector alive.
-    discoveryJob += scope.launch {
-      discovery.discover().collect { peer ->
-        addressBook.remember(peer)
-        discovered[peer.deviceId] = peer
+    // The check and the publish are one critical section: a `stop()` that landed while the socket
+    // was binding must not be missed here, and a `stop()` that lands just after must not miss the
+    // server this publishes.
+    val stale = synchronized(lifecycleLock) {
+      if (requestedAt != stopGeneration) {
+        true
+      } else {
+        listeningPort = boundPort
+        server = httpServer
+        transport = startedTransport
+        httpTransport = startedHttpTransport
+        // Published before discovery starts, so the mDNS record carries the port the server
+        // really bound (it falls back to an ephemeral one when the preferred port is taken).
+        onListening(boundPort)
+        // mDNS advertises only while the flow is collected, so keep one collector alive.
+        discoveryJob += scope.launch {
+          discovery.discover().collect { peer ->
+            addressBook.remember(peer)
+            discovered[peer.deviceId] = peer
+          }
+        }
+        false
       }
     }
+    // Nobody wants this server any more: close it here rather than leaking a listener nothing
+    // holds a reference to. Done outside the lock, which is why the flag exists.
+    if (stale) httpServer.stop()
   }
 
   fun stop() {
-    discoveryJob.forEach { it.cancel() }
-    discoveryJob.clear()
-    server?.stop()
-    server = null
-    transport = null
-    httpTransport = null
-    discovered.clear()
+    // `stopGeneration` is bumped inside the lock and before anything is torn down: a bind in flight
+    // reads it under the same lock just before publishing, so the two orders are the only two that
+    // can happen — either the server was published (and is stopped below) or it is refused.
+    val pendingDiscovery = synchronized(lifecycleLock) {
+      stopGeneration++
+      server?.stop()
+      server = null
+      transport = null
+      httpTransport = null
+      discovered.clear()
+      val pending = discoveryJob.toList()
+      discoveryJob.clear()
+      pending
+    }
+    pendingDiscovery.forEach { it.cancel() }
     // Nothing is listening any more, so no code can be accepted: the window goes with the server.
     cancelPairing()
   }

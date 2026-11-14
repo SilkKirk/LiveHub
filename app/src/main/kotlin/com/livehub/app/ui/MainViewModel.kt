@@ -45,6 +45,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private var danmakuJob: Job? = null
   private var followsJob: Job? = null
   private var pairingCountdownJob: Job? = null
+
+  /**
+   * The start of the LAN server, which is a socket bind and therefore not synchronous any more.
+   *
+   * Held so a second caller can wait for the same bind instead of starting another one; see
+   * [startSyncServer] and [awaitSyncServer].
+   */
+  private var syncServerJob: Job? = null
   private var nextCursor: String? = null
     /**
    * Where the next page of each platform's results starts.
@@ -280,7 +288,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * nothing accepts is worse than one that re-issues.
    */
   private fun enterSyncScreen() {
-    container.syncController.start()
+    // Asks for the server off the main thread; the address arrives later through [startSyncServer]
+    // and is published when it does. The code below does not wait for it: a pairing code lives in
+    // the window, not in the socket, so it can be issued while the bind is still in flight.
+    startSyncServer()
     refreshPeers()
     startDiscovery()
     // Show a fresh code on arrival: the device the user just picked up is the one they
@@ -313,10 +324,59 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   /** Starts the server if the policy wants it. Idempotent; the foreground callback calls it often. */
   private fun maybeStartSyncServer() {
     if (!autoSyncWanted()) return
-    container.syncController.start()
-    // The port is only known once the server bound, and it may be an ephemeral one when the
-    // preferred port is taken — so the state is refreshed from the server rather than assumed.
-    _state.update { it.copy(localAddress = container.syncController.serverAddress.orEmpty()) }
+    startSyncServer()
+  }
+
+  /**
+   * Brings the LAN server up, off the main thread, and publishes the address once it is listening.
+   *
+   * One job at a time: the foreground callback, the sync page and the discovery button all ask
+   * within the same frame, and a second concurrent bind would race the first for the port.
+   *
+   * **What can be read, and when.** `SyncController.startAsync()` suspends until the socket has
+   * actually bound, so `UiState.localAddress` is the app's only trustworthy answer to "where can
+   * peers reach me": it is written here, after the bind, from the address the controller read in
+   * that same hop — and it stays empty until then, and after any [stopSyncServer]. Nobody may read
+   * `SyncController.serverAddress` directly and treat null/empty as "no LAN" while this is in
+   * flight; code that must observe readiness either holds this job ([awaitSyncServer]) or polls
+   * `isRunning`.
+   */
+  private fun startSyncServer() {
+    if (syncServerJob?.isActive == true) return
+    syncServerJob = viewModelScope.launch {
+      val address = try {
+        container.syncController.startAsync()
+      } catch (cancelled: CancellationException) {
+        // Cancelled by `stopSyncServer` (or by the scope going away): the controller refuses to
+        // publish a server whose request predates the stop, and nothing must be written here.
+        throw cancelled
+      } catch (error: Exception) {
+        // A failed bind must not take the ViewModel's scope down with it: the page simply shows no
+        // address, and pairing reports "同步服务未启动" the way it always did.
+        ""
+      }
+      // Checked on the line that publishes, with no suspension in between: `stopSyncServer` also
+      // runs on this thread, so it cannot slip between the check and the write and leave a dead
+      // address in the state.
+      val listening = container.syncController.isRunning
+      _state.update { it.copy(localAddress = if (listening) address else "") }
+    }
+  }
+
+  /**
+   * Ensures the server is listening, waiting for an in-flight bind instead of racing it.
+   *
+   * The bind moved off the main thread, so an exchange started immediately after asking for the
+   * server would find no transport and answer "同步服务未启动" without exchanging anything — which
+   * is what the automatic sync must not do, since nobody asked for it and there is no snackbar to
+   * explain the outcome.
+   */
+  private suspend fun awaitSyncServer(): Boolean {
+    // Reuses the request that is already in flight: the foreground entry asked for the server a
+    // moment before this, and replacing that job would only start the same bind twice.
+    if (syncServerJob?.isActive != true) startSyncServer()
+    syncServerJob?.join()
+    return container.syncController.isRunning
   }
 
   /** Applies the policy after anything that could have changed its answer. */
@@ -341,6 +401,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     discoveryJob = null
     pairingCountdownJob?.cancel()
     pairingCountdownJob = null
+    // Dropped rather than awaited: a start that is still binding is refused by the controller's own
+    // stop generation, and this handle has to go or the next start would see a job that is "in
+    // flight", will never publish, and skip itself.
+    syncServerJob?.cancel()
+    syncServerJob = null
     container.syncController.stop()
     _state.update {
       it.copy(
@@ -469,6 +534,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * snackbar. The user pressed nothing here — a toast appearing because they unlocked their phone
    * would be noise. The exchange still lands in [UiState.syncLog], which is where someone who
    * wants to know what happened looks.
+   *
+   * The run starts in a coroutine because it now *waits* for the server first: the bind is off the
+   * main thread, and an exchange without a transport reports "同步服务未启动" and returns without
+   * exchanging anything — a silent failure nobody would ever see.
    */
   private fun autoSyncIfDue() {
     val now = System.currentTimeMillis()
@@ -485,7 +554,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     // notification) would otherwise both start an exchange, and the second would only be answered
     // by the throttle once the first had finished.
     lastAutoSyncAtMillis = now
-    syncNow(silent = true)
+    viewModelScope.launch {
+      if (!awaitSyncServer()) return@launch
+      syncNow(silent = true)
+    }
   }
 
   // ------------------------------------------------------------------- platform
@@ -1591,7 +1663,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    */
   private fun startDiscovery() {
     discoveryJob?.cancel()
-    container.syncController.start()
+    // The collector this polls lives inside the running server, so make sure one is coming up.
+    // Not awaited: the sightings arrive through the polling loop below either way, and the mDNS
+    // browse only starts once the bind has landed.
+    startSyncServer()
     discoveryJob = viewModelScope.launch {
       _state.update { it.copy(discovering = true) }
       val polling = launch {
