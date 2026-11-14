@@ -20,8 +20,25 @@ TEST_EXIT=0
 SMOKE_EXIT=0
 
 echo "=== instrumented tests ==="
-./gradlew connectedDebugAndroidTest --stacktrace > "$WORKSPACE/instrumented.log" 2>&1
+# The suite is capped, because one of its failure modes does not fail: it waits.
+#
+# `connectedDebugAndroidTest` synchronises with the device's window for every UI assertion, so
+# when the emulator's renderer dies (the `Failed to find ColorBuffer` / `invalid color buffer`
+# burst is its signature) the run produces no output and never returns. That happened twice in a
+# row: 32 minutes of silence on one push, then a second attempt with the same shape. A healthy
+# suite is ~4 minutes, so 15 is four times the worst green run and still short enough to re-run
+# inside one work block.
+#
+# The exit code is reported as-is: 124 (or 130 after the interrupt) is what a timeout looks like,
+# and the tail below is printed either way so the log says which it was.
+SUITE_TIMEOUT_SECONDS="${SUITE_TIMEOUT_SECONDS:-900}"
+timeout --signal=INT "$SUITE_TIMEOUT_SECONDS" \
+  ./gradlew connectedDebugAndroidTest --stacktrace > "$WORKSPACE/instrumented.log" 2>&1
 TEST_EXIT=$?
+if [ "$TEST_EXIT" = "124" ] || [ "$TEST_EXIT" = "130" ]; then
+  echo "=== instrumented tests hit the ${SUITE_TIMEOUT_SECONDS}s cap ==="
+  echo "The emulator likely lost its renderer; this is a runner flake, not a test failure."
+fi
 # Surface which test failed: the gradle output alone is unreadable through the API, and a
 # screenshot-test crash otherwise reports only "exit code 1".
 python3 .github/scripts/report_instrumented.py || true

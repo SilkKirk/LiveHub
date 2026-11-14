@@ -180,7 +180,12 @@ jobs:
   instrumented:
     name: Instrumented tests
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 25, not 60. A healthy run is ~5 minutes (boot 23s + suite ~4 min); the two failure modes
+    # that are not the suite's fault are a slow boot and a dead emulator renderer, and both used
+    # to be allowed to burn a full hour — one push sat here for 36 minutes and had to be
+    # cancelled by hand, and the re-run then had no time budget left to be trusted.
+    # With this cap a wedged emulator costs 25 minutes at worst, and nothing else.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
