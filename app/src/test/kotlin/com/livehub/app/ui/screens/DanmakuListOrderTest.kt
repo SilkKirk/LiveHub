@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.DanmakuMessage
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
@@ -31,6 +32,11 @@ import org.robolectric.annotation.Config
  *
  * These tests pin the order rather than the animation, because the bug was a visible
  * consequence of the two being wrong *together*.
+ *
+ * Composed inside [LiveHubTheme]: every row of the list is `bodySmall`, which the app draws at
+ * 13sp/18sp where Compose's default is 12sp/16sp. Row height decides how many messages fit the
+ * panel and therefore what "visible" means to the assertions below, so the panel is measured in the
+ * scale the app uses rather than in Material's.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -72,10 +78,12 @@ class DanmakuListOrderTest {
   ) {
     current.value = messages
     composeRule.setContent {
-      Box(modifier = Modifier.size(360.dp, 640.dp)) {
-        // `current.value` is read inside the composition, so assigning to it recomposes
-        // rather than requiring a second `setContent` (which the rule forbids).
-        DanmakuPanel(state(current.value, blockedKeywords))
+      LiveHubTheme {
+        Box(modifier = Modifier.size(360.dp, 640.dp)) {
+          // `current.value` is read inside the composition, so assigning to it recomposes
+          // rather than requiring a second `setContent` (which the rule forbids).
+          DanmakuPanel(state(current.value, blockedKeywords))
+        }
       }
     }
     composeRule.waitForIdle()

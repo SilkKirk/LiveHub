@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.FollowLiveFilter
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Rule
@@ -32,6 +33,11 @@ import org.robolectric.annotation.Config
  *
  * The assertions are on presence, which is what was broken. Whether a tap filters correctly is
  * already covered by `MainViewModelTest` and by the visibility of the empty state.
+ *
+ * Rendered inside [LiveHubTheme] so "displayed" means displayed in the app's own type scale: the
+ * chip row sits under a text-driven header on a 640dp-tall window, so how much room is left above
+ * the fold — and therefore whether a chip is on screen at all — belongs to the scale, not to the
+ * fixture.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -68,8 +74,10 @@ class FollowFilterReachabilityTest {
 
   private fun render(state: UiState) {
     composeRule.setContent {
-      Box(modifier = Modifier.size(320.dp, 640.dp)) {
-        FollowScreen(state = state, onAction = {})
+      LiveHubTheme {
+        Box(modifier = Modifier.size(320.dp, 640.dp)) {
+          FollowScreen(state = state, onAction = {})
+        }
       }
     }
     composeRule.waitForIdle()

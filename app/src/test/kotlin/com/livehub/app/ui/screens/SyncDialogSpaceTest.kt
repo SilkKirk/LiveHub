@@ -1,12 +1,12 @@
 package com.livehub.app.ui.screens
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.sync.TrustedPeer
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -32,6 +32,11 @@ import org.robolectric.annotation.Config
  *
  * If either fails, the truncation is real and has a measured shape to fix. If both pass, the
  * report above was a guess and the item can be closed as "not a defect".
+ *
+ * Composed inside [LiveHubTheme] because the height this file measures *is* a type-scale fact: the
+ * dialog's note is `bodySmall` (13sp/18sp in the app, 12sp/16sp under Material's defaults) inside a
+ * `Column` that does not scroll, so the two scales disagree about precisely the dimension the
+ * assertions below put a cap on.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h470dp")
@@ -60,7 +65,7 @@ class SyncDialogSpaceTest {
 
   private fun openDialog() {
     composeRule.setContent {
-      MaterialTheme { SyncScreen(state = state(), onAction = {}) }
+      LiveHubTheme { SyncScreen(state = state(), onAction = {}) }
     }
     composeRule.waitForIdle()
     composeRule.onNodeWithText("关联设备").performClick()

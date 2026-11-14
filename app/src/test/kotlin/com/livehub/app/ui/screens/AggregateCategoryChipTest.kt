@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
@@ -37,6 +38,11 @@ import org.robolectric.annotation.Config
  *    only way back;
  *  * it is **not** in the group picker, where it would sit at the top of every group's list
  *    as a duplicate control that also has no group to be filed under.
+ *
+ * Composed inside [LiveHubTheme] so the row is compared by the left edges of the chips the app
+ * actually draws. No threshold moved with the swap: chip labels are `labelLarge` (14sp/20sp) in
+ * both scales. What a bare theme would get wrong is the row's surroundings — the `titleMedium`
+ * platform tabs and `labelMedium` group chips — which is what any future type-scale change tilts.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -80,8 +86,10 @@ class AggregateCategoryChipTest {
     onAction: (UiAction) -> Unit = {},
   ) {
     composeRule.setContent {
-      Box(modifier = Modifier.size(320.dp, 640.dp)) {
-        HomeScreen(state = state, onAction = onAction)
+      LiveHubTheme {
+        Box(modifier = Modifier.size(320.dp, 640.dp)) {
+          HomeScreen(state = state, onAction = onAction)
+        }
       }
     }
     composeRule.waitForIdle()

@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
@@ -39,6 +40,11 @@ import org.robolectric.annotation.Config
  * The clock is frozen and advanced by hand for the same reason the screenshot harness does
  * it: `waitForIdle` with the automatic clock would run the real three-second timer and the
  * danmaku animation to completion, and the state under test would never be observed.
+ *
+ * Rendered inside [LiveHubTheme] because the chrome is sized by the type scale: the action pills
+ * are `labelLarge` in a 48dp ring, the notices and danmaku rows are `bodySmall`, and the assertions
+ * below compare the y-positions of exactly those controls against the picture band. Laid out under
+ * Material's default scale they describe a player the app does not draw.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w411dp-h891dp")
@@ -99,17 +105,19 @@ class PlayerChromeTest {
   ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
-      PlayerContent(
-        state = state,
-        onAction = onAction,
-        fullscreen = fullscreen,
-        onFullscreenChange = {},
-        onOpenSettings = {},
-        videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
-        compact = compact,
-        landscapeWindow = landscapeWindow,
-        videoAspectHint = videoAspect,
-      )
+      LiveHubTheme {
+        PlayerContent(
+          state = state,
+          onAction = onAction,
+          fullscreen = fullscreen,
+          onFullscreenChange = {},
+          onOpenSettings = {},
+          videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
+          compact = compact,
+          landscapeWindow = landscapeWindow,
+          videoAspectHint = videoAspect,
+        )
+      }
     }
     composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()

@@ -2,7 +2,6 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -11,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
@@ -33,6 +33,12 @@ import org.robolectric.annotation.Config
  *  * `home.jpeg` (the reference's 关注列表) prints the audience figure on every followed room.
  *    Ours was the one list in the app that dropped it, although the follow store has always
  *    carried `viewerCount` and the home grid and search rows both render it.
+ *
+ * The screens are composed in [LiveHubTheme] rather than in a bare `MaterialTheme`: these
+ * assertions count what a screen renders, and a screen composed in a theme the app does not ship is
+ * laid out by Material's default type scale instead of ours — the fixture and the product then
+ * wrap, clip and ellipsize differently, and a count can be right about the test and wrong about the
+ * app.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -64,7 +70,7 @@ class CardInformationDensityTest {
 
   private fun composeInSmallWindow(content: @Composable () -> Unit) {
     composeRule.setContent {
-      MaterialTheme {
+      LiveHubTheme {
         Box(modifier = Modifier.size(320.dp, 640.dp)) { content() }
       }
     }

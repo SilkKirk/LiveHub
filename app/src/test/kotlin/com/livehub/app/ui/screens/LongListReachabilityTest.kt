@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.BiliLoginUi
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.sync.SyncLogEntry
 import com.livehub.core.sync.TrustedPeer
 import org.junit.Rule
@@ -36,6 +37,11 @@ import org.robolectric.annotation.Config
  * not in the tree *and* when the tree has nothing to scroll, so it pins both "the section is
  * composed" and "the user can get to it". `assertIsDisplayed` then rejects the case the
  * scroll leaves the node parked outside the viewport.
+ *
+ * Composed inside [LiveHubTheme]: whether the bottom of a 640dp page is reachable is decided by how
+ * much of it the text above consumes, and how much it consumes is the type scale — the app is
+ * taller than Material's defaults here (`bodySmall` 13sp/18sp against 12sp/16sp), so the page these
+ * tests scroll has to be the page the app lays out.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -85,7 +91,9 @@ class LongListReachabilityTest {
   /** 320x640: the smallest phone the renders cover, and where the log falls off the page. */
   private fun composeInSmallWindow(content: @Composable () -> Unit) {
     composeRule.setContent {
-      Box(modifier = Modifier.size(320.dp, 640.dp)) { content() }
+      LiveHubTheme {
+        Box(modifier = Modifier.size(320.dp, 640.dp)) { content() }
+      }
     }
     composeRule.waitForIdle()
   }

@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
@@ -43,6 +44,14 @@ import org.robolectric.annotation.Config
  * The assertions are about the properties the broken layout lacked — shared baselines, a bounded
  * depth, and a collapsed default — rather than node counts, because every one of these nodes
  * exists in a bad layout too.
+ *
+ * Rendered inside [LiveHubTheme], because a position is only meaningful in the type scale the app
+ * draws with. Without it the screen is composed with Compose's default `Typography()` — 12sp
+ * `bodySmall`, 22sp `titleLarge` — which is a layout the product never ships: the dp values then
+ * describe the fixture, so a change to the real scale moves none of them and none of them catch it.
+ *
+ * No threshold moved in the swap: the rows measured here are `FilterChip`s, whose labels are
+ * `labelLarge` (14sp/20sp) in both scales, under tabs labelled `titleMedium` (16sp/24sp).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -99,8 +108,10 @@ class HomeCategoryDensityTest {
     onAction: (UiAction) -> Unit = {},
   ) {
     composeRule.setContent {
-      Box(modifier = Modifier.size(320.dp, 640.dp)) {
-        HomeScreen(state = state, onAction = onAction)
+      LiveHubTheme {
+        Box(modifier = Modifier.size(320.dp, 640.dp)) {
+          HomeScreen(state = state, onAction = onAction)
+        }
       }
     }
     composeRule.waitForIdle()
@@ -122,18 +133,21 @@ class HomeCategoryDensityTest {
   ) {
     val state = mutableStateOf(initial)
     composeRule.setContent {
-      Box(modifier = Modifier.size(320.dp, 640.dp)) {
-        HomeScreen(
-          state = state.value,
-          onAction = { action ->
-            actions += action
-            state.value = when (action) {
-              is UiAction.SelectCategory -> state.value.copy(selectedCategory = action.category)
-              is UiAction.SelectSubCategory -> state.value.copy(selectedSubCategory = action.category)
-              else -> state.value
-            }
-          },
-        )
+      LiveHubTheme {
+        Box(modifier = Modifier.size(320.dp, 640.dp)) {
+          HomeScreen(
+            state = state.value,
+            onAction = { action ->
+              actions += action
+              state.value = when (action) {
+                is UiAction.SelectCategory -> state.value.copy(selectedCategory = action.category)
+                is UiAction.SelectSubCategory ->
+                  state.value.copy(selectedSubCategory = action.category)
+                else -> state.value
+              }
+            },
+          )
+        }
       }
     }
     composeRule.waitForIdle()

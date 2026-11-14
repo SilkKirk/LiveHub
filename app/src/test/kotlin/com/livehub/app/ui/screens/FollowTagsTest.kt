@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Assert.assertTrue
@@ -30,6 +31,11 @@ import org.robolectric.annotation.Config
  * The chips sit in the same row as the live and platform filters, and a tag filters the grid the
  * same way those do. The editor is behind a long press because the card already carries a tap and a
  * star; a third visible control on a 140dp tile would cost more than the feature is worth.
+ *
+ * Rendered inside [LiveHubTheme] so the two rows are compared in the app's own type scale: the
+ * header they sit under is `titleLarge`/`labelMedium` text and the sheet's notes are `bodySmall`,
+ * so where the tag row starts is a function of that scale — measured under Material's defaults,
+ * `tagTop > liveTop` would be a claim about the fixture's header, not the product's.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -77,17 +83,19 @@ class FollowTagsTest {
   private fun render(initial: UiState): MutableState<UiState> {
     val state = mutableStateOf(initial)
     composeRule.setContent {
-      Box(modifier = Modifier.size(320.dp, 640.dp)) {
-        FollowScreen(
-          state = state.value,
-          onAction = { action ->
-            state.value = when (action) {
-              is UiAction.SetFollowTagFilter -> state.value.copy(followTagFilter = action.tag)
-              is UiAction.SetFollowQuery -> state.value.copy(followQuery = action.query)
-              else -> state.value
-            }
-          },
-        )
+      LiveHubTheme {
+        Box(modifier = Modifier.size(320.dp, 640.dp)) {
+          FollowScreen(
+            state = state.value,
+            onAction = { action ->
+              state.value = when (action) {
+                is UiAction.SetFollowTagFilter -> state.value.copy(followTagFilter = action.tag)
+                is UiAction.SetFollowQuery -> state.value.copy(followQuery = action.query)
+                else -> state.value
+              }
+            },
+          )
+        }
       }
     }
     composeRule.waitForIdle()
