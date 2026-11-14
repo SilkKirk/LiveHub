@@ -135,7 +135,7 @@ internal fun playerFullscreen(landscapeWindow: Boolean, manualFullscreen: Boolea
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlayerScreen(
+internal fun PlayerScreen(
   state: UiState,
   onAction: (UiAction) -> Unit,
   /**
