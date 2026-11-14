@@ -3069,3 +3069,73 @@ compose-ui 1.12.1 把这个键放在 **`SemanticsActions`**（`AccessibilityKey`
    也做成参考图那种纯色 + 平台字标，需要真机看图再定。
 5. **动态配色（Material You）下的新配色没有渲染证据**：50 张截图仍是品牌配色。
 6. 播放页 chrome（pill 按钮、全屏栏、弹幕列表）这一轮没动，仍是第 103 轮之后的样式。
+
+---
+
+## 第一百零五～一百零七轮迭代：三处用户报告（关注排序+滑动+去搜索 / 全屏横屏 / 本地网络弹窗）
+
+用户在 v0.21.0 之后连报三件事，并发了截图。三条都不是"设计偏好"，是**动不了**：
+
+### 1. 关注页「特别关注」：不按开播排序、也划不动（105）
+
+- **排序**：`special` 是 `specialKeys.mapNotNull { byKey[it] }`——纯手动顺序，于是一个没开播的
+  置顶房间会排在开播的房间前面，而下面的网格是"开播优先"。改成
+  `.sortedBy { if (it.isLive) 0 else 1 }`（稳定排序，组内仍是手动顺序）。
+  已知代价写进了 KDoc：`FollowOrdering.moveWithin` 持久化的是**手动**顺序，所以把离线头像拖到
+  开播头像之前会存下来、下一帧又被分组排回去——排序只对"组内"有意义。
+- **划不动（真 bug）**：头像的手势是裸 `awaitEachGesture` + `awaitLongPressOrCancellation`。
+  这个 API 在**两种**情况下都返回 null：提前抬手，以及"父级消费了移动"（正是这一行自己的
+  横向滚动）。于是旧代码把每一次横扫都当成 tap，抬手时打开一个直播间——用户看到的就是
+  "划不动"。改成官方 `clickable` + `detectDragGesturesAfterLongPress`：
+  滚动赢了手势时拖动检测器自己取消，拖动消费了抬手时 `clickable` 自己取消。
+  semantics 交回 `clickable`（role/onClick/ripple 由组件给），`customActions` 上移/下移保留。
+  新增 `DesignLanguageTest` 一条：存入顺序是"离线在前"时，开播头像必须画在前面（此前
+  所有夹具都恰好是开播在前，这条规则零覆盖）。
+
+### 2. 关注页去掉搜索框（105）
+
+用户："关注页面不需要搜索"。删除 `FollowSearchField`、`FOLLOW_SEARCH_THRESHOLD`、
+`followQuery` 过滤、`UiState.followQuery`、`UiAction.SetFollowQuery`、`MainViewModel` 分支、
+`FollowTagsTest` 的 reducer 行；**`FollowSearchTest` 整个删除**（功能没了，测试随之消失，
+这是需求变更不是"为了绿删测试"）；`ScreenshotTest` 去掉 `07c-follow-search`（64 → 63 张）；
+README 去掉"按名字/标题过滤"。
+
+### 3. 播放页点全屏不自动横屏（106）
+
+`playerFullscreen` 只按**窗口**判定：竖屏点全屏是把画面画满竖屏窗口并藏掉 chrome，窗口
+根本没转。新增 `ui/player/PlayerOrientation.kt`：全屏按钮请求
+`SCREEN_ORIENTATION_SENSOR_LANDSCAPE`，退出全屏 / 最小化 / 组合销毁时恢复
+`SCREEN_ORIENTATION_UNSPECIFIED`；**物理旋转不锁定**（那条路本来就会全屏，锁住反而夺走
+"转回来"）。`PlayerOrientationTest` 5 条：决策表 + 点「全屏」请求横屏、点「退出全屏」释放。
+`PlayerScreen` 顺手改成 `internal`——CI 抓到 `public` 函数暴露 `internal` 的
+`PlayerOrientation`（一次红灯，见验证表）。
+
+### 4. 本地网络弹窗（107）
+
+用户截图问「进应用的这个选择要连接的设备是干嘛的啊」。那是 **Android 16 的本地网络访问
+权限**：应用第一次碰局域网（我们的同步服务端 / mDNS）时，系统自己弹的，不是我们的界面。
+同步页「本机」卡片加了一段说明，把"系统会弹什么、为什么、拒绝会怎样"写在弹窗之前。
+**只做了说明，没改触发时机**：目前只要已配对 + 自动同步开着，启动就会起服务端（第 87 轮的
+决定），所以有配对设备的人一开应用就会看到弹窗。把它推迟到"用户第一次打开同步页"需要改
+那套策略并重写 `SyncServerLifecycleTest` 的两个前提，留作下一轮。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error（第一次红灯：`PlayerScreen` public 暴露 internal 类型） |
+| JVM 单元测试 | ✅ **892** 个用例，0 失败（891 − `FollowSearchTest` + `PlayerOrientationTest` 5 + 1） |
+| 仪器测试 | ✅ **63** 张截图（`07c-follow-search` 随功能删除） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `a25b7b6` 三个 job 全绿 |
+
+截图看过：`07-follow-list` 顶部没有搜索框、头像/标题/网格顺序正常；`13-sync` 多出的那段
+说明在「本机」卡片里、折行正常；其余 61 张里只有关注/同步相关几张随文字变化。
+
+### 留下的
+
+1. **本地网络弹窗的时机**（见上）：要么推迟到同步页，要么在设置里给一个「允许局域网同步」
+   的显式开关；两条都要改 `autoSyncWanted()` 与 `SyncServerLifecycleTest`。
+2. **跨组拖动会被排序排回去**：如果用户真的需要"置顶一个没开播的"，得再设计（比如只对
+   开播组排序、离线组保持手动，或者给"固定"与"排序"两个概念拆开）。
+3. `07` 编号出现空档（07c 删除），没有重排——`07d` 在文档与大字号注释里被按名字引用。

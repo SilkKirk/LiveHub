@@ -304,7 +304,7 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
       // prompts and the line is simply a sentence about what the feature needs.
       Text(
         text = "首次进入本页时，系统会询问是否允许 LiveHub 访问本地网络（标题类似「选择要连接的设备」）" +
-          "——那是局域网同步需要的权限。选「不连接」后本页无法配对，只能改用同一账号手动同步。",
+          "——那是局域网同步需要的权限。选「不连接」后本页无法配对。",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
