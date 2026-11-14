@@ -8,11 +8,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasScrollAction
@@ -25,6 +27,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.livehub.app.ui.LiveHubRoot
@@ -546,6 +549,23 @@ class ScreenshotTest {
   fun followEmpty() = capture("08-follow-empty", baseState().copy(screen = Screen.Follow))
 
   /**
+   * The follow header at its widest state: three tags in use, so the chip row has the most to draw.
+   *
+   * Shared with `26-follow-large-font`. The question that render asks — does this header still fit
+   * at 1.5×? — is only answered by the same chips `07d` draws, so a second copy of the fixture would
+   * answer a question nobody asked as soon as the two drifted apart.
+   */
+  private fun followTagsState(): UiState = baseState().copy(
+    screen = Screen.Follow,
+    followed = followRooms,
+    followTags = mapOf(
+      followRooms[0].key to listOf("常看"),
+      followRooms[1].key to listOf("常看", "英雄联盟"),
+      followRooms[3].key to listOf("深夜档"),
+    ),
+  )
+
+  /**
    * The tag row, on its own line under the live/platform filters.
    *
    * It shared that row until round 76 and the tags were off the right edge there — this render is
@@ -553,18 +573,7 @@ class ScreenshotTest {
    * ("斗鱼") has to stay distinguishable from a platform chip.
    */
   @Test
-  fun followTags() = capture(
-    "07d-follow-tags",
-    baseState().copy(
-      screen = Screen.Follow,
-      followed = followRooms,
-      followTags = mapOf(
-        followRooms[0].key to listOf("常看"),
-        followRooms[1].key to listOf("常看", "英雄联盟"),
-        followRooms[3].key to listOf("深夜档"),
-      ),
-    ),
-  )
+  fun followTags() = capture("07d-follow-tags", followTagsState())
 
   /**
    * The tag editor, opened by a long press on a card.
@@ -1094,7 +1103,65 @@ class ScreenshotTest {
     playerState().copy(playerError = "无法解码该流（H.265-in-FLV）"),
   )
 
+  // --------------------------------------------------------- large-font renders ---
+  //
+  // 1.5× is the step the system accessibility settings offer most often: Android's font scale runs
+  // 1.15 / 1.3 / 1.5 / 2.0, and 1.5 is the one stock UI calls "large". Nothing in this app had ever
+  // been laid out at it — the audit's "large fonts never verified" line survived because no render
+  // and no assertion ever changed the multiplier. These four are the screens whose chrome is dense
+  // enough to run out of room: two chip rows on the home page, the platform row above search, the
+  // widest follow header, and settings' single-line rows.
+  //
+  // They are renders, not assertions, on purpose. Robolectric's font metrics are stubs — a
+  // two-character label measures 2.5px there — so no JVM test can answer "does this truncate". Only
+  // a real font on a real device can, and the answer is a picture.
+  //
+  // Compare each against its default-size sibling: 01-home, 11c-search-bilibili, 07d-follow-tags and
+  // 15-settings.
+
+  /** Home: the platform tabs, both chip rows, and the cards underneath them. */
+  @Test
+  fun homeLargeFont() = capture("24-home-large-font", baseState(), fontScale = 1.5f)
+
+  /** Search over B站 results: the platform chip row and the wide result rows beside it. */
+  @Test
+  fun searchLargeFont() = capture("25-search-large-font", bilibiliSearchState(), fontScale = 1.5f)
+
+  /** Follow: the tag chips, the widest header in the app, over the two-column grid. */
+  @Test
+  fun followLargeFont() = capture("26-follow-large-font", followTagsState(), fontScale = 1.5f)
+
+  /** Settings: the one-line card rows, the blocked-keyword chips, and the account cards. */
+  @Test
+  fun settingsLargeFont() = capture("27-settings-large-font", settingsState(), fontScale = 1.5f)
+
   // -------------------------------------------------------------------- helpers ---
+
+  /**
+   * Lays out everything inside it under [fontScale], the system's accessibility text multiplier.
+   *
+   * That setting rescales `sp` only; dp stays put, because a user who raises the text size is not
+   * asking for bigger touch targets. `Density(density, fontScale)` is exactly that — the same pixel
+   * density with a different multiplier — and it is provided as a composition local rather than
+   * through the device: round 35 changed the emulator's global font scale and every other portrait
+   * render came back restyled, so one experiment silently restyled the whole harness.
+   *
+   * At 1f nothing is provided at all, so every existing render composes the tree it composed before
+   * this parameter existed and its PNG stays byte-identical.
+   */
+  @Composable
+  private fun AtFontScale(fontScale: Float, content: @Composable () -> Unit) {
+    if (fontScale == 1f) {
+      content()
+    } else {
+      val density = LocalDensity.current
+      CompositionLocalProvider(
+        LocalDensity provides Density(density.density, fontScale),
+      ) {
+        content()
+      }
+    }
+  }
 
   /**
    * Renders [state] and writes it as `<name>.png`.
@@ -1107,6 +1174,8 @@ class ScreenshotTest {
    *
    * @param advanceMillis extra virtual time to run before capturing, for renders that only
    *   become visible mid-animation.
+   * @param fontScale the accessibility text multiplier to lay this render out under; 1f is the
+   *   default and leaves every existing render byte-identical.
    * @param onScreenText a danmaku label the render must show *inside* the frame. A bubble
    *   parked at its start position is a node the semantics tree still contains, so existence
    *   alone proves nothing; this checks the position as well.
@@ -1121,6 +1190,7 @@ class ScreenshotTest {
   private fun capture(
     name: String,
     state: UiState,
+    fontScale: Float = 1f,
     fullscreen: Boolean = false,
     advanceMillis: Long = 0L,
     onScreenText: String? = null,
@@ -1153,47 +1223,50 @@ class ScreenshotTest {
   ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
-      if (content != null) {
-        content()
-      } else if (state.screen == Screen.Player) {
-        // Rendered through PlayerContent so the screenshot does not depend on the sheet
-        // state, and so a fullscreen render is reachable without a real gesture.
-        //
-        // Wrapped in the app's theme here, because this branch is the one place a render does not
-        // go through `LiveHubRoot` — and without it the chrome, the pills and the danmaku names
-        // were all drawn in default Material 3 colours. `state.themeMode` is what the app would
-        // read, so a dark render is genuine rather than a light one over a black box.
-        //
-        // The `Surface` is not decoration: it is what `LiveHubRoot` puts around every screen, and
-        // it is the only thing that sets `LocalContentColor`. Without it a `Text` that names no
-        // colour falls back to black, which looks correct in the light renders and turns the
-        // room title and the subtitle invisible in `23d-player-dark` — a harness artefact that
-        // reads as a contrast bug in the app.
-        //
-        // The video surface is replaced: `captureToImage` cannot read a SurfaceView (its
-        // pixels are composited by SurfaceFlinger, not drawn into the window), so a real
-        // player always captures as solid black and the render would prove nothing about
-        // the chrome around it. PlayerContent only substitutes it for a room that is
-        // actually playing, so the loading / offline / error states still render their own
-        // content.
-        LiveHubTheme(mode = state.themeMode) {
-          Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background,
-          ) {
-            PlayerContent(
-              state = state,
-              onAction = {},
-              fullscreen = fullscreen,
-              onFullscreenChange = {},
-              onOpenSettings = {},
-              videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
-              videoAspectHint = videoAspect,
-            )
+      // The font scale wraps the tree rather than the device: see [AtFontScale].
+      AtFontScale(fontScale) {
+        if (content != null) {
+          content()
+        } else if (state.screen == Screen.Player) {
+          // Rendered through PlayerContent so the screenshot does not depend on the sheet
+          // state, and so a fullscreen render is reachable without a real gesture.
+          //
+          // Wrapped in the app's theme here, because this branch is the one place a render does not
+          // go through `LiveHubRoot` — and without it the chrome, the pills and the danmaku names
+          // were all drawn in default Material 3 colours. `state.themeMode` is what the app would
+          // read, so a dark render is genuine rather than a light one over a black box.
+          //
+          // The `Surface` is not decoration: it is what `LiveHubRoot` puts around every screen, and
+          // it is the only thing that sets `LocalContentColor`. Without it a `Text` that names no
+          // colour falls back to black, which looks correct in the light renders and turns the
+          // room title and the subtitle invisible in `23d-player-dark` — a harness artefact that
+          // reads as a contrast bug in the app.
+          //
+          // The video surface is replaced: `captureToImage` cannot read a SurfaceView (its
+          // pixels are composited by SurfaceFlinger, not drawn into the window), so a real
+          // player always captures as solid black and the render would prove nothing about
+          // the chrome around it. PlayerContent only substitutes it for a room that is
+          // actually playing, so the loading / offline / error states still render their own
+          // content.
+          LiveHubTheme(mode = state.themeMode) {
+            Surface(
+              modifier = Modifier.fillMaxSize(),
+              color = MaterialTheme.colorScheme.background,
+            ) {
+              PlayerContent(
+                state = state,
+                onAction = {},
+                fullscreen = fullscreen,
+                onFullscreenChange = {},
+                onOpenSettings = {},
+                videoSurface = { surfaceModifier -> VideoSurfaceStub(surfaceModifier) },
+                videoAspectHint = videoAspect,
+              )
+            }
           }
+        } else {
+          LiveHubRoot(state = state, onAction = { })
         }
-      } else {
-        LiveHubRoot(state = state, onAction = { })
       }
     }
     // Compose test rules advance the virtual clock automatically; with the player's
