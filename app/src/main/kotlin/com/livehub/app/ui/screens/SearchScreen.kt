@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +52,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.EmptyState
@@ -411,14 +411,14 @@ private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
     // The per-platform chips stay for the cases where the aggregate is noise — a room number that
     // only means something on one platform, or a platform whose search needs a login.
     item(key = "all-platforms") {
-      FilterChip(
+      LiveHubFilterChip(
         selected = state.searchAllPlatforms,
         onClick = { onAction(UiAction.SelectSearchPlatform(null)) },
         label = { Text("全部", maxLines = 1, softWrap = false) },
       )
     }
     items(Platform.entries.toList(), key = { it.id }) { platform ->
-      FilterChip(
+      LiveHubFilterChip(
         selected = !state.searchAllPlatforms && platform == state.platform,
         onClick = { onAction(UiAction.SelectSearchPlatform(platform)) },
         // `shortName`: five chips have to share one 320dp line, and "哔哩哔哩" is what made this

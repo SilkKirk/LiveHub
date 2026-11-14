@@ -51,7 +51,6 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -82,6 +81,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.BackSwipeContainer
 import com.livehub.app.ui.DanmakuStatus
+import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.player.DanmakuOverlay
@@ -1088,7 +1088,7 @@ internal fun PlayerSettings(
         verticalArrangement = Arrangement.spacedBy(4.dp),
       ) {
         state.variants.forEach { item ->
-          FilterChip(
+          LiveHubFilterChip(
             selected = item.qualityCode == variant?.qualityCode,
             onClick = {
               // A quality code means "re-resolve for this rate"; a variant selected by
@@ -1116,7 +1116,7 @@ internal fun PlayerSettings(
         verticalArrangement = Arrangement.spacedBy(4.dp),
       ) {
         state.lines.forEach { line ->
-          FilterChip(
+          LiveHubFilterChip(
             selected = line == state.selectedLine,
             onClick = { onAction(UiAction.SelectLine(line)) },
             label = { Text(line, style = MaterialTheme.typography.labelMedium, maxLines = 1) },
@@ -1135,12 +1135,12 @@ internal fun PlayerSettings(
 
     SettingsLabel("弹幕")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      FilterChip(
+      LiveHubFilterChip(
         selected = state.danmakuEnabled,
         onClick = { onAction(UiAction.ToggleDanmaku(true)) },
         label = { Text("开") },
       )
-      FilterChip(
+      LiveHubFilterChip(
         selected = !state.danmakuEnabled,
         onClick = { onAction(UiAction.ToggleDanmaku(false)) },
         label = { Text("关") },
@@ -1153,7 +1153,7 @@ internal fun PlayerSettings(
       verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
       DANMAKU_AREAS.forEach { (label, fraction) ->
-        FilterChip(
+        LiveHubFilterChip(
           selected = state.danmakuAreaFraction == fraction,
           onClick = { onAction(UiAction.SetDanmakuAreaFraction(fraction)) },
           label = { Text(label) },
@@ -1164,7 +1164,7 @@ internal fun PlayerSettings(
     SettingsLabel("弹幕字号")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       DANMAKU_FONT_SCALES.forEach { (label, scale) ->
-        FilterChip(
+        LiveHubFilterChip(
           selected = state.danmakuFontScale == scale,
           onClick = { onAction(UiAction.SetDanmakuFontScale(scale)) },
           label = { Text(label) },
@@ -1180,7 +1180,7 @@ internal fun PlayerSettings(
       verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
       DANMAKU_OPACITIES.forEach { (label, value) ->
-        FilterChip(
+        LiveHubFilterChip(
           selected = kotlin.math.abs(state.danmakuOpacity - value) < 0.02f,
           onClick = { onAction(UiAction.SetDanmakuOpacity(value)) },
           label = { Text(label) },
@@ -1197,7 +1197,7 @@ internal fun PlayerSettings(
         verticalArrangement = Arrangement.spacedBy(4.dp),
       ) {
         LANDSCAPE_DANMAKU_FONT_SCALES.forEach { (label, scale) ->
-          FilterChip(
+          LiveHubFilterChip(
             selected = state.landscapeDanmakuFontScale == scale,
             onClick = { onAction(UiAction.SetLandscapeDanmakuFontScale(scale)) },
             label = { Text(label) },

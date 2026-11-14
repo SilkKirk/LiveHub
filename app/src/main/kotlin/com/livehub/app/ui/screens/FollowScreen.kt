@@ -35,7 +35,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.livehub.app.di.FollowOrdering
 import com.livehub.app.ui.FollowLiveFilter
+import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.components.CardMinWidth
@@ -356,7 +356,7 @@ private fun TagEditorSheet(
           ) {
             (known + tags).distinct().forEach { tag ->
               val selected = tag in tags
-              FilterChip(
+              LiveHubFilterChip(
                 selected = selected,
                 onClick = {
                   onTagsChange(if (selected) tags - tag else tags + tag)
@@ -682,7 +682,7 @@ private fun FollowHeader(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(FollowLiveFilter.entries.toList()) { option ->
-          FilterChip(
+          LiveHubFilterChip(
             selected = filter == option,
             onClick = { onFilterChange(option) },
             label = { Text(option.label) },
@@ -690,7 +690,7 @@ private fun FollowHeader(
         }
         if (platforms.size > 1) {
           items(platforms) { platform ->
-            FilterChip(
+            LiveHubFilterChip(
               selected = platformFilter == platform,
               onClick = { onPlatformChange(if (platformFilter == platform) null else platform) },
               // Same rule as the home switcher and the search row: a chip gets the short name,
@@ -720,7 +720,7 @@ private fun FollowHeader(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(tags) { tag ->
-          FilterChip(
+          LiveHubFilterChip(
             selected = tagFilter == tag,
             onClick = { onTagFilterChange(if (tagFilter == tag) null else tag) },
             label = { Text("#$tag") },

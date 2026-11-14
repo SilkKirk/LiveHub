@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -36,6 +35,7 @@ import coil3.SingletonImageLoader
 import com.livehub.app.BuildConfig
 import com.livehub.app.sync.FollowRefreshWorker
 import com.livehub.app.ui.components.SectionHeader
+import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import java.util.Locale
@@ -71,7 +71,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
           // could only express two of them and made 浅色 unreachable.
           FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             THEME_OPTIONS.forEach { (label, mode) ->
-              FilterChip(
+              LiveHubFilterChip(
                 selected = state.themeMode == mode,
                 onClick = { onAction(UiAction.SetThemeMode(mode)) },
                 label = { Text(label) },

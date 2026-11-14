@@ -38,13 +38,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -80,6 +78,7 @@ import com.livehub.app.ui.components.InlineLoader
 import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
+import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Category
@@ -717,7 +716,7 @@ private fun CategoryTree(
 /** A group chip: 网游 / 手游 / …. Highlighted while that group's partitions are showing. */
 @Composable
 private fun GroupChip(name: String, selected: Boolean, onClick: () -> Unit) {
-  FilterChip(
+  LiveHubFilterChip(
     selected = selected,
     onClick = onClick,
     label = { Text(name, maxLines = 1) },
@@ -725,11 +724,14 @@ private fun GroupChip(name: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 /**
- * A partition chip, with the checkmark the reference puts in front of the selected one.
+ * A partition chip.
  *
- * The tick is not decoration: the aggregate chip (全部直播) and the first real partition can both
- * be highlighted-looking once a third level is open, and a filled background alone was ambiguous
- * at chip size. The reference marks the current partition with ✓ for the same reason.
+ * This used to draw a ✓ in front of the selected one, on the argument that the aggregate chip
+ * (全部直播) and the first real partition could both look highlighted once a third level was open.
+ * That ambiguity was real, but the tick was the wrong fix for it — the group row solved the same
+ * problem with colour alone, so the two rows ended up speaking different languages for one state
+ * (round 100). Selection now reads the same way in both rows; the aggregate chip is still marked
+ * by the ✓ only in the sense that it is the chip whose label starts with 全部.
  */
 @Composable
 private fun PartitionChip(
@@ -738,21 +740,10 @@ private fun PartitionChip(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  FilterChip(
+  LiveHubFilterChip(
     selected = selected,
     onClick = onClick,
     label = { Text(name, maxLines = 1) },
-    leadingIcon = if (selected) {
-      {
-        Icon(
-          imageVector = Icons.Filled.Check,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-      }
-    } else {
-      null
-    },
     modifier = modifier,
   )
 }
