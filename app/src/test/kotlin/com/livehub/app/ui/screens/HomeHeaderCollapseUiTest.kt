@@ -4,9 +4,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasAnyDescendant
-import androidx.compose.ui.test.hasScrollAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -92,23 +89,25 @@ class HomeHeaderCollapseUiTest {
     composeRule.onAllNodesWithText("网游").fetchSemanticsNodes().size
 
   /**
-   * The room grid, as opposed to the chip rows above it.
+   * The cards, in tree order: the first one is at the top of the grid, the last one at the bottom.
    *
-   * Both are scrollable, and a gesture has to start *inside* the one it means to scroll: the first
-   * version swiped on the root, which starts at the very top of the window — inside the platform tab
-   * row — so the fold worked (any downward scroll does) but the unfold never received the gesture.
-   * The cards are what distinguishes the grid from the chips.
+   * A gesture has to start *inside* the container it means to scroll. Matching the grid itself is
+   * ambiguous — the platform pager is a scrollable too, and it contains the same cards — so the
+   * gesture is aimed at a card instead: the first for a downward scroll, the last for an upward one,
+   * which is still inside the grid in both cases.
    */
-  private fun grid() = composeRule.onNode(
-    hasScrollAction() and hasAnyDescendant(hasText("直播标题", substring = true)),
-  )
+  private fun cards() = composeRule.onAllNodesWithText("直播标题", substring = true)
+
+  private fun topCard() = cards().let { it[0] }
+
+  private fun bottomCard() = cards().let { it[it.fetchSemanticsNodes().size - 1] }
 
   @Test
   fun `swiping the grid up folds the category tree away`() {
     composeHome()
     assertTrue("the tree starts open", groupRowCount() == 1)
 
-    grid().performTouchInput { swipeUp() }
+    topCard().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
 
     assertTrue(
@@ -121,11 +120,11 @@ class HomeHeaderCollapseUiTest {
   fun `swiping back down brings it back`() {
     composeHome()
 
-    grid().performTouchInput { swipeUp() }
+    topCard().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
     assertTrue("folded first", groupRowCount() == 0)
 
-    grid().performTouchInput { swipeDown() }
+    bottomCard().performTouchInput { swipeDown() }
     composeRule.waitForIdle()
 
     assertTrue("scrolling back up must bring the tree back", groupRowCount() == 1)
