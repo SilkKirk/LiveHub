@@ -1108,16 +1108,17 @@ class ScreenshotTest {
   // 1.5× is the step the system accessibility settings offer most often: Android's font scale runs
   // 1.15 / 1.3 / 1.5 / 2.0, and 1.5 is the one stock UI calls "large". Nothing in this app had ever
   // been laid out at it — the audit's "large fonts never verified" line survived because no render
-  // and no assertion ever changed the multiplier. These four are the screens whose chrome is dense
-  // enough to run out of room: two chip rows on the home page, the platform row above search, the
-  // widest follow header, and settings' single-line rows.
+  // and no assertion ever changed the multiplier. The set has grown one round at a time: the screens
+  // whose chrome is dense enough to run out of room (two chip rows on the home page, the platform row
+  // above search, the widest follow header, settings' single-line rows), then the player and the
+  // 特别关注 row, then the search-idle strip, the sync page and the tag editor, and finally 2.0×.
   //
   // They are renders, not assertions, on purpose. Robolectric's font metrics are stubs — a
   // two-character label measures 2.5px there — so no JVM test can answer "does this truncate". Only
   // a real font on a real device can, and the answer is a picture.
   //
-  // Compare each against its default-size sibling: 01-home, 11c-search-bilibili, 07d-follow-tags and
-  // 15-settings.
+  // Compare each against its default-size sibling: 01-home, 11c-search-bilibili, 07d-follow-tags,
+  // 15-settings, 17-player, 07-follow-list, 09-search-idle, 13-sync and 07e-follow-tag-editor.
 
   /** Home: the platform tabs, both chip rows, and the cards underneath them. */
   @Test
@@ -1158,6 +1159,60 @@ class ScreenshotTest {
     followTagsState().copy(specialFollowKeys = listOf(followRooms[0].key, followRooms[1].key)),
     fontScale = 1.5f,
   )
+
+  /**
+   * The idle search page with a play history at 1.5×: the 最近看过 strip.
+   *
+   * The strip shipped in round 88 and no large-font render had shown it. Its cards are a fixed
+   * 120dp-wide column with one ellipsized name line — the name is the only thing on the card, so a
+   * truncation there is the whole card losing its meaning. Four rooms, because the strip has to run
+   * past the window edge to read as a strip rather than as cards that happen to fit.
+   */
+  @Test
+  fun searchIdleLargeFont() = capture(
+    "30-search-idle-large-font",
+    baseState().copy(screen = Screen.Search, recentRooms = douyuRooms.take(4)),
+    fontScale = 1.5f,
+  )
+
+  /**
+   * The sync page at 1.5×: the six-digit code, the action row and 自动同步.
+   *
+   * The code is the largest text the app draws (`displaySmall`), and the row under it is a `Row` of
+   * three fixed-size children — a `Button`, an `OutlinedButton` and an `IconButton` — with no wrap.
+   * That makes it the second container in the app that cannot give way, after the player's action row.
+   */
+  @Test
+  fun syncLargeFont() = capture("31-sync-large-font", syncState(), fontScale = 1.5f)
+
+  /**
+   * The tag editor at 1.5×, opened the way a user opens it — the long press is all there is.
+   *
+   * The sheet is `fillMaxHeight(0.6f)` and everything above the chip list is fixed content: the title
+   * row, two explanatory paragraphs, then the new-tag field. Below the list sits the 取消关注 row,
+   * which is the part this render exists to prove is still on screen. 完成 is asserted so that a press
+   * which opened nothing cannot pass as a render of the sheet.
+   */
+  @Test
+  fun followTagEditorLargeFont() = capture(
+    "32-follow-tag-editor-large-font",
+    followTagsState(),
+    longClickText = followRooms[0].title,
+    expectText = "完成",
+    fontScale = 1.5f,
+  )
+
+  /**
+   * The top of the system slider: 2.0×, and the first render in this harness above 1.5×.
+   *
+   * 2.0× is one drag away from the default in the accessibility settings, not an exotic value. Every
+   * container that was merely tight at 1.5× is over budget here, so this render is the one that says
+   * where the layout actually breaks: the platform tabs (a fixed 48dp tab row whose labels already
+   * shrink to fit at 1.5×), the bottom navigation (a fixed 80dp bar), and the two-line card title,
+   * which has to keep its ellipsis rather than clip.
+   */
+  @Test
+  fun homeHugeFont() = capture("33-home-huge-font", baseState(), fontScale = 2.0f)
 
   // -------------------------------------------------------------------- helpers ---
 
