@@ -164,7 +164,9 @@ class CancelledRequestStateTest {
     awaitCondition { !state.loading }
 
     assertNotNull("a real failure must still reach the screen", state.error)
-    assertTrue(state.error!!.contains("网络断了"), state.error!!)
+    // JUnit 4 in this module: the message goes **first**, unlike the JUnit 5 tests in `:core` and
+    // `:platform` where it goes last.
+    assertTrue(state.error!!, state.error!!.contains("网络断了"))
   }
 
   /**
