@@ -128,7 +128,6 @@ class SyncHttpServer(
       }
 
       writeResponse(output, body.status, body.body)
-      output.flush()
     }
   }
 
@@ -349,6 +348,15 @@ class SyncHttpServer(
     return builder.toString()
   }
 
+  /**
+   * Writes one response and flushes it.
+   *
+   * The flush is part of the method rather than a caller's job because there are two paths that
+   * answer a request and one of them used to return right after writing. With a buffered stream that
+   * dropped the response on the floor when the socket closed: a malformed request got
+   * "connection closed" instead of 400, which is the difference between a protocol answer and a
+   * transport failure for whoever is reading it.
+   */
   private fun writeResponse(output: OutputStream, status: Int, body: String) {
     val bytes = body.toByteArray(Charsets.UTF_8)
     val header = buildString {
@@ -360,6 +368,7 @@ class SyncHttpServer(
     }
     output.write(header.toByteArray(Charsets.UTF_8))
     output.write(bytes)
+    output.flush()
   }
 
   private fun reason(status: Int): String = when (status) {
