@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
@@ -120,7 +121,17 @@ class CollapsibleHeaderUiTest {
 
   private fun topCard() = cards().let { it[0] }
 
-  private fun bottomCard() = cards().let { it[it.fetchSemanticsNodes().size - 1] }
+  /**
+   * Drags down from the middle of the window.
+   *
+   * Aimed at the root rather than at a card, because the card at the bottom of the list is usually
+   * *partly* below the window: its centre is then outside the device, the injected touch lands
+   * nowhere, and the failure reads as "the header did not come back" instead of "the gesture missed".
+   * The window centre is always inside the grid.
+   */
+  private fun swipeDownInGrid() {
+    composeRule.onRoot().performTouchInput { swipeDown(startY = centerY, endY = bottom) }
+  }
 
   @Test
   fun `home - swiping the grid up folds the category tree away`() {
@@ -144,7 +155,7 @@ class CollapsibleHeaderUiTest {
     composeRule.waitForIdle()
     assertTrue("folded first", count("网游") == 0)
 
-    bottomCard().performTouchInput { swipeDown() }
+    swipeDownInGrid()
     composeRule.waitForIdle()
 
     assertTrue("scrolling back up must bring the tree back", count("网游") == 1)
@@ -173,7 +184,7 @@ class CollapsibleHeaderUiTest {
     composeRule.waitForIdle()
     assertTrue("folded first, found ${headerCount()}", headerCount() == 0)
 
-    bottomCard().performTouchInput { swipeDown() }
+    swipeDownInGrid()
     composeRule.waitForIdle()
 
     assertTrue("scrolling back up must bring the header back, found ${headerCount()}", headerCount() == 1)
