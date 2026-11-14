@@ -485,6 +485,12 @@ class ScreenshotTest {
    * render scrolls the grid to a card three rows down first (round 98). What to look for: the
    * platform tabs are still there, the group and partition rows are gone, and the grid starts right
    * under the tabs — the tree came back on the way up, which no still image can show.
+   *
+   * The fold is driven by a `NestedScrollConnection` on the page, and `performScrollToNode` does not
+   * go through nested scrolling the way a finger does — it drives the lazy list directly — so this
+   * render may come back with the tree still open. That is a fact about the harness worth knowing,
+   * not a defect in the fold: the two gesture tests in `HomeHeaderCollapseUiTest` are what pin the
+   * behaviour.
    */
   @Test
   fun homeHeaderCollapsed() = capture(

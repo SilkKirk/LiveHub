@@ -7,79 +7,66 @@ import org.junit.Test
 /**
  * The rule behind 下滑收起分区、上滑显示, without a gesture.
  *
- * The tree costs the most pixels on the home screen (two chip rows and a third level; they were 41%
- * of a 320×640 window before round 22), and while the grid is being scrolled they answer a question
- * the user has already answered. Folding them away on the way down and back on the way up is one
- * line of state, and the failures it can have are all in this table: folding at the top, unfolding
- * on an arrival, or folding while the list is standing still.
+ * The tree is the most expensive thing on the home screen (two chip rows and a third level; they
+ * were 41% of a 320×640 window before round 22), and while the grid is being scrolled it answers a
+ * question the user has already answered. The whole rule is this table — and the cases below are the
+ * ones that were actually wrong at some point:
+ *
+ *  * the first version derived the direction from `firstVisibleItemIndex`/`ScrollOffset`, i.e. from
+ *    the layout the fold itself changes. It never failed an assertion; it made the instrumented
+ *    suite five times slower, which is why the input here is a drag delta and not a position.
+ *  * folding at the top of a list that cannot scroll leaves an empty band where the tree was.
+ *  * folding on a sub-threshold delta makes the header twitch when a card is tapped.
  */
 class HomeHeaderCollapseTest {
 
   @Test
-  fun `scrolling down folds the tree away`() {
+  fun `dragging up folds the tree away`() {
     assertFalse(
-      "a grid that moved down one item must fold the tree",
-      categoriesVisibleAfterScroll(
-        visible = true,
-        previousIndex = 0,
-        previousOffset = 0,
-        index = 1,
-        offset = 0,
-      ),
+      "a drag with content moving up is a scroll down the list",
+      categoriesVisibleAfterDrag(visible = true, deltaY = -40f, scrolledAway = true),
     )
   }
 
   @Test
-  fun `scrolling up brings it back`() {
+  fun `dragging down brings it back`() {
     assertTrue(
-      "any upward movement unfolds it, including a partial row",
-      categoriesVisibleAfterScroll(
-        visible = false,
-        previousIndex = 2,
-        previousOffset = 120,
-        index = 2,
-        offset = 100,
-      ),
+      "a drag the other way is the user asking for the top of the list",
+      categoriesVisibleAfterDrag(visible = false, deltaY = 40f, scrolledAway = true),
     )
   }
 
   /**
-   * A grid that did not move keeps whatever it had.
+   * Nothing is hidden while the list is at its top.
    *
-   * This is the case that separates "the user scrolled" from "the list changed": a new page arriving
-   * or a refresh replacing the rooms also emits a new `(index, offset)` pair, and folding on that
-   * would slide the header shut under a finger that is not moving.
+   * The grid has nothing to scroll, so folding would only replace the tree with empty space — and it
+   * would have to come straight back on the next frame.
    */
   @Test
-  fun `standing still changes nothing`() {
+  fun `a list still at its top keeps the tree`() {
     assertTrue(
-      "visible stays visible",
-      categoriesVisibleAfterScroll(true, previousIndex = 3, previousOffset = 40, index = 3, offset = 40),
+      "there is nothing behind the tree to reveal",
+      categoriesVisibleAfterDrag(visible = true, deltaY = -40f, scrolledAway = false),
+    )
+  }
+
+  /** A tap is not a scroll: sub-threshold deltas change nothing, in either direction. */
+  @Test
+  fun `a tiny delta is not a scroll`() {
+    assertTrue(
+      "a nudge must not fold an open tree",
+      categoriesVisibleAfterDrag(visible = true, deltaY = -2f, scrolledAway = true),
     )
     assertFalse(
-      "folded stays folded",
-      categoriesVisibleAfterScroll(false, previousIndex = 3, previousOffset = 40, index = 3, offset = 40),
+      "and it must not unfold a folded one either",
+      categoriesVisibleAfterDrag(visible = false, deltaY = 2f, scrolledAway = true),
     )
   }
 
-  /** The top of the list is where the tree belongs, whatever the previous state was. */
+  /** Zero is the commonest event of all: `onPreScroll` is called with nothing to consume. */
   @Test
-  fun `the top of the list always shows the tree`() {
-    assertTrue(
-      "back at the first item, the tree is the answer to 'which partition am I in'",
-      categoriesVisibleAfterScroll(false, previousIndex = 1, previousOffset = 0, index = 0, offset = 0),
-    )
-  }
-
-  /**
-   * A first-frame emission at the top must not fold anything.
-   *
-   * `snapshotFlow` emits the current value as soon as it is collected, so on a cold start the very
-   * first pair is `(0, 0)` — and `previousIndex`/`previousOffset` are also `(0, 0)`, which reads as
-   * "did not move" and would otherwise be judged by the `visible` value alone.
-   */
-  @Test
-  fun `the first emission of a fresh grid keeps the tree`() {
-    assertTrue(categoriesVisibleAfterScroll(true, 0, 0, 0, 0))
+  fun `a zero delta changes nothing`() {
+    assertTrue(categoriesVisibleAfterDrag(true, deltaY = 0f, scrolledAway = true))
+    assertFalse(categoriesVisibleAfterDrag(false, deltaY = 0f, scrolledAway = true))
   }
 }

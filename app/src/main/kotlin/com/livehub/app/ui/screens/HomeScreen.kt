@@ -56,16 +56,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -205,35 +207,34 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
 }
 
 /**
- * Whether the category tree stays open, given the scroll position before and after one frame.
+ * How much of a drag counts as "the user is scrolling", in pixels.
  *
- * Scrolling down folds it away; scrolling up brings it back; standing still changes nothing. The
- * "standing still" case is not academic — `firstVisibleItemIndex`/`ScrollOffset` also move when the
- * *content* changes (a page arrives, a refresh replaces the list), and a fold that reacted to that
- * would slide shut while nobody was touching the screen.
- *
- * A grid at its very top always shows the tree: that is the state the app opens in, and the only
- * place where "which partition am I in" is worth the pixels.
- *
- * A pure function taking the two positions rather than reading `LazyGridState`, so the whole table —
- * folding on the way down, unfolding on the way up, ignoring arrivals — is checkable without a
- * gesture.
+ * Not zero: a tap and a scroll share the same frame at first, and a header that folds on a stray
+ * pixel would flicker on every attempt to tap a card. 6px is below the touch slop of any device this
+ * ships to, so a real drag crosses it on its first event.
  */
-internal fun categoriesVisibleAfterScroll(
+internal const val FOLD_DRAG_THRESHOLD_PX = 6f
+
+/**
+ * Whether the category tree stays open, given one drag delta from the grid.
+ *
+ * Dragging up (a negative `deltaY`: content moving up, the list scrolling down) folds it away;
+ * dragging down brings it back; a delta too small to be a scroll changes nothing. `scrolledAway`
+ * gates the fold, because at the top of the list there is nothing behind the tree to reveal.
+ *
+ * **This replaced a decision based on `firstVisibleItemIndex`/`ScrollOffset`** (round 98), which was
+ * self-referential: the fold changes the grid's height, so the numbers the fold was derived from
+ * moved because of the fold. On the emulator that turned a 4-minute suite into a 17-minute one. A
+ * drag delta is an input, not a consequence.
+ */
+internal fun categoriesVisibleAfterDrag(
   visible: Boolean,
-  previousIndex: Int,
-  previousOffset: Int,
-  index: Int,
-  offset: Int,
-): Boolean {
-  if (index == 0 && offset <= 0) return true
-  val movedDown = index > previousIndex || (index == previousIndex && offset > previousOffset)
-  val movedUp = index < previousIndex || (index == previousIndex && offset < previousOffset)
-  return when {
-    movedDown -> false
-    movedUp -> true
-    else -> visible
-  }
+  deltaY: Float,
+  scrolledAway: Boolean,
+): Boolean = when {
+  deltaY < -FOLD_DRAG_THRESHOLD_PX && scrolledAway -> false
+  deltaY > FOLD_DRAG_THRESHOLD_PX -> true
+  else -> visible
 }
 
 /**
@@ -307,29 +308,29 @@ private fun PlatformPage(
   // question the user has already answered. Scrolling up is the only gesture that means "take me
   // back to the top of this", so the tree rides that instead of a second tap.
   //
-  // Only the direction is read from the scroll: `firstVisibleItemIndex`/`ScrollOffset` change on
-  // every frame, so the comparison happens in a `snapshotFlow`-free effect that just collects the
-  // pair and calls the pure decision below. A grid that has not moved yet keeps the tree, which is
-  // what every screenshot and every existing test sees.
+  // **Driven by the gesture's own deltas, not by the grid's first visible item.** The first version
+  // read `firstVisibleItemIndex`/`ScrollOffset` out of a `snapshotFlow`, which is the same quantity
+  // the fold changes back: hiding the header changes the grid's height, that changes the scroll
+  // state the decision was derived from, and the two fed each other. The instrumented suite went
+  // from 4 minutes to 17 on a change that was supposed to be cosmetic — a `NestedScrollConnection`
+  // sees the drag itself, a handful of times per gesture, and cannot be written back into layout.
   var categoriesVisible by remember(state.platform) { mutableStateOf(true) }
-  var lastIndex by remember(state.platform) { mutableIntStateOf(0) }
-  var lastOffset by remember(state.platform) { mutableIntStateOf(0) }
-  LaunchedEffect(gridState, state.platform) {
-    snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
-      .collect { (index, offset) ->
-        categoriesVisible = categoriesVisibleAfterScroll(
+  val foldHeader = remember(gridState) {
+    object : NestedScrollConnection {
+      override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        categoriesVisible = categoriesVisibleAfterDrag(
           visible = categoriesVisible,
-          previousIndex = lastIndex,
-          previousOffset = lastOffset,
-          index = index,
-          offset = offset,
+          deltaY = available.y,
+          // Nothing is hidden while the list is still at its top: the tree IS the content there.
+          scrolledAway = gridState.firstVisibleItemIndex > 0 ||
+            gridState.firstVisibleItemScrollOffset > 0,
         )
-        lastIndex = index
-        lastOffset = offset
+        return Offset.Zero
       }
+    }
   }
 
-  Column(modifier = Modifier.fillMaxSize()) {
+  Column(modifier = Modifier.fillMaxSize().nestedScroll(foldHeader)) {
     AnimatedVisibility(
       visible = categoriesVisible,
       // Vertical slide plus a size change, because the grid has to move up with it rather than
