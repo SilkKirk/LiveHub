@@ -24,7 +24,10 @@ import org.junit.jupiter.api.Test
  *
  * An empty answer is information, not a failure: it is the only way the grid can be told "this
  * partition is done". The fallback has to stay for the signature-rejected case, which is what the
- * second test pins.
+ * last test pins.
+ *
+ * JUnit 5, so every message goes **last** (the `:app` module's JUnit 4 tests are the other way
+ * round — the runbook warns about exactly this mix-up).
  */
 class DouyinPartitionFallbackTest {
 
@@ -81,9 +84,12 @@ class DouyinPartitionFallbackTest {
 
     val page = adapter(http).rooms(categoryId = "1:1010023", cursor = "4")
 
-    assertTrue("no feed request may be made: ${http.urls}", http.urls.none { it.contains("/webcast/feed/") })
-    assertTrue("the page is empty, not filled from another source: ${page.rooms}", page.rooms.isEmpty())
-    assertEquals("and the list is told it is done", null, page.nextCursor)
+    assertTrue(
+      http.urls.none { it.contains("/webcast/feed/") },
+      "no feed request may be made: ${http.urls}",
+    )
+    assertTrue(page.rooms.isEmpty(), "the page is empty, not filled from another source: ${page.rooms}")
+    assertEquals(null, page.nextCursor, "and the list is told it is done")
   }
 
   @Test
@@ -114,7 +120,7 @@ class DouyinPartitionFallbackTest {
    */
   @Test
   fun `a failed partition request still falls back to the feed`() = runBlocking {
-    val http = FakeHttp { index, url ->
+    val http = FakeHttp { _, url ->
       if (url.contains("/webcast/feed/")) {
         ok(feed())
       } else {
@@ -125,7 +131,10 @@ class DouyinPartitionFallbackTest {
     val page = adapter(http).rooms(categoryId = "1:1010023")
 
     assertEquals(listOf("feed1"), page.rooms.map { it.roomId })
-    assertEquals("the feed serves one page", null, page.nextCursor)
-    assertTrue("the fallback really was requested: ${http.urls}", http.urls.any { it.contains("/webcast/feed/") })
+    assertEquals(null, page.nextCursor, "the feed serves one page")
+    assertTrue(
+      http.urls.any { it.contains("/webcast/feed/") },
+      "the fallback really was requested: ${http.urls}",
+    )
   }
 }

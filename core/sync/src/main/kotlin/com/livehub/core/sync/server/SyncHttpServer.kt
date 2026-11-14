@@ -314,6 +314,13 @@ class SyncHttpServer(
       }
     }
 
+    // Refused before anything is allocated. The header is attacker controlled and `/pair` and
+    // `/ping` are answered without authentication, so `ByteArray(contentLength)` let any host on
+    // the network ask for a gigabyte and take the process down with an `OutOfMemoryError`. Every
+    // legitimate message here is a few kilobytes; the chunked follow list is bounded by
+    // [SyncPayload.MAX_RECORDS_PER_PAYLOAD] on the producing side.
+    if (contentLength > MAX_BODY_BYTES) return null
+
     val body = if (contentLength > 0) {
       val buffer = ByteArray(contentLength)
       var total = 0
@@ -371,6 +378,16 @@ class SyncHttpServer(
     const val DEFAULT_PORT = 47653
     private const val SOCKET_TIMEOUT_MILLIS = 15_000
     private const val MAX_LINE_LENGTH = 8192
+
+    /**
+     * Upper bound on one request body.
+     *
+     * A follow list split into `MAX_RECORDS_PER_PAYLOAD` chunks is tens of kilobytes; four
+     * megabytes leaves room for an order of magnitude more without letting a single request ask for
+     * a buffer the process cannot allocate. The bound exists because the length comes from the
+     * request header and [`PATH_PAIR`]/[`PATH_PING`] are answered before any authentication.
+     */
+    internal const val MAX_BODY_BYTES = 4 * 1024 * 1024
 
     /** Best-effort LAN IPv4 address of this device. */
     fun localIpv4Addresses(): List<String> = try {

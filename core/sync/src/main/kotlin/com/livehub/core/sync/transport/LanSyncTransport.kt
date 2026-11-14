@@ -250,6 +250,13 @@ class LanSyncTransport(
     }
 
     val body = if (contentLength >= 0) {
+      // A peer we are pairing with is still an unverified address, so the declared length is not
+      // trusted: `ByteArray(contentLength)` would let any listener on a swept address answer with a
+      // huge `Content-Length` and take the phone down. The request budget is the only other guard,
+      // and it bounds time, not memory.
+      if (contentLength > MAX_RESPONSE_BYTES) {
+        throw SyncTransportException(SyncFailureReason.PROTOCOL, "响应过大")
+      }
       val buffer = ByteArray(contentLength)
       var total = 0
       while (total < contentLength) {
@@ -259,7 +266,19 @@ class LanSyncTransport(
       }
       String(buffer, 0, total, Charsets.UTF_8)
     } else {
-      input.readBytes().toString(Charsets.UTF_8)
+      // No `Content-Length`: the server always sends one, so this is a peer that does not speak the
+      // protocol. Bounded rather than `readBytes()`, which would grow until the socket closes.
+      val buffer = java.io.ByteArrayOutputStream()
+      val chunk = ByteArray(8192)
+      while (true) {
+        val read = input.read(chunk)
+        if (read <= 0) break
+        if (buffer.size() + read > MAX_RESPONSE_BYTES) {
+          throw SyncTransportException(SyncFailureReason.PROTOCOL, "响应过大")
+        }
+        buffer.write(chunk, 0, read)
+      }
+      buffer.toString("UTF-8")
     }
     return RawResponse(status, body)
   }
@@ -296,6 +315,17 @@ class LanSyncTransport(
      * loop forever.
      */
     private const val MAX_PULL_CHUNKS = 1_000
+
+    /**
+     * Upper bound on one response body read from a peer.
+     *
+     * Matches the server's own request bound ([com.livehub.core.sync.server.SyncHttpServer.MAX_BODY_BYTES]):
+     * a chunk of 500 records is tens of kilobytes, so anything near this is either a misbehaving
+     * peer or an address that answered with something that is not this protocol. Bounding it here
+     * matters because this side reads from addresses that have not been authenticated yet — the
+     * pairing sweep offers the code to an entire subnet.
+     */
+    private const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
   }
 }
 

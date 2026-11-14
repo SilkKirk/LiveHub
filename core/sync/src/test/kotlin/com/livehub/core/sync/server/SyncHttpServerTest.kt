@@ -334,6 +334,40 @@ class SyncHttpServerTest {
     assertEquals(400, response.status)
   }
 
+  /**
+   * An oversized `Content-Length` is refused without allocating the buffer it asks for.
+   *
+   * The header is attacker controlled and `/pair`/`/ping` answer before authentication, so
+   * `ByteArray(contentLength)` let any host on the network request a gigabyte and take the process
+   * down. The server now answers 400 and never allocates — which is why this test can declare the
+   * size without sending a body: the old code would have allocated it before reading anything.
+   */
+  @Test
+  fun `an oversized declared body is refused without allocating it`() {
+    val declared = SyncHttpServer.MAX_BODY_BYTES + 1
+    val response = postRaw(
+      path = SyncEnvelope.PATH_PING,
+      contentLength = declared,
+      // Deliberately empty: the server must decide from the header alone.
+      body = "",
+    )
+
+    assertEquals(400, response.status)
+  }
+
+  /** A body at the bound is still accepted, so the limit is not accidentally the whole feature. */
+  @Test
+  fun `a body within the bound is still answered`() {
+    val envelope = SyncEnvelope.encode(SyncEnvelope(deviceId = 2, deviceName = "tablet", secret = ""))
+    val response = postRaw(
+      path = SyncEnvelope.PATH_PING,
+      contentLength = envelope.toByteArray(Charsets.UTF_8).size,
+      body = envelope,
+    )
+
+    assertEquals(200, response.status)
+  }
+
   @Test
   fun `stopping the server makes it unreachable`() {
     server.stop()
@@ -389,27 +423,55 @@ class SyncHttpServerTest {
       }
       out.write(request.toByteArray(Charsets.UTF_8))
       out.flush()
-
-      val input = BufferedInputStream(socket.getInputStream())
-      val statusLine = readLine(input) ?: return Raw(0, "")
-      val status = statusLine.split(' ').getOrNull(1)?.toIntOrNull() ?: 0
-      var length = 0
-      while (true) {
-        val line = readLine(input) ?: break
-        if (line.isEmpty()) break
-        if (line.startsWith("Content-Length:", ignoreCase = true)) {
-          length = line.substringAfter(':').trim().toIntOrNull() ?: 0
-        }
-      }
-      val buffer = ByteArray(length)
-      var total = 0
-      while (total < length) {
-        val read = input.read(buffer, total, length - total)
-        if (read <= 0) break
-        total += read
-      }
-      return Raw(status, String(buffer, 0, total, Charsets.UTF_8))
+      return readRaw(socket)
     }
+  }
+
+  /**
+   * Sends a request with a `Content-Length` that does not have to match [body].
+   *
+   * The oversized case has to declare more than it sends: writing a real 4 MB body would make the
+   * test slow without testing anything the header alone does not.
+   */
+  private fun postRaw(path: String, contentLength: Int, body: String): Raw {
+    Socket().use { socket ->
+      socket.connect(InetSocketAddress("127.0.0.1", port), 5_000)
+      socket.soTimeout = 5_000
+      val out = BufferedOutputStream(socket.getOutputStream())
+      val request = buildString {
+        append("POST ").append(path).append(" HTTP/1.1\r\n")
+        append("Host: 127.0.0.1\r\n")
+        append("Content-Type: application/json\r\n")
+        append("Content-Length: ").append(contentLength).append("\r\n")
+        append("Connection: close\r\n\r\n")
+        append(body)
+      }
+      out.write(request.toByteArray(Charsets.UTF_8))
+      out.flush()
+      return readRaw(socket)
+    }
+  }
+
+  private fun readRaw(socket: Socket): Raw {
+    val input = BufferedInputStream(socket.getInputStream())
+    val statusLine = readLine(input) ?: return Raw(0, "")
+    val status = statusLine.split(' ').getOrNull(1)?.toIntOrNull() ?: 0
+    var length = 0
+    while (true) {
+      val line = readLine(input) ?: break
+      if (line.isEmpty()) break
+      if (line.startsWith("Content-Length:", ignoreCase = true)) {
+        length = line.substringAfter(':').trim().toIntOrNull() ?: 0
+      }
+    }
+    val buffer = ByteArray(length)
+    var total = 0
+    while (total < length) {
+      val read = input.read(buffer, total, length - total)
+      if (read <= 0) break
+      total += read
+    }
+    return Raw(status, String(buffer, 0, total, Charsets.UTF_8))
   }
 
   private fun readLine(input: java.io.InputStream): String? {

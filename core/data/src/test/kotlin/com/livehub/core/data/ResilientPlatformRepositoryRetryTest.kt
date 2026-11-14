@@ -70,7 +70,11 @@ class ResilientPlatformRepositoryRetryTest {
    */
   @Test
   fun `a 403 is not retried`() {
-    assertEquals("a forbidden answer is final", 1, attemptsBeforeFailure(NetworkException(403, "forbidden")))
+    assertEquals(
+      1,
+      attemptsBeforeFailure(NetworkException(403, "forbidden")),
+      "a forbidden answer is final",
+    )
   }
 
   @Test
