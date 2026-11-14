@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
@@ -32,6 +33,10 @@ import org.robolectric.annotation.Config
  *
  * The tree is identified by its group chips (网游 / 手游 / 娱乐): they exist only while the tree is
  * composed, so "the node is gone" is the same statement as "the tree folded".
+ *
+ * Both swipes are performed on the **root** rather than on a card. The first version grabbed a card
+ * by its title, which works until the fold happens — then that card is scrolled away and the second
+ * gesture cannot be aimed. The window centre is inside the grid in both states.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -89,7 +94,7 @@ class HomeHeaderCollapseUiTest {
     composeHome()
     assertTrue("the tree starts open", groupRowCount() == 1)
 
-    composeRule.onNodeWithText("直播标题1").performTouchInput { swipeUp() }
+    composeRule.onRoot().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
 
     assertTrue(
@@ -102,13 +107,11 @@ class HomeHeaderCollapseUiTest {
   fun `swiping back down brings it back`() {
     composeHome()
 
-    composeRule.onNodeWithText("直播标题1").performTouchInput { swipeUp() }
+    composeRule.onRoot().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
     assertTrue("folded first", groupRowCount() == 0)
 
-    // Any visible card will do — after the fold the grid starts right under the platform tabs, so
-    // the first row is still on screen.
-    composeRule.onNodeWithText("直播标题1").performTouchInput { swipeDown() }
+    composeRule.onRoot().performTouchInput { swipeDown() }
     composeRule.waitForIdle()
 
     assertTrue("scrolling back up must bring the tree back", groupRowCount() == 1)
