@@ -105,6 +105,14 @@ fun StreamerCard(
    * the thing that lets the two be told apart at a glance.
    */
   showLiveBadge: Boolean = true,
+  /**
+   * Whether a room draws its partition badge on the cover.
+   *
+   * The same per-list rule as [showLiveBadge], for a different reason: on the home grid the user has
+   * just picked the partition, so every card there repeats the chip they tapped — while on the
+   * follow grid a partition is a word about a room somebody chose to keep.
+   */
+  showCategoryBadge: Boolean = true,
 ) {
   Surface(
     modifier = modifier
@@ -206,7 +214,7 @@ fun StreamerCard(
         // The local is not cosmetic: `categoryName` lives in `:core:model`, so a smart cast after
         // the null check is impossible and `text =` would not compile against `String?`.
         val partition = streamer.categoryName
-        if (!partition.isNullOrBlank()) {
+        if (showCategoryBadge && !partition.isNullOrBlank()) {
           Surface(
             color = Color.Black.copy(alpha = 0.5f),
             shape = PillShape,

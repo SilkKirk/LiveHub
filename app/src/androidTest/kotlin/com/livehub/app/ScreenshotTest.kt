@@ -478,6 +478,21 @@ class ScreenshotTest {
   @Test
   fun homeMiniPlayer() = capture("06b-home-mini-player", baseState().copy(room = douyuRooms[0]))
 
+  /**
+   * The home header folded away, which is what a downward scroll leaves behind.
+   *
+   * `01-home` is the first frame of a fresh grid, so it always shows the whole category tree; this
+   * render scrolls the grid to a card three rows down first (round 98). What to look for: the
+   * platform tabs are still there, the group and partition rows are gone, and the grid starts right
+   * under the tabs — the tree came back on the way up, which no still image can show.
+   */
+  @Test
+  fun homeHeaderCollapsed() = capture(
+    "01d-home-header-collapsed",
+    baseState(),
+    scrollToText = "大司马",
+  )
+
   private val followRooms = listOf(
     douyuRooms[0], douyuRooms[1], douyuRooms[2],
     streamer(Platform.HUYA, "10", "Uzi", "复出首播", 320_000),
@@ -1385,7 +1400,16 @@ class ScreenshotTest {
       // capture, so the scroll runs with the clock free and is frozen again afterwards. The
       // frozen frames that follow are what make the scrolled position part of the PNG.
       composeRule.mainClock.autoAdvance = true
-      composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(scrollToText))
+      // Every scrollable is offered the target in turn. The home screen has the platform chip rows
+      // *and* the room grid, and which of them can reach a given node is not something a caller
+      // should have to know — `onNode(hasScrollAction())` simply threw once a second scrollable
+      // existed.
+      val scrollables = composeRule.onAllNodes(hasScrollAction())
+      val candidates = scrollables.fetchSemanticsNodes().indices
+      val reached = candidates.any { index ->
+        runCatching { scrollables[index].performScrollToNode(hasText(scrollToText)) }.isSuccess
+      }
+      check(reached) { "no scrollable on this screen could reach \"$scrollToText\"" }
       composeRule.mainClock.autoAdvance = false
       composeRule.waitForIdle()
     }

@@ -112,16 +112,45 @@ class CardInformationDensityTest {
   }
 
   /**
-   * The partition badge the reference prints on the bottom-right of every tile.
+   * The partition badge, on the one screen where it is news.
    *
    * `Streamer.categoryName` has been carried since the Douyu and Huya parsers were written and was
    * simply never rendered — the same class of gap as the audience figure above.
+   *
+   * **Moved from the home grid to the follow grid in round 98.** On 首页 the user has just picked
+   * the partition, so every tile in the grid would repeat the chip they tapped — the same
+   * information twice in one screenshot, and the reason `showCategoryBadge` exists. A follow list
+   * has no such chip: it is a pile of rooms from wherever, and the partition is a word about each
+   * one. The home-side assertion is the test below this one.
    *
    * The partitions here are deliberately **not** the ones in the category row: 英雄联盟 is both a
    * row chip and a plausible badge, and a text query cannot tell the two apart.
    */
   @Test
-  fun `a room card labels its partition`() {
+  fun `a followed room labels its partition`() {
+    val state = UiState(
+      screen = Screen.Follow,
+      platform = Platform.DOUYU,
+      followed = listOf(
+        streamer("主播甲", 129_000, category = "户外"),
+        streamer("主播乙", 96_000, category = "颜值"),
+      ),
+    )
+
+    composeInSmallWindow { FollowScreen(state = state, onAction = {}) }
+
+    composeRule.onNodeWithText("户外").assertExists()
+    composeRule.onNodeWithText("颜值").assertExists()
+  }
+
+  /**
+   * The home grid does not print the partition, because it is the chip the user just tapped.
+   *
+   * Paired with the test above so the two halves cannot drift: the badge still exists in the card,
+   * and exactly one of the two grids draws it.
+   */
+  @Test
+  fun `the home grid does not repeat the partition on every card`() {
     val state = UiState(
       screen = Screen.Home,
       platform = Platform.DOUYU,
@@ -135,8 +164,11 @@ class CardInformationDensityTest {
 
     composeInSmallWindow { HomeScreen(state = state, onAction = {}) }
 
-    composeRule.onNodeWithText("户外").assertExists()
-    composeRule.onNodeWithText("颜值").assertExists()
+    composeRule.onNodeWithText("直播标题 主播甲").assertExists()
+    assertTrue(
+      "the home grid drew a partition badge the category row already shows",
+      composeRule.onAllNodesWithText("户外").fetchSemanticsNodes().isEmpty(),
+    )
   }
 
   /**

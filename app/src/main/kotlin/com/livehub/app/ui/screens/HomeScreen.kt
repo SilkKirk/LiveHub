@@ -1,6 +1,12 @@
 package com.livehub.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -50,10 +56,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -197,6 +205,38 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
 }
 
 /**
+ * Whether the category tree stays open, given the scroll position before and after one frame.
+ *
+ * Scrolling down folds it away; scrolling up brings it back; standing still changes nothing. The
+ * "standing still" case is not academic — `firstVisibleItemIndex`/`ScrollOffset` also move when the
+ * *content* changes (a page arrives, a refresh replaces the list), and a fold that reacted to that
+ * would slide shut while nobody was touching the screen.
+ *
+ * A grid at its very top always shows the tree: that is the state the app opens in, and the only
+ * place where "which partition am I in" is worth the pixels.
+ *
+ * A pure function taking the two positions rather than reading `LazyGridState`, so the whole table —
+ * folding on the way down, unfolding on the way up, ignoring arrivals — is checkable without a
+ * gesture.
+ */
+internal fun categoriesVisibleAfterScroll(
+  visible: Boolean,
+  previousIndex: Int,
+  previousOffset: Int,
+  index: Int,
+  offset: Int,
+): Boolean {
+  if (index == 0 && offset <= 0) return true
+  val movedDown = index > previousIndex || (index == previousIndex && offset > previousOffset)
+  val movedUp = index < previousIndex || (index == previousIndex && offset < previousOffset)
+  return when {
+    movedDown -> false
+    movedUp -> true
+    else -> visible
+  }
+}
+
+/**
  * One platform's page: the category tree and the grid.
  *
  * Extracted from the old single-platform body so the pager can compose two of them at once during
@@ -261,15 +301,52 @@ private fun PlatformPage(
     expanded = false
   }
 
+  // The category tree folds away while the user is reading the grid, and comes back the moment the
+  // scroll reverses. Two chip rows plus a third level are the most expensive pixels on this screen
+  // (they were 41% of it before round 22), and once the grid is being scrolled they are answering a
+  // question the user has already answered. Scrolling up is the only gesture that means "take me
+  // back to the top of this", so the tree rides that instead of a second tap.
+  //
+  // Only the direction is read from the scroll: `firstVisibleItemIndex`/`ScrollOffset` change on
+  // every frame, so the comparison happens in a `snapshotFlow`-free effect that just collects the
+  // pair and calls the pure decision below. A grid that has not moved yet keeps the tree, which is
+  // what every screenshot and every existing test sees.
+  var categoriesVisible by remember(state.platform) { mutableStateOf(true) }
+  var lastIndex by remember(state.platform) { mutableIntStateOf(0) }
+  var lastOffset by remember(state.platform) { mutableIntStateOf(0) }
+  LaunchedEffect(gridState, state.platform) {
+    snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+      .collect { (index, offset) ->
+        categoriesVisible = categoriesVisibleAfterScroll(
+          visible = categoriesVisible,
+          previousIndex = lastIndex,
+          previousOffset = lastOffset,
+          index = index,
+          offset = offset,
+        )
+        lastIndex = index
+        lastOffset = offset
+      }
+  }
+
   Column(modifier = Modifier.fillMaxSize()) {
-    CategoryTree(
-      state = state,
-      levels = levels,
-      expanded = expanded,
-      onToggleExpanded = { expanded = !expanded },
-      onSelectGroup = { browseGroup = it },
-      onAction = onAction,
-    )
+    AnimatedVisibility(
+      visible = categoriesVisible,
+      // Vertical slide plus a size change, because the grid has to move up with it rather than
+      // being covered by a floating bar. 160ms is the short end of Material's "expressive" range:
+      // long enough to read as a fold, short enough that the list does not wait for it.
+      enter = expandVertically(animationSpec = tween(160)) + fadeIn(tween(160)),
+      exit = shrinkVertically(animationSpec = tween(160)) + fadeOut(tween(120)),
+    ) {
+      CategoryTree(
+        state = state,
+        levels = levels,
+        expanded = expanded,
+        onToggleExpanded = { expanded = !expanded },
+        onSelectGroup = { browseGroup = it },
+        onAction = onAction,
+      )
+    }
 
     RefreshableBox(
       refreshing = refreshing,
@@ -335,6 +412,10 @@ private fun RoomGrid(
         // Everything here is on air — that is what a platform's listing is — so the badge printed
         // the same word on every tile. The follow grid, which mixes live and offline rooms, keeps it.
         showLiveBadge = false,
+        // And the partition is the chip the user just tapped: repeating it on every cover is the
+        // same information twice in one screenshot. The cover keeps the audience figure and the
+        // star, which are the two things that differ from tile to tile.
+        showCategoryBadge = false,
       )
     }
     if (state.loadingMore) {
