@@ -208,6 +208,18 @@ data class DanmakuMessage(
   val text: String,
   val color: Int? = null,
   val receivedAt: Long = 0,
+  /**
+   * Position in the room's chat stream, assigned by the collector as messages arrive.
+   *
+   * A rolling buffer (`takeLast(cap)`) makes *positional* identity useless: once it is full every
+   * arrival shifts every index by one, so a list keyed on the index considers **every** row
+   * replaced on every message and rebuilds them all. A monotonic per-collector counter stays put
+   * as the buffer slides, which is what a `LazyColumn` key needs.
+   *
+   * Zero means "not assigned": adapters never set it and a list built by hand (a test, a
+   * screenshot fixture) keeps the default. Readers fall back to the buffer's own order there.
+   */
+  val seq: Long = 0,
 )
 
 /** A live status snapshot for one followed streamer. */

@@ -1357,7 +1357,17 @@ private fun DanmakuList(
     }
   }
 
-  LaunchedEffect(messages.size) {
+  /**
+   * The newest message, which is what "follow the tail" has to react to.
+   *
+   * Keyed on the message rather than on `messages.size`: the ViewModel's buffer is a rolling window
+   * capped at `MAX_DANMAKU_BUFFER`, so once a busy room fills it the length stops changing and a
+   * size-keyed effect would never run again — the list would sit frozen on old rows while new
+   * danmaku kept arriving. `lastOrNull()` keeps changing for every arrival, cap or not.
+   */
+  val newest = messages.lastOrNull()
+
+  LaunchedEffect(newest) {
     // Only follow the tail when the user is already there, so scrolling back through older
     // messages is not interrupted by every new danmaku. `atBottom` is read here, not
     // captured: `derivedStateOf` recomputes from the live layout, so this sees the position
@@ -1375,7 +1385,13 @@ private fun DanmakuList(
   ) {
     itemsIndexed(
       messages,
-      key = { index, message -> "${message.receivedAt}:$index" },
+      // Identity, not position. The key used to be `"$receivedAt:$index"`, and once the rolling
+      // buffer is full every arrival shifts **every** index by one — so every key changed on every
+      // message and the whole visible list was rebuilt instead of one row entering at the bottom
+      // and one leaving at the top. `seq` stays put as the buffer slides; the negative-index
+      // fallback keeps hand-built lists (tests, screenshot fixtures, `seq` 0) unique. Both branches
+      // are `Long` so a list that mixes stamped and unstamped entries still has one key type.
+      key = { index, message -> if (message.seq != 0L) message.seq else -(index.toLong() + 1L) },
     ) { _, message ->
       DanmakuRow(user = message.userName, content = message.text)
     }

@@ -47,6 +47,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private var pairingCountdownJob: Job? = null
 
   /**
+   * Counter behind [com.livehub.core.model.DanmakuMessage.seq], reset per room.
+   *
+   * Only the danmaku collector touches it, and it runs on the main dispatcher, so a plain `Long`
+   * is enough. See the collection site for why a positional cursor is not: the buffer it feeds is
+   * capped, so `size` stops moving in a busy room.
+   */
+  private var danmakuSeq: Long = 0L
+
+  /**
    * The start of the LAN server, which is a socket bind and therefore not synchronous any more.
    *
    * Held so a second caller can wait for the same bind instead of starting another one; see
@@ -242,7 +251,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       UiAction.LogoutBilibili -> logoutBilibili()
       is UiAction.DouyinLoggedIn -> douyinLoggedIn(action.cookie)
       UiAction.LogoutDouyin -> logoutDouyin()
-      UiAction.DismissMessage -> _state.update { it.copy(message = null, error = null) }
+      // Only the transient notice. `error` is a *load* failure that the screen renders inline
+      // (with a retry button), and the two have different lifetimes — see `UiState.error`'s KDoc.
+      // Clearing both here was collateral damage: dismissing any snackbar (a follow, a logout, a
+      // cache sweep) also erased the error the home screen was showing, so a failed load turned
+      // into "现在没有人在直播" the moment an unrelated message timed out.
+      UiAction.DismissMessage -> _state.update { it.copy(message = null) }
     }
   }
 
@@ -1303,6 +1317,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         // And the same for the danmaku socket: opening a room starts a new subscription, so the
         // previous room's failure must not be shown while the new one is still connecting.
         danmakuStatus = DanmakuStatus.Connecting,
+        // The buffer belongs to the room that produced it. Opening a second room from the mini
+        // window never goes through [closePlayer], so without this the new room's player and panel
+        // showed the previous room's chat under the new room's name — and since the buffer was
+        // already full, the new room's own messages had nowhere to go (see [MAX_DANMAKU_BUFFER]).
+        danmaku = emptyList(),
       )
     }
     playbackJob = viewModelScope.launch {
@@ -1412,6 +1431,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun closePlayer() {
     playbackJob?.cancel()
     danmakuJob?.cancel()
+    danmakuSeq = 0L
     // Closing from the mini window leaves the user exactly where they were browsing; only closing
     // the player screen itself navigates back to where the room was opened from.
     val current = _state.value.screen
@@ -1473,13 +1493,25 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    */
   private fun startDanmaku(streamer: Streamer) {
     danmakuJob?.cancel()
+    // Each room starts a new numbering: the sequence is an identity within one chat stream, and the
+    // buffer it belongs to is cleared whenever the room changes. This runs before the collector is
+    // launched, so the first message of the new room is stamped 1 even though the previous room's
+    // counter had reached the cap.
+    danmakuSeq = 0L
     danmakuJob = viewModelScope.launch {
       _state.update { it.copy(danmakuStatus = DanmakuStatus.Connecting) }
       try {
         container.platformGateway.danmaku(streamer.platform, streamer.roomId).collect { event ->
           when (event) {
             is com.livehub.platform.api.DanmakuEvent.Message -> _state.update { current ->
-              val next = (current.danmaku + event.message).takeLast(MAX_DANMAKU_BUFFER)
+              // The rolling buffer caps at [MAX_DANMAKU_BUFFER], so position inside it stops being
+              // an identity: once it is full, one message leaves the front for every one that
+              // arrives and every index shifts. Stamping a per-collector counter here is what lets
+              // the overlay tell "new" from "already shown" and lets the list key its rows, in
+              // both cases without relying on the buffer's length. See [danmakuSeq].
+              val message = event.message.copy(seq = danmakuSeq + 1)
+              danmakuSeq = message.seq
+              val next = (current.danmaku + message).takeLast(MAX_DANMAKU_BUFFER)
               current.copy(
                 danmaku = next,
                 // A message is proof the socket works, whatever the last status said.

@@ -65,6 +65,7 @@ import com.livehub.app.ui.components.collapsibleHeaderScroll
 import com.livehub.app.ui.components.rememberCollapsibleHeaderState
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.ErrorState
+import com.livehub.app.ui.components.InlineErrorNotice
 import com.livehub.app.ui.components.InlineLoader
 import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerCard
@@ -300,30 +301,45 @@ private fun PlatformPage(
       onRefresh = { onAction(UiAction.Refresh) },
       modifier = Modifier.fillMaxSize(),
     ) {
-      when {
-        state.rooms.isEmpty() && state.loading -> StreamerGridSkeleton()
-        state.rooms.isEmpty() && state.error != null ->
-          ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
-        state.rooms.isEmpty() -> {
-          // The aggregate entry is not a partition, so the copy cannot call it one.
-          val aggregate = state.selectedCategory?.isAggregate == true
-          EmptyState(
-            title = if (aggregate) "现在没有人在直播" else "这个分区暂时没有直播",
-            description = if (aggregate) {
-              "换一个分区看看？"
-            } else {
-              "${state.selectedCategory?.name ?: ""} 还没有人在播，换个分区看看？"
-            },
-            actionLabel = "刷新",
-            onAction = { onAction(UiAction.Refresh) },
+      Column(modifier = Modifier.fillMaxSize()) {
+        // A failure with the old list still on screen used to have no rendering path: the
+        // indicator retracted, the grid stayed as it was, and nothing said the refresh had
+        // failed — which reads exactly like "nobody is streaming". The full-screen ErrorState
+        // below covers the empty case; this is its inline counterpart.
+        val failure = state.error
+        if (failure != null && state.rooms.isNotEmpty()) {
+          InlineErrorNotice(
+            message = failure,
+            onRetry = { onAction(UiAction.Refresh) },
           )
         }
-        else -> RoomGrid(
-          state = state,
-          gridState = gridState,
-          followedKeys = followedKeys,
-          onAction = onAction,
-        )
+        Box(modifier = Modifier.weight(1f)) {
+          when {
+            state.rooms.isEmpty() && state.loading -> StreamerGridSkeleton()
+            state.rooms.isEmpty() && state.error != null ->
+              ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
+            state.rooms.isEmpty() -> {
+              // The aggregate entry is not a partition, so the copy cannot call it one.
+              val aggregate = state.selectedCategory?.isAggregate == true
+              EmptyState(
+                title = if (aggregate) "现在没有人在直播" else "这个分区暂时没有直播",
+                description = if (aggregate) {
+                  "换一个分区看看？"
+                } else {
+                  "${state.selectedCategory?.name ?: ""} 还没有人在播，换个分区看看？"
+                },
+                actionLabel = "刷新",
+                onAction = { onAction(UiAction.Refresh) },
+              )
+            }
+            else -> RoomGrid(
+              state = state,
+              gridState = gridState,
+              followedKeys = followedKeys,
+              onAction = onAction,
+            )
+          }
+        }
       }
     }
   }

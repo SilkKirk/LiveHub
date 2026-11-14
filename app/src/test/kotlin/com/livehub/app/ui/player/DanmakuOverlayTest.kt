@@ -174,6 +174,113 @@ class DanmakuOverlayTest {
 }
 
 /**
+ * What the overlay still has to animate after a buffer update.
+ *
+ * The ViewModel keeps a **rolling** buffer, so the interesting case is not "a message arrived"
+ * but "the buffer is already full": one entry leaves the front for every one that arrives and
+ * the length never changes. A cursor made of a count cannot express that (it reaches the cap and
+ * stops), which is why the overlay remembers the previous snapshot instead. Without this, a busy
+ * room — the only kind where the overlay matters — went silent a couple of seconds in.
+ */
+class DanmakuDeltaTest {
+
+  private fun message(text: String, seq: Long = 0L) =
+    DanmakuMessage(roomKey = "douyu:1", userName = "观众", text = text, receivedAt = 1_000L + seq, seq = seq)
+  @Test
+  fun `the first emission animates everything`() {
+    val all = listOf(message("a"), message("b"))
+    assertEquals(all, newDanmakuSince(previous = emptyList(), current = all))
+  }
+
+  @Test
+  fun `an appended message animates only itself`() {
+    val before = listOf(message("a"), message("b"))
+    val after = before + message("c")
+    assertEquals(listOf(message("c")), newDanmakuSince(before, after))
+  }
+
+  @Test
+  fun `a repeated emission animates nothing`() {
+    val messages = listOf(message("a"), message("b"))
+    assertTrue(newDanmakuSince(messages, messages).isEmpty())
+  }
+
+  /**
+   * The regression: at the cap, one in and one out.
+   *
+   * A full buffer keeps its length, so "how many have I consumed" is already the cap and the old
+   * `drop(consumedCount)` produced an empty list forever. The overlap between the two snapshots
+   * still identifies the new tail exactly.
+   */
+  @Test
+  fun `a full buffer still yields the message that displaced the oldest one`() {
+    val cap = 200
+    val before = (0 until cap).map { message("旧$it") }
+    val after = (1..cap).map { message("旧$it") }
+
+    val pending = newDanmakuSince(before, after)
+
+    assertEquals("exactly the one that entered", listOf(message("旧$cap")), pending)
+  }
+
+  /** Two messages can arrive between emissions; both have to be animated, in order. */
+  @Test
+  fun `everything appended between two emissions is kept`() {
+    val cap = 4
+    val before = (0 until cap).map { message("旧$it") }
+    val after = (2..cap + 2).map { message("旧$it") }
+
+    assertEquals(
+      listOf(message("旧$cap"), message("旧${cap + 1}"), message("旧${cap + 2}")),
+      newDanmakuSince(before, after),
+    )
+  }
+
+  /** A new room replaces the buffer outright: nothing overlaps, so everything is new. */
+  @Test
+  fun `a replaced buffer animates in full rather than staying empty`() {
+    val previousRoom = (0 until 200).map { message("旧房间$it") }
+    val newRoom = listOf(message("新房间0"), message("新房间1"))
+
+    assertEquals(newRoom, newDanmakuSince(previousRoom, newRoom))
+  }
+
+  /**
+   * The collector's `seq` path, which is what production uses.
+   *
+   * Content alone cannot separate two identical messages ("666" twice); the sequence can, so the
+   * delta has to be decided on it whenever it is present.
+   */
+  @Test
+  fun `the sequence decides the delta when both sides carry one`() {
+    val before = listOf(message("666", seq = 1), message("666", seq = 2))
+    val after = listOf(message("666", seq = 2), message("666", seq = 3))
+
+    val pending = newDanmakuSince(before, after)
+
+    assertEquals("only the third message is new", listOf(message("666", seq = 3)), pending)
+  }
+
+  /**
+   * Opening a second room restarts the numbering, and nothing may be filtered out by the old
+   * high-water mark.
+   *
+   * This is the edge that a naive "give me everything above the last id I saw" rule gets wrong: the
+   * previous room finished at, say, 200, the new one starts again at 1, and every one of its
+   * messages compares *below* the old mark — so a room switch would leave the overlay silent until
+   * the new room had produced more messages than the old one ever did. A newest id at or below the
+   * mark can only mean "different stream", and then everything in the buffer is new.
+   */
+  @Test
+  fun `switching rooms restarts the sequence without swallowing the new chat`() {
+    val oldRoom = listOf(message("旧房间", seq = 199), message("旧房间", seq = 200))
+    val newRoom = listOf(message("新房间", seq = 1), message("新房间", seq = 2))
+
+    assertEquals(newRoom, newDanmakuSince(oldRoom, newRoom))
+  }
+}
+
+/**
  * Lane scheduling, which is pure arithmetic and needs no composition.
  *
  * Plain round-robin assignment — what the overlay did before — hands out lane N+1 while a

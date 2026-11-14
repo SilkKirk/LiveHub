@@ -118,6 +118,48 @@ internal fun laneFreeAfterMs(textWidthPx: Float, screenWidthPx: Float, flightMil
 }
 
 /**
+ * The entries of [current] that were not already part of [previous].
+ *
+ * The ViewModel keeps a **rolling** buffer: `(danmaku + new).takeLast(MAX_DANMAKU_BUFFER)`. Once it
+ * is full, one message leaves the front for every one that arrives, so the length stops changing —
+ * and a cursor made of "how many entries have I consumed" then points past the end forever:
+ * `size < consumedCount` never fires, `drop(consumedCount)` is always empty, and the overlay
+ * animates nothing for the rest of the room. A busy room reaches that state in seconds, which is
+ * exactly where the overlay matters at all.
+ *
+ * The buffer is always a contiguous suffix of the append-only stream, so the overlap is recoverable
+ * from the contents: the longest tail of [previous] that is also the head of [current] is what both
+ * lists share, and everything after it is new. Two identical messages straddling the boundary can
+ * only make that overlap one entry *longer* than it really was (same text, same millisecond), which
+ * costs one repeated bubble rather than a lost one — the safe direction.
+ */
+internal fun newDanmakuSince(
+  previous: List<com.livehub.core.model.DanmakuMessage>,
+  current: List<com.livehub.core.model.DanmakuMessage>,
+): List<com.livehub.core.model.DanmakuMessage> {
+  if (current.isEmpty()) return emptyList()
+  if (previous.isEmpty()) return current
+  // The collector stamps a monotonic `seq`, which makes the answer exact and cheap even in the
+  // steady state where the capped buffer's length never changes.
+  val lastSeen = previous.last().seq
+  val newest = current.last().seq
+  if (lastSeen != 0L) {
+    // Numbering restarts with the room, so a newest id at or below the last one already shown means
+    // this is a *different* chat stream: nothing is shared and every entry is new. Without this the
+    // first room's high-water mark would swallow the whole of the next room's chatter.
+    return if (newest > lastSeen) current.filter { it.seq > lastSeen } else current
+  }
+  // Hand-built lists (tests, screenshot fixtures) carry seq 0, so fall back to the content overlap.
+  val limit = minOf(previous.size, current.size)
+  for (shared in limit downTo 1) {
+    if (previous.subList(previous.size - shared, previous.size) == current.subList(0, shared)) {
+      return current.subList(shared, current.size).toList()
+    }
+  }
+  return current
+}
+
+/**
  * Filters blocked keywords out of a danmaku list.
  *
  * Both surfaces need this: the overlay used to filter inline while the portrait list
@@ -168,15 +210,19 @@ fun DanmakuOverlay(
   val flying = remember { mutableStateListOf<FlyingDanmaku>() }
   var nextId by remember { mutableStateOf(0L) }
   /**
-   * How far into [messages] the overlay has already animated.
+   * What the overlay has already animated, kept as the previous buffer snapshot.
    *
    * `LaunchedEffect(messages)` re-runs on every emission, and `messages` is the *whole*
    * rolling buffer (up to 200 entries) rather than the new message. Iterating it each time
    * re-added every older danmaku, so one new message per second put a couple of hundred
-   * extra bubbles on screen and the lane cursor wrapped constantly. The offset makes each
-   * message enter exactly once.
+   * extra bubbles on screen and the lane cursor wrapped constantly.
+   *
+   * A snapshot rather than a count, because the buffer is capped: a count stops advancing once the
+   * list length stops changing, while the difference between two snapshots can still be recovered
+   * (see [newDanmakuSince]). A plain `ArrayList` and not a snapshot state object: it is read and
+   * written only from the effect, and nothing in composition should recompose because of it.
    */
-  var consumedCount by remember { mutableStateOf(0) }
+  val animatedSoFar = remember { mutableListOf<com.livehub.core.model.DanmakuMessage>() }
 
   val measurer = rememberTextMeasurer()
   val density = LocalDensity.current
@@ -202,13 +248,13 @@ fun DanmakuOverlay(
     val laneAvailableAt = remember(laneCount) { LongArray(laneCount) { 0L } }
 
     LaunchedEffect(messages, laneCount, screenWidthPx) {
-      // The buffer is trimmed at the front once it exceeds the cap, which shifts every index.
-      // A shorter list than the consumed count means that happened, so start over rather than
-      // skip the new tail.
-      if (messages.size < consumedCount) consumedCount = 0
-      val pending = messages.drop(consumedCount)
-      consumedCount = messages.size
-      if (pending.isEmpty()) return@LaunchedEffect
+      val pending = newDanmakuSince(animatedSoFar, messages)
+      if (pending.isEmpty()) {
+        // Nothing new: refresh the snapshot (a room switch replaces the buffer outright) and stop.
+        animatedSoFar.clear()
+        animatedSoFar.addAll(messages)
+        return@LaunchedEffect
+      }
 
       withFrameMillis { frameTime ->
         pending.forEach { message ->
@@ -251,6 +297,12 @@ fun DanmakuOverlay(
       }
       // Keep the overlay bounded: a busy room can push hundreds of messages a second.
       while (flying.size > MAX_VISIBLE) flying.removeAt(0)
+      // The snapshot is advanced **after** the animation was created, and the effect can be
+      // cancelled at any suspension point before this line. That is the safe direction: those
+      // pending messages are simply not animated. Recording them first would mark them animated
+      // before they had a bubble, i.e. lose them outright.
+      animatedSoFar.clear()
+      animatedSoFar.addAll(messages)
     }
 
     flying.forEach { item ->

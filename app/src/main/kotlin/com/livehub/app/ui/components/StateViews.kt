@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /** Full-screen state message with an optional action, used by every list screen. */
@@ -118,6 +119,51 @@ fun EmptyState(
     onAction = onAction,
     modifier = modifier,
   )
+}
+
+/**
+ * A one-line failure notice for a list that already has content.
+ *
+ * [ErrorState] is the full-screen version and only fits an empty list. A refresh that fails over
+ * existing rooms had no rendering path at all: the indicator retracted and the grid simply stayed
+ * as it was, so "the network is down" looked exactly like "nothing is on air". This is the inline
+ * counterpart — a row above the content, with the reason and a retry, without taking the page away.
+ *
+ * The plate is `surfaceContainerHigh`, not `errorContainer`: this project's scheme never sets the
+ * error container tokens, so reading them would pull Material's baseline purple-grey into a page
+ * that is otherwise all brand neutrals (the same trap the card-surface note in `Theme.kt`
+ * describes). The failure is carried by the `error` tint on the text and icon instead.
+ */
+@Composable
+fun InlineErrorNotice(
+  message: String,
+  onRetry: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .padding(horizontal = 12.dp, vertical = 6.dp)
+      .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(10.dp))
+      .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Icon(
+      imageVector = Icons.Outlined.CloudOff,
+      contentDescription = null,
+      modifier = Modifier.size(16.dp),
+      tint = MaterialTheme.colorScheme.error,
+    )
+    Text(
+      text = message,
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f).padding(start = 8.dp),
+    )
+    TextButton(onClick = onRetry) { Text("重试", style = MaterialTheme.typography.labelMedium) }
+  }
 }
 
 /**

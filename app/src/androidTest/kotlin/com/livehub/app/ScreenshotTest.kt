@@ -466,6 +466,20 @@ class ScreenshotTest {
   )
 
   /**
+   * A refresh that failed while the old list is still on screen.
+   *
+   * `06-home-error` covers the empty case, which is the only one the full-screen `ErrorState` fits.
+   * With rooms already loaded there used to be no rendering path at all: the pull indicator
+   * retracted and the grid stayed exactly as it was, so a dead network was indistinguishable from
+   * "nobody is streaming" — the same pixels for two very different situations.
+   */
+  @Test
+  fun homeErrorWithRooms() = capture(
+    "06c-home-error-with-rooms",
+    baseState().copy(error = "无法连接到服务器，请检查网络后重试"),
+  )
+
+  /**
    * The mini window, over the browse screen.
    *
    * Every other render of the player is a full-window surface; this is the only one of it shrunk

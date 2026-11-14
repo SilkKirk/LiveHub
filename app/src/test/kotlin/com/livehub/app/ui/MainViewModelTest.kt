@@ -84,6 +84,100 @@ class MainViewModelTest {
         isLive = true,
       )
 
+  /**
+   * An adapter whose catalogue cannot load.
+   *
+   * `categories()` is the first request the ViewModel makes, and its failure is what puts a
+   * retryable message into `UiState.error` — the state the snackbar test needs to find intact.
+   */
+  private fun offlineAdapter(): com.livehub.platform.api.LivePlatformAdapter =
+    object : com.livehub.platform.api.LivePlatformAdapter {
+      override val platform: Platform = Platform.DOUYU
+
+      override suspend fun categories(): List<com.livehub.core.model.Category> =
+        throw com.livehub.platform.api.PlatformProtocolException("加载分区失败", Platform.DOUYU)
+
+      override suspend fun rooms(
+        categoryId: String,
+        cursor: String?,
+        slug: String?,
+      ): com.livehub.core.model.RoomPage = com.livehub.core.model.RoomPage(rooms = emptyList())
+
+      override suspend fun search(
+        keyword: String,
+        cursor: String?,
+      ): com.livehub.core.model.RoomPage = com.livehub.core.model.RoomPage(rooms = emptyList())
+
+      override suspend fun roomDetail(roomId: String): com.livehub.core.model.Streamer? = null
+
+      override suspend fun liveStatus(roomId: String): com.livehub.core.model.LiveStatus? = null
+
+      override suspend fun playback(
+        roomId: String,
+        preferredQuality: Int?,
+        preferredLine: String?,
+      ): com.livehub.core.model.PlaybackSource =
+        throw com.livehub.platform.api.PlatformNotFoundException("没有这个房间", Platform.DOUYU)
+
+      override fun danmaku(roomId: String): kotlinx.coroutines.flow.Flow<com.livehub.platform.api.DanmakuEvent> =
+        kotlinx.coroutines.flow.emptyFlow()
+    }
+
+  /**
+   * An adapter whose danmaku socket emits [texts] for the room it is opened on, then stays open.
+   *
+   * Handing the messages to the real `MainViewModel` collector is the only way to test the buffer
+   * cap and the per-message sequence: both are produced there, not in the adapter, and a fake that
+   * bypassed the collector would assert on a state nothing in production can reach.
+   */
+  private fun chattyAdapter(
+    texts: (roomId: String) -> List<String>,
+  ): com.livehub.platform.api.LivePlatformAdapter =
+    object : com.livehub.platform.api.LivePlatformAdapter {
+      override val platform: Platform = Platform.DOUYU
+
+      override suspend fun categories(): List<com.livehub.core.model.Category> = emptyList()
+
+      override suspend fun rooms(
+        categoryId: String,
+        cursor: String?,
+        slug: String?,
+      ): com.livehub.core.model.RoomPage = com.livehub.core.model.RoomPage(rooms = emptyList())
+
+      override suspend fun search(
+        keyword: String,
+        cursor: String?,
+      ): com.livehub.core.model.RoomPage = com.livehub.core.model.RoomPage(rooms = emptyList())
+
+      override suspend fun roomDetail(roomId: String): com.livehub.core.model.Streamer? = null
+
+      override suspend fun liveStatus(roomId: String): com.livehub.core.model.LiveStatus? = null
+
+      override suspend fun playback(
+        roomId: String,
+        preferredQuality: Int?,
+        preferredLine: String?,
+      ): com.livehub.core.model.PlaybackSource =
+        throw com.livehub.platform.api.PlatformNotFoundException("没有这个房间", Platform.DOUYU)
+
+      override fun danmaku(
+        roomId: String,
+      ): kotlinx.coroutines.flow.Flow<com.livehub.platform.api.DanmakuEvent> =
+        kotlinx.coroutines.flow.flow {
+          texts(roomId).forEach { text ->
+            emit(
+              com.livehub.platform.api.DanmakuEvent.Message(
+                com.livehub.core.model.DanmakuMessage(
+                  roomKey = "douyu:$roomId",
+                  userName = "观众",
+                  text = text,
+                ),
+              ),
+            )
+          }
+        }
+    }
+
   // ---------------------------------------------------------------- navigation ---
 
   @Test
@@ -151,6 +245,75 @@ class MainViewModelTest {
     idle()
 
     assertNull("the failure belongs to the closed room", state.playerError)
+  }
+
+  /**
+   * A second room must not inherit the first one's chat.
+   *
+   * Opening a room from the mini window never goes through `closePlayer`, which is the only path
+   * that used to clear the buffer — so the new room's player and danmaku panel drew the previous
+   * room's messages under the new room's name. A busy room makes it worse: its buffer is already at
+   * the 200-entry cap, so the new room's own messages have nowhere to go until the old ones age
+   * out. The collector's own numbering is proved in the same test: it has to restart per room, or
+   * the overlay's cursor would think the new chat is older than the old one.
+   */
+  @Test
+  fun `a second room starts with an empty buffer and a fresh sequence`() {
+    val chatting = AppContainer(
+      ApplicationProvider.getApplicationContext(),
+      adaptersOverride = listOf(chattyAdapter { roomId -> listOf("$roomId 的弹幕") }),
+    )
+    chatting.preferences.update { com.livehub.app.di.UserSettings() }
+    val chatterModel = MainViewModel(chatting)
+    idle()
+
+    chatterModel.onAction(UiAction.OpenRoom(streamer("30", "第一个主播")))
+    awaitCondition { chatterModel.state.value.danmaku.isNotEmpty() }
+    assertEquals(
+      "the collector stamps a monotonic sequence",
+      listOf(1L),
+      chatterModel.state.value.danmaku.map { it.seq },
+    )
+
+    chatterModel.onAction(UiAction.OpenRoom(streamer("31", "第二个主播")))
+    awaitCondition {
+      val rooms = chatterModel.state.value.danmaku
+      rooms.isNotEmpty() && rooms.all { it.roomKey == "douyu:31" }
+    }
+
+    val second = chatterModel.state.value.danmaku
+    assertEquals("the old room's chat is gone", listOf("douyu:31"), second.map { it.roomKey })
+    assertEquals("and the numbering restarted with the room", listOf(1L), second.map { it.seq })
+  }
+
+  /**
+   * The rolling buffer is capped, so its length stops moving in a busy room.
+   *
+   * That is what makes a positional cursor useless and a stamped sequence necessary — see
+   * `newDanmakuSince`. Pinned here as well because this is the side that produces both the cap and
+   * the numbering; the overlay's half is a pure function tested on its own.
+   */
+  @Test
+  fun `a full danmaku buffer keeps its length while the sequence keeps growing`() {
+    val busy = AppContainer(
+      ApplicationProvider.getApplicationContext(),
+      adaptersOverride = listOf(chattyAdapter { _ -> (0 until 250).map { "#$it" } }),
+    )
+    busy.preferences.update { com.livehub.app.di.UserSettings() }
+    val busyModel = MainViewModel(busy)
+    idle()
+
+    busyModel.onAction(UiAction.OpenRoom(streamer("40", "热闹的主播")))
+    awaitCondition { busyModel.state.value.danmaku.size >= 200 }
+
+    val buffer = busyModel.state.value.danmaku
+    assertEquals("the buffer is capped", 200, buffer.size)
+    assertEquals("and it holds the newest entries", "#249", buffer.last().text)
+    assertEquals(
+      "the sequence counts every message, not just the ones still buffered",
+      250L,
+      buffer.last().seq,
+    )
   }
 
   /**
@@ -713,7 +876,7 @@ class MainViewModelTest {
   // ------------------------------------------------------------------ messages ---
 
   @Test
-  fun `dismissing a message clears both message and error`() {
+  fun `dismissing a message clears the message`() {
     viewModel.onAction(UiAction.UpdateQuery(""))
     viewModel.onAction(UiAction.SubmitSearch)
     idle()
@@ -723,6 +886,38 @@ class MainViewModelTest {
     idle()
 
     assertNull(state.message)
-    assertNull(state.error)
+  }
+
+  /**
+   * A snackbar going away must not take a load error with it.
+   *
+   * `error` is rendered inline by the screen with a retry button; `message` is the transient
+   * snackbar. They were cleared together, so the sequence "load fails → any unrelated snackbar
+   * (a follow, a logout, a cache sweep) dismisses itself" ended with the home screen claiming
+   * 现在没有人在直播 over a network failure, with no way to retry.
+   */
+  @Test
+  fun `dismissing a message leaves a load error alone`() {
+    val failed = AppContainer(
+      ApplicationProvider.getApplicationContext(),
+      adaptersOverride = listOf(offlineAdapter()),
+    )
+    failed.preferences.update { com.livehub.app.di.UserSettings() }
+    val failing = MainViewModel(failed)
+    idle()
+    awaitCondition { failing.state.value.error != null }
+
+    failing.onAction(UiAction.ShowMessage("已清除图片缓存"))
+    idle()
+    assertNotNull(failing.state.value.message)
+
+    failing.onAction(UiAction.DismissMessage)
+    idle()
+
+    assertNull(failing.state.value.message)
+    assertNotNull(
+      "the load failure still needs its retry affordance on screen",
+      failing.state.value.error,
+    )
   }
 }
