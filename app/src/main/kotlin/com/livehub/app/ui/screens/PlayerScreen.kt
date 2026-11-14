@@ -60,6 +60,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -87,6 +88,10 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.app.ui.player.DanmakuOverlay
 import com.livehub.app.ui.player.LivePlayer
+import com.livehub.app.ui.player.PlayerOrientation
+import com.livehub.app.ui.player.findActivity
+import com.livehub.app.ui.player.playerOrientation
+import com.livehub.app.ui.player.toActivityInfo
 import com.livehub.app.ui.player.withoutBlockedKeywords
 import com.livehub.core.common.ViewerCountFormatter
 import com.livehub.core.designsystem.LiveBadgeColor
@@ -147,6 +152,15 @@ fun PlayerScreen(
    * second of black plus a fresh resolve every time the user leaves the player.
    */
   compact: Boolean = false,
+  /**
+   * Where the 全屏 button's orientation request goes.
+   *
+   * Defaulted (null) to "ask the activity", which is what the app needs; a test passes a recorder
+   * instead, because the rule — *when* the window should turn, and when it must stop being turned —
+   * is the part that gets this wrong, and asserting it does not need a real window. See
+   * [PlayerOrientation].
+   */
+  orientationRequest: ((PlayerOrientation) -> Unit)? = null,
 ) {
   var manualFullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
@@ -155,6 +169,31 @@ fun PlayerScreen(
   // room instead — the same reason the reference client switches to a drawer there.
   val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
   val fullscreen = playerFullscreen(landscapeWindow = isLandscape, manualFullscreen = manualFullscreen)
+
+  // The one place that asks the window to turn, and the one place that stops asking. Both
+  // directions are driven by the button (see `onFullscreenChange` below), never by the window:
+  // a phone turned sideways is already full screen through `playerFullscreen`, and requesting a
+  // rotation there would lock the device into the orientation the user was about to leave.
+  //
+  // Released when the player is no longer the full window — the mini window is a thumbnail inside
+  // another screen and must not keep the whole app sideways — and released again on dispose.
+  val context = LocalContext.current
+  val requestOrientation: (PlayerOrientation) -> Unit = remember(orientationRequest, context) {
+    orientationRequest ?: { orientation ->
+      context.findActivity()?.requestedOrientation = orientation.toActivityInfo()
+    }
+  }
+  LaunchedEffect(manualFullscreen, compact) {
+    requestOrientation(playerOrientation(manualFullscreen = manualFullscreen, compact = compact))
+  }
+  DisposableEffect(requestOrientation) {
+    onDispose { requestOrientation(PlayerOrientation.Unspecified) }
+  }
+  // A thumbnail is never "full screen by choice": coming back from the mini window lands in the
+  // portrait player, not in a chrome-less portrait rectangle that re-locks landscape.
+  LaunchedEffect(compact) {
+    if (compact) manualFullscreen = false
+  }
 
   // Only meaningful in a portrait window: there *is* a portrait layout to land in there. In
   // landscape the same gesture is "step off the player", which is what `LiveHubRoot`'s handler

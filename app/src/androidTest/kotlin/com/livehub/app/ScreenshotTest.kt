@@ -511,10 +511,10 @@ class ScreenshotTest {
   /**
    * The follow page with its header folded away, which is what a downward scroll leaves behind.
    *
-   * `07-follow-list` is the first frame, so it always shows the title, the search field, the
-   * 特别关注 avatar row and two chip rows. Round 102 gave this page the same fold as 首页 (the
-   * component is shared), and this render is what says the wiring is in the right place: the header
-   * is gone and the grid starts under the status bar area.
+   * `07-follow-list` is the first frame, so it always shows the title, the 特别关注 avatar row and
+   * the two chip rows. Round 102 gave this page the same fold as 首页 (the component is shared), and
+   * this render is what says the wiring is in the right place: the header is gone and the grid starts
+   * under the status bar area.
    */
   @Test
   fun followHeaderCollapsed() = capture(
@@ -561,31 +561,6 @@ class ScreenshotTest {
     ),
     clickDescription = "添加特别关注",
     expectText = "选择特别关注",
-  )
-
-  /**
-   * The name filter, on a list long enough to have one.
-   *
-   * The box is conditional — `FOLLOW_SEARCH_THRESHOLD` follows, i.e. more than a flick — so the
-   * ordinary five-room fixture would never draw it. This is the render of the shape the feature
-   * exists for, and of the header height it costs.
-   */
-  @Test
-  fun followSearch() = capture(
-    "07c-follow-search",
-    baseState().copy(
-      screen = Screen.Follow,
-      followed = (1..14).map { index ->
-        streamer(
-          Platform.DOUYU,
-          "${900 + index}",
-          "主播$index",
-          if (index % 2 == 0) "第 $index 场" else "深夜电台 $index",
-          index * 3_000L,
-          live = index % 2 == 0,
-        )
-      },
-    ),
   )
 
   @Test

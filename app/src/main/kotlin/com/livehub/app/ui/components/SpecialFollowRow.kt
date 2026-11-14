@@ -2,9 +2,8 @@ package com.livehub.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,8 +38,6 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -86,33 +83,43 @@ fun SpecialFollowRow(
       SpecialAvatar(
         streamer = streamer,
         dragging = draggingKey == streamer.key,
-        openRoom = onClick,
         reorder = reorderActionsFor(streamer, streamers, onReorder),
-        modifier = Modifier.pointerInput(streamer.key, streamers.size) {
-          // Tap and long-press-drag in **one** handler rather than `clickable` plus a drag
-          // detector. Two independent detectors on the same node both see the down event, and a
-          // long press followed by a drag then fires the tap on release as well — which opened
-          // the room every time somebody reordered the row.
-          awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            val longPress = awaitLongPressOrCancellation(down.id)
-            if (longPress == null) {
-              // Released before the long-press timeout: a plain tap.
-              onClick(streamer)
-              return@awaitEachGesture
-            }
-
-            draggingKey = streamer.key
-            dragOffset = 0f
-            try {
-              while (true) {
-                val event = awaitPointerEvent()
-                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                if (!change.pressed) break
-                change.consume()
-                dragOffset += change.position.x - change.previousPosition.x
+        // Two official gesture detectors, composed rather than hand-rolled.
+        //
+        // The old handler was a single `awaitEachGesture` whose only two outcomes were "tap" and
+        // "long press". `awaitLongPressOrCancellation` returns null both when the finger lifts
+        // early *and* when a parent consumes the movement — and the parent here is the row's own
+        // horizontal scroll — so every attempt to swipe the strip fell into the tap branch and
+        // opened a room instead of scrolling it. That was the reported "特别关注 不能左右滑动".
+        //
+        // `detectDragGesturesAfterLongPress` cancels itself when the scroll wins the gesture, and
+        // `clickable` cancels its tap when the drag consumes the up. Between them the four
+        // outcomes are all covered: tap opens, long-press-then-move reorders, long-press-and-release
+        // does nothing (the drag detector consumes the up), and a horizontal swipe scrolls.
+        modifier = Modifier
+          .clickable(
+            onClickLabel = "打开直播间",
+            role = Role.Button,
+            onClick = { onClick(streamer) },
+          )
+          .pointerInput(streamer.key, streamers.size) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = {
+                draggingKey = streamer.key
+                dragOffset = 0f
+              },
+              onDragEnd = {
+                draggingKey = null
+                dragOffset = 0f
+              },
+              onDragCancel = {
+                draggingKey = null
+                dragOffset = 0f
+              },
+              onDrag = { _, dragAmount ->
                 // The strip scrolls horizontally, so the delta that addresses a slot is x. One
                 // slot is the avatar plus the gap, read from the same constants the row uses.
+                dragOffset += dragAmount.x
                 val slotPx = (AVATAR_SIZE_DP + AVATAR_GAP_DP) * density
                 val steps = (dragOffset / slotPx).toInt()
                 if (steps != 0) {
@@ -125,13 +132,9 @@ fun SpecialFollowRow(
                     }
                   }
                 }
-              }
-            } finally {
-              draggingKey = null
-              dragOffset = 0f
-            }
-          }
-        },
+              },
+            )
+          },
       )
     }
     item(key = "special-add") {
@@ -145,15 +148,13 @@ private fun SpecialAvatar(
   streamer: Streamer,
   dragging: Boolean,
   /**
-   * The tap and the reorder steps the caller's pointer handler implements, re-published here as
-   * semantics. Neither is how the slot draws itself; they exist only for the semantics block below.
+   * The reorder steps the drag offers to a screen reader or a switch.
    *
-   * That block exists because the handler is a press, a hold and then horizontal movement, which a
-   * screen reader or a switch cannot produce: without it the slot could be announced and still not
-   * opened or moved. `clickable` is still not the answer — it would fire on the release of a
-   * reorder, which is the bug the single handler exists to prevent.
+   * A drag is a delta, which neither can produce; `customActions` re-publishes the two neighbour
+   * moves so the strip is not a row of buttons that can be announced and not rearranged. The tap
+   * is no longer listed here — `clickable` owns it now and publishes its own click action (with
+   * the 打开直播间 label), which is also what gives the slot its ripple and role.
    */
-  openRoom: (Streamer) -> Unit,
   reorder: List<CustomAccessibilityAction>,
   modifier: Modifier = Modifier,
 ) {
@@ -167,13 +168,6 @@ private fun SpecialAvatar(
       // standing in for.
       .semantics {
         contentDescription = "特别关注 ${streamer.streamerName}"
-        role = Role.Button
-        // Labelled, because an unlabelled button here would be announced as "double-tap to
-        // activate" with no noun attached to it.
-        onClick(label = "打开直播间") {
-          openRoom(streamer)
-          true
-        }
         // Only the neighbours that exist; see reorderActionsFor.
         if (reorder.isNotEmpty()) customActions = reorder
       },

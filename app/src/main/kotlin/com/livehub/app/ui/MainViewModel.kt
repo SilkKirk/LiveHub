@@ -156,7 +156,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       is UiAction.ToggleSpecialFollow -> toggleSpecialFollow(action.streamer)
       is UiAction.SetFollowLiveFilter -> _state.update { it.copy(followLiveFilter = action.filter) }
       is UiAction.SetFollowPlatformFilter -> _state.update { it.copy(followPlatformFilter = action.platform) }
-      is UiAction.SetFollowQuery -> _state.update { it.copy(followQuery = action.query) }
       is UiAction.SetRoomTags -> setRoomTags(action.streamer, action.tags)
       is UiAction.SetFollowTagFilter -> _state.update { it.copy(followTagFilter = action.tag) }
       is UiAction.ShowMessage -> _state.update { it.copy(message = action.text) }

@@ -30,15 +30,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -88,29 +84,19 @@ import com.livehub.core.model.Streamer
  * list carried a cover at 56dp — big enough for a name, useless as a preview of what is on — and
  * the reference spends that width on the picture instead.
  *
- * **Two ordering axes, and they are different on purpose.** The avatar row is the only thing the
- * user drags, because a drag inside a grid has to resolve a two-dimensional offset into a cell and
- * that fights the scroll. The grid below is strictly "live first, then the stored order": it is a
- * browse surface, so what is on right now outranks the arrangement.
+ * **One stored order, two views of it, and both group live rooms first.** The avatar row is the only
+ * thing the user drags, because a drag inside a grid has to resolve a two-dimensional offset into a
+ * cell and that fights the scroll. What is on right now is then drawn above what is not, on both
+ * surfaces, and the stored order breaks ties inside each group: the grid because it is a browse
+ * surface, the strip because answering "who is on" without reading it is the whole reason it exists.
  *
- * Both filters live in `UiState` rather than in a `remember`, because they are selections the user
+ * The filters live in `UiState` rather than in a `remember`, because they are selections the user
  * expects to survive opening a room and coming back.
  */
-
-/**
- * How many follows before the name filter is worth a box on screen.
- *
- * Twelve is about six rows of two cards — two flicks on the smallest phone this app targets. Below
- * that, scrolling *is* the search. The same rule as the chip row below it: a control that cannot
- * help does not get drawn, and 56dp of text field above four cards is chrome nobody uses.
- */
-private const val FOLLOW_SEARCH_THRESHOLD = 12
-
 @Composable
 fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val filter = state.followLiveFilter
   val platformFilter = state.followPlatformFilter
-  val query = state.followQuery.trim()
   val tagFilter = state.followTagFilter
   // Which panel is open is the only local state left: everything the screen *selects* lives in
   // `UiState` so it survives a round trip through the player.
@@ -121,11 +107,10 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
   val tags = state.followTags
   val knownTags = remember(tags) { tags.values.flatten().distinct().sorted() }
 
-  val visible = remember(state.followed, filter, platformFilter, query, tagFilter, tags) {
+  val visible = remember(state.followed, filter, platformFilter, tagFilter, tags) {
     state.followed
       .filter { platformFilter == null || it.platform == platformFilter }
       .filter(filter::matches)
-      .filter { query.isEmpty() || it.matchesName(query) }
       .filter { tagFilter == null || tags[it.key]?.contains(tagFilter) == true }
       // Live rooms first. The stored order is the user's manual arrangement, but burying whoever
       // is actually streaming under offline names defeated the point of the list. `sortedBy` is
@@ -135,16 +120,29 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
   val specialKeys = state.specialFollowKeys
   /**
-   * The starred rooms, in the avatar row's own order.
+   * The starred rooms, live ones first, each group still in the avatar row's own order.
    *
-   * Deliberately **not** filtered by the live/platform row below it: the avatar row is a shortcut
-   * to the people you always watch, and hiding half of them because the grid is filtered to 直播中
-   * would make the row's contents depend on a control that sits underneath it. It is intersected
-   * with [state.followed] only, which is what keeps an unfollowed room out.
+   * **Not filtered** by the live/platform row below it: the avatar row is a shortcut to the people
+   * you always watch, and hiding half of them because the grid is filtered to 直播中 would make the
+   * row's contents depend on a control that sits underneath it. It is intersected with
+   * [state.followed] only, which is what keeps an unfollowed room out — an offline pinned room keeps
+   * its slot.
+   *
+   * It *is* grouped live-first, the same rule as the grid: a pinned room that happens to be offline
+   * used to sit in front of one that is on air, and the row exists to answer "who is on right now"
+   * without making the user read it. `sortedBy` is stable, so the stored order still breaks ties
+   * inside the live group and inside the offline group.
+   *
+   * The known consequence: `FollowOrdering.moveWithin` keeps the *stored* order manual, so dragging
+   * an offline avatar above a live one is persisted and then re-sorted back out of sight on the next
+   * frame. That is deliberate — a manual order over a live-first view can only mean "this live room
+   * before that live room", and writing the view order back would instead move rooms the user never
+   * dragged whenever one of them went on or off air.
    */
   val special = remember(state.followed, specialKeys) {
     val byKey = state.followed.associateBy { it.key }
     specialKeys.mapNotNull { byKey[it] }
+      .sortedBy { if (it.isLive) 0 else 1 }
   }
 
   val liveCount = remember(state.followed) { state.followed.count { it.isLive } }
@@ -158,9 +156,9 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
           "关注之后可以在页顶点亮星标，把常看的主播放进特别关注。",
       )
     } else {
-      // Same fold as the home page, through the same component: this header is taller still (title,
-      // search field, the 特别关注 avatar row and two chip rows), and once the grid is being scrolled
-      // all of it is answering a question the user has already answered.
+      // Same fold as the home page, through the same component: this header is a lot of chrome
+      // (title, the 特别关注 avatar row and two chip rows), and once the grid is being scrolled all
+      // of it is answering a question the user has already answered.
       // Hoisted out of `FollowGrid` so the header can ask whether the list has moved.
       val followGridState = rememberLazyGridState()
       val headerFold = rememberCollapsibleHeaderState(
@@ -180,8 +178,6 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
             platforms = platforms,
             platformFilter = platformFilter,
             onPlatformChange = { onAction(UiAction.SetFollowPlatformFilter(it)) },
-            query = state.followQuery,
-            onQueryChange = { onAction(UiAction.SetFollowQuery(it)) },
             tags = knownTags,
             tagFilter = tagFilter,
             onTagFilterChange = { onAction(UiAction.SetFollowTagFilter(it)) },
@@ -191,7 +187,10 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
               // `full` is the whole follow list, not `special`: the stored order is one order over
               // every followed room, and the avatar row is only a filtered view of it. Reconciling
               // against `special` would hand `SetFollowOrder` a partial list and drop everyone the
-              // row was filtering out.
+              // row was filtering out. `special` is still the list the drag index counts against,
+              // because it is the order the avatars are drawn in: a drop lands next to the neighbour
+              // it was dropped on, and one that crossed the live/offline boundary is re-sorted by the
+              // row on the next frame — the consequence spelled out on `special` above.
               onAction(
                 UiAction.SetFollowOrder(
                   FollowOrdering.moveWithin(state.followed, special, streamer, index),
@@ -200,29 +199,26 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
             },
             onAddSpecial = { pickerOpen = true },
           )
-          }
+        }
 
         if (visible.isEmpty()) {
-          // The name filter and the tag filter each get their own copy: "关注的主播都没有在播" would be
-          // a lie when the real reason is that nothing matches what was typed or picked.
+          // The tag filter and the live/platform filters each get their own copy: "关注的主播都没有在播"
+          // would be a lie when the real reason is that nothing carries the label the user picked.
           EmptyState(
             title = when {
-              query.isNotEmpty() -> "没有找到「$query」"
               tagFilter != null -> "没有带「$tagFilter」的主播"
               filter == FollowLiveFilter.LIVE -> "关注的主播都没有在播"
               filter == FollowLiveFilter.OFFLINE -> "所有关注的主播都在直播"
               else -> "没有符合条件的关注"
             },
             description = when {
-              query.isNotEmpty() -> "关注列表里没有名字或标题包含这两个字的主播。"
               tagFilter != null -> "给直播间加标签可以在关注页按标签筛选。"
               platformFilter != null -> "当前只显示 ${platformFilter.displayName} 的主播"
               else -> null
             },
-            actionLabel = if (query.isNotEmpty() || tagFilter != null) "清空筛选" else "显示全部",
+            actionLabel = if (tagFilter != null) "清空筛选" else "显示全部",
             onAction = {
-              if (query.isNotEmpty() || tagFilter != null) {
-                onAction(UiAction.SetFollowQuery(""))
+              if (tagFilter != null) {
                 onAction(UiAction.SetFollowTagFilter(null))
               } else {
                 onAction(UiAction.SetFollowLiveFilter(FollowLiveFilter.ALL))
@@ -623,44 +619,6 @@ private fun FollowGrid(
 }
 
 /**
- * The name filter on the follow screen.
- *
- * A label rather than a placeholder: `OutlinedTextField` keeps the label visible once the field has
- * text, which is what tells the user — and this screen's tests — which box the typed text went into.
- * The clear button only exists while there is something to clear.
- */
-@Composable
-private fun FollowSearchField(query: String, onQueryChange: (String) -> Unit) {
-  OutlinedTextField(
-    value = query,
-    onValueChange = onQueryChange,
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-    label = { Text("搜索关注的主播") },
-    singleLine = true,
-    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-    trailingIcon = if (query.isNotEmpty()) {
-      {
-        IconButton(onClick = { onQueryChange("") }) {
-          Icon(Icons.Filled.Clear, contentDescription = "清空搜索")
-        }
-      }
-    } else {
-      null
-    },
-  )
-}
-
-/**
- * True when [query] appears in the streamer's name or in the title, ignoring case.
- *
- * Both fields, because a followed room is remembered by whichever the user recognises — the name on
- * a list of people, the title on a list of shows. Ignoring case because the names mix Latin and CJK
- * on all four platforms ("DNF", "dnf", "PDD").
- */
-private fun Streamer.matchesName(query: String): Boolean =
-  streamerName.contains(query, ignoreCase = true) || title.contains(query, ignoreCase = true)
-
-/**
  * The page's masthead, and the controls that narrow the grid under it.
  *
  * The title used to be a `Row` of `Text("关注")` and `Text("  $liveCount/$total 正在直播")`: the
@@ -676,10 +634,10 @@ private fun Streamer.matchesName(query: String): Boolean =
  * that are not about wording at all.
  *
  * Everything below the masthead keeps the order it had, because that order is how the page is used:
- * a search box once the list is long enough to need one, the 特别关注 strip (drawn even while empty,
- * since its ＋ is the only way into the picker), then the live/platform chips and the tag chips. The
- * masthead is asked for a 12dp inset so it lines up with the avatar strip and chip rows under it
- * (`PageHeader` defaults to 16dp, which is what 设置 and 同步 — whose cards sit at 16dp — get).
+ * the 特别关注 strip (drawn even while empty, since its ＋ is the only way into the picker), then the
+ * live/platform chips and the tag chips. The masthead is asked for a 12dp inset so it lines up with
+ * the avatar strip and chip rows under it (`PageHeader` defaults to 16dp, which is what 设置 and 同步
+ * — whose cards sit at 16dp — get).
  */
 @Composable
 private fun FollowHeader(
@@ -690,8 +648,6 @@ private fun FollowHeader(
   platforms: List<Platform>,
   platformFilter: Platform?,
   onPlatformChange: (Platform?) -> Unit,
-  query: String,
-  onQueryChange: (String) -> Unit,
   tags: List<String>,
   tagFilter: String?,
   onTagFilterChange: (String?) -> Unit,
@@ -702,25 +658,13 @@ private fun FollowHeader(
 ) {
   // No vertical padding here any more. `PageHeader` brings 14dp above the title and 6dp under the
   // subtitle; the 8dp this Column used to add above the old title row would now stack on top of that
-  // and cost the grid room for nothing. This is the tallest header in the app — masthead, search box,
-  // avatar strip and two chip rows — and it folds away on scroll for exactly that reason: every dp
-  // above the first cover is a dp the user has to scroll past to reach it.
+  // and cost the grid room for nothing. Masthead, avatar strip and two chip rows still make this a
+  // tall header, and it folds away on scroll for exactly that reason: every dp above the first cover
+  // is a dp the user has to scroll past to reach it.
   Column(modifier = Modifier.fillMaxWidth()) {
     // 12dp, matching the avatar strip and chip rows under it: this page's content runs at 12dp,
     // unlike 设置/同步 whose cards sit at 16dp.
     PageHeader(title = "关注", subtitle = "$liveCount/$total 正在直播", inset = 12.dp)
-
-    // The name filter, once the list is long enough for scrolling alone to be a problem.
-    //
-    // Same rule as the chip row below: a control that cannot help does not get drawn. Six follows
-    // are one flick away — half a screen of search box above them is chrome nobody uses — while
-    // the sort of list this app encourages needs a way to jump straight to a name.
-    //
-    // A non-empty query keeps the field whatever the list looks like: it has to stay there while
-    // the user types, or it would disappear under their finger the moment the results got short.
-    if (total >= FOLLOW_SEARCH_THRESHOLD || query.isNotEmpty()) {
-      FollowSearchField(query = query, onQueryChange = onQueryChange)
-    }
 
     // Always drawn, even while empty: the ＋ is how the feature is discovered, and a row that
     // appears only after the first pin would need a second explanation nobody reads.

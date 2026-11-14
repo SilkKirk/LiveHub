@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
@@ -152,6 +153,48 @@ class DesignLanguageTest {
     assertTrue(
       "the audience figure belongs in the text block under the title, not on the cover",
       topOf("12.9万") > topOf("直播标题 一条小团团"),
+    )
+  }
+
+  /**
+   * 特别关注 sorts live rooms in front of offline ones (user report, round 105).
+   *
+   * The stored order here is deliberately offline-first: without the sort the strip would draw the
+   * pinned room that is not on air in front of the one that is, which is the complaint — the strip
+   * exists to answer "who is on right now" without reading it. `sortedBy` is stable, so this test
+   * also pins that the manual order still decides *within* a group.
+   */
+  @Test
+  fun `the special follow strip draws live rooms before offline ones`() {
+    val offline = Streamer(
+      platform = Platform.DOUYU,
+      roomId = "off",
+      streamerName = "未开播的",
+      title = "标题",
+      isLive = false,
+    )
+    val live = Streamer(
+      platform = Platform.DOUYU,
+      roomId = "on",
+      streamerName = "在播的",
+      title = "标题",
+      isLive = true,
+    )
+    val state = UiState(
+      screen = Screen.Follow,
+      followed = listOf(offline, live),
+      specialFollowKeys = listOf(offline.key, live.key),
+    )
+    composeInWindow { FollowScreen(state = state, onAction = {}) }
+
+    val liveLeft = composeRule.onNodeWithContentDescription("特别关注 在播的")
+      .fetchSemanticsNode().boundsInRoot.left
+    val offlineLeft = composeRule.onNodeWithContentDescription("特别关注 未开播的")
+      .fetchSemanticsNode().boundsInRoot.left
+
+    assertTrue(
+      "the live room has to be the first avatar: live=$liveLeft offline=$offlineLeft",
+      liveLeft < offlineLeft,
     )
   }
 }

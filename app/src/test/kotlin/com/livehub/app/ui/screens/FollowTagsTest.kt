@@ -90,7 +90,6 @@ class FollowTagsTest {
             onAction = { action ->
               state.value = when (action) {
                 is UiAction.SetFollowTagFilter -> state.value.copy(followTagFilter = action.tag)
-                is UiAction.SetFollowQuery -> state.value.copy(followQuery = action.query)
                 else -> state.value
               }
             },
