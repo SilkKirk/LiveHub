@@ -3139,3 +3139,122 @@ README 去掉"按名字/标题过滤"。
 2. **跨组拖动会被排序排回去**：如果用户真的需要"置顶一个没开播的"，得再设计（比如只对
    开播组排序、离线组保持手动，或者给"固定"与"排序"两个概念拆开）。
 3. `07` 编号出现空档（07c 删除），没有重排——`07d` 在文档与大字号注释里被按名字引用。
+
+---
+
+## 第一百零八轮迭代：一次跨模块审计（六个方向并行，修掉五个真缺陷）
+
+用户的题目是「审查代码和功能，看看还有什么可以优化调整的」，没有点名模块。这一轮的做法
+是**并行派六个只读审计**（UI/状态层、Compose 界面、播放器与弹幕、同步与网络、四平台适配器、
+持久化/构建/文档），每个都要求给出 `文件:行号` 证据、置信度、最小修法，并明确要求「先 grep
+迭代记录，是历史刻意决定的不要报」。六份报告合计 60 余条，逐条复核后本轮只做**证据最硬、
+影响用户最直接**的五项；其余的列在最后的「留下的」里。
+
+### 缺陷是什么
+
+1. **弹幕层在缓冲区满 200 条后永久停更**（最严重）。`DanmakuOverlay` 用 `consumedCount`
+   做游标，而 ViewModel 的缓冲是 `(danmaku + new).takeLast(200)`：满了之后进一出一、长度
+   恒定，于是 `messages.size < consumedCount` 永不成立、`drop(consumedCount)` 永远是空表。
+   热门房间一两秒就满，此后全屏弹幕一条都不飞，界面没有任何错误——看起来就是没人发弹幕。
+   竖屏弹幕列表同源：`LaunchedEffect(messages.size)` 的 key 不再变化，跟随失效；行 key 含
+   `index`，缓冲滑动时每一行都被判定为新行（整屏重建）。
+2. **换房间不清弹幕缓冲**。从小窗点开第二个房间不走 `closePlayer`，于是新房间的播放页与
+   弹幕面板**顶着新主播名显示上一个房间的 200 条弹幕**；叠加上一条，新房间自己的弹幕也没
+   地方进。
+3. **有数据时刷新失败没有任何提示**。首页只在 `rooms` 为空时渲染 `error`，刷新失败后指示器
+   收回、网格不动，与「这个分区没人播」完全同像素。更糟的是 `DismissMessage` 同时清
+   `message` 和 `error`：任何一条无关的 snackbar（关注、退出登录、清缓存）到期，就把
+   「加载失败」改写成空态，重试按钮随之消失。
+4. **抖音分区空页冒充推荐流**。`rooms()` 把「分区正常返回空」与「分区请求失败」合成一个
+   分支，两者都去拉匿名推荐 feed：安静分区显示推荐内容却挂着分区标签；翻到末页时这些
+   推荐房间被**追加**到分区列表末尾，然后游标变 null 宣告到底。
+5. **HTTP 两端的 `Content-Length` 没有上限**。服务端 `/pair`、`/ping` 在读 body 之前不做任何
+   校验，`ByteArray(contentLength)` 直接按声明的长度分配——同网段任何主机发一个
+   `Content-Length: 1400000000` 就能让进程 OOM；客户端在配对扫网段时同样照做，`readBytes()`
+   分支更是无界。
+6. **4xx 也被退避重试**。`NetworkException` 继承 `IOException`，而重试判定是「任何
+   IOException 都重试」，于是 403（签名过期）、404、参数错都会退避重试三次：打开播放页时
+   白等 0.9 秒，还多打两次整页请求。
+
+### 怎么修的
+
+- **弹幕身份**：给 `DanmakuMessage` 加 `seq`（collector 赋值、换房归零），`DanmakuOverlay`
+  改为记住**上一份缓冲快照**并用 `newDanmakuSince` 求差集——有 `seq` 时按 `seq > lastSeen`
+  判定，没有时回退到「上一份的尾部 == 这一份的头部」的内容重叠，测试夹具与截图 harness 因此
+  不用改。列表 key 改用 `seq`，跟随的 key 改用最新一条。这个差集是纯函数，**先在本地用
+  Python 等价跑过 11 条断言**（含满缓冲 1 进 1 出、换房归零、seq 与内容两条路径），
+  其中「换房序号归零会被旧高水位吞掉」是写测试时才发现的边界，已一并覆盖。
+- **换房清空**：`openRoom` 的 `copy` 补 `danmaku = emptyList()`（`closePlayer` 一直有，
+  两条路径此前不对称）。
+- **错误出口**：新增 `InlineErrorNotice`（复用 `ErrorState` 的图标与文案语言，一行高，
+  带重试），首页在「有房间且有 error」时渲染它；`DismissMessage` 只清 `message`。
+  失败条用 `surfaceContainerHigh` 而不是 `errorContainer`——本项目的配色从未设置
+  `errorContainer`，读它会掉回 Material 基线的紫灰，正是 `Theme.kt` 里反复批评的那类事故。
+- **抖音降级**：把「有答复」与「失败」拆开。空答复原样返回（并如实给出 cursor），只有请求
+  真的失败才降级 feed。
+- **HTTP 上限**：服务端超限直接 400 且**不分配**；客户端超限抛 `PROTOCOL`，无界分支改为
+  限长读取。两端都取 4 MB（正常一片 500 条记录只有几十 KB）。
+- **重试判定**：`NetworkException -> code >= 500 || code == 429`。`core:data` 此前**没有
+  test 目录**，本轮新建并为整个策略补真值表。
+
+### 踩的坑
+
+1. **JUnit 断言顺序**：`:core` 与 `:platform` 是 JUnit5（message 在**最后**），`:app` 是
+   JUnit4（message 在**第一位**）。我按 `:app` 的习惯把 message 写在最前，CI 直接报
+   `None of the following candidates is applicable`。运行手册第四节专门警告过这个陷阱，本轮
+   自己还是踩了——**新建测试文件的第一件事是看 import**。
+2. **新测试抓到真缺陷**：「超限 body 应返回 400」第一次红在 `expected: <400> but was: <0>`
+   ——不是测试写错，而是 `serve()` 解析失败的那个分支写完 400 就 `return`，而 flush 在方法
+   末尾，缓冲随 socket 关闭被丢弃，客户端只看到「连接被关闭」。把 flush 收进 `writeResponse`
+   后两条作答路径都覆盖。这条是**只有新测试才能发现**的一类：旧测试走的是方法末尾那条路。
+3. **CI 连推会取消前一次 run**：本轮推了五次，中间两次 `Instrumented tests` 显示
+   `cancelled`，那是 `concurrency: cancel-in-progress` 的正常行为，不是失败——判断依据是
+   看 `runs` 列表里同一个 sha 是否被后续 push 取代。
+4. 我自己第一版 `newDanmakuSince` 有取消窗口问题（`LaunchedEffect` 在 `withFrameMillis`
+   处被取消时快照已推进，会丢消息）。回退成「动画建好之后再推进快照」：被取消时最多丢掉
+   当下那批气泡，但绝不会把没画过的消息标记成已画。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `DanmakuDeltaTest` 8 条、`HomeRefreshFailureTest` + `InlineErrorNoticeTest` 5 条、`ResilientPlatformRepositoryRetryTest` 9 条、`DouyinPartitionFallbackTest` 4 条、`SyncHttpServerTest` 2 条，另有 ViewModel 2 条） |
+| 仪器测试 | ✅ **64** 张截图（新增 `06c-home-error-with-rooms`） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `e58db2a` 三个 job 全绿 |
+
+截图逐张看过的结论：
+
+- `06c-home-error-with-rooms`：一条浅灰底的失败提示夹在分类行与网格之间，「重试」在右，
+  旧数据（两排卡片）完整保留，没有挤掉网格。
+- 与上一轮（`r105`）逐字节对比：**60 张未变**，3 张变化全部在同步页。用像素框定位，差异
+  只在 147×13 的一个区域（占画面 0.34%）——那是「4 分 28 秒」这行实时倒计时，不是布局变化。
+  这一条值得记下来：**同步页截图本来就不逐字节稳定**，判「未回归」要用像素框而不是哈希。
+
+### 留下的（下一轮可直接开工，按价值排）
+
+1. **四平台错误语义不统一**（审计中最系统的一条）：`PlatformException.kind` 定义了但全仓
+   零读取，UI 与重试只看 `error.message`；`DouyuParser` 还有 `IllegalArgumentException`
+   逃出适配器，界面上会出现英文 Java 异常。建议一次把 `kind` 变成真契约，`isRetryable`
+   与 UI 都按它判定。
+2. **`UserPreferences.update` 的读-改-写不在串行区内**：单线程只保证了落盘顺序，
+   `transform(settings)` 与 `cached =` 发生在调用方线程。首次配对时两条线程可能各生成一个
+   `selfSecret`，其中交出去的那个没落盘 → 对端此后每次请求 403。
+3. **`SyncEngine.nextHlc()` / `logEntries()` 无锁**：UI 线程、WorkManager 线程与服务端连接
+   线程同时读写，HLC 可能回退（后果是本机新编辑永远输给对端旧记录），日志列表可能
+   `IndexOutOfBounds`。
+4. **`SyncController.onPush` 丢弃 `applyPayload` 的拒绝结果却回 200**：对端拒收时
+   `confirmPeer` 仍把水位抬高，墓碑被提前回收，旧记录会在下一次 pull 复活。
+5. **Android 17（targetSdk 37）的 `ACCESS_LOCAL_NETWORK` 未声明也未运行时请求**：本地网络
+   保护改为强制后，局域网同步整套（bind 服务端、裸 socket、mDNS）都会被拦，失败表现是超时
+   与「不在线」，不会指向真因。这一条需要交叉验证官方文档后再动（本轮只读到二手来源）。
+6. **播放页横屏设置抽屉关不掉**（第 103 轮已记，至今成立），并且这次读出了新的一层：
+   `showSettings` 在小窗往返后会自己弹回来、转竖屏会变成 bottom sheet 自动弹出。
+7. 首页有数据时**关注页**的刷新失败同样没有出口（本轮只补了首页）；`follows` 的失败路径
+   还需要一层同样的 inline notice。
+8. 读屏重复：底栏 5 个 tab 的图标 `contentDescription` 与 label 同文，TalkBack 会念两遍；
+   卡片封面的 `contentDescription` 与下方标题也重复。两处都是一行改动，但需要有语义测试
+   才敢改。
+9. 抖音 `has_more` 缺失时仍用「映射后条数 >= 20」猜到底（实测分区每页 15 条），与第
+   23/26/27 轮修过的是同一类缺陷，抖音没有跟进。
