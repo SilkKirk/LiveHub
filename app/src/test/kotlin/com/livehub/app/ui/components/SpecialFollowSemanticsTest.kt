@@ -8,6 +8,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
@@ -160,10 +161,16 @@ class SpecialFollowSemanticsTest {
     )
   }
 
-  /** The custom actions on one avatar, in the order the row declared them. */
+  /**
+   * The custom actions on one avatar, in the order the row declared them.
+   *
+   * `SemanticsActions.CustomActions`, not `SemanticsProperties.CustomActions`: the key lives in the
+   * action object (it is an `AccessibilityKey` whose merge policy concatenates parent and child
+   * lists, so a row's own actions survive being merged into a list row).
+   */
   private fun actionsOf(name: String): List<CustomAccessibilityAction> =
     composeRule.onNodeWithContentDescription("特别关注 $name").fetchSemanticsNode()
-      .config[SemanticsProperties.CustomActions].orEmpty()
+      .config.getOrNull(SemanticsActions.CustomActions).orEmpty()
 
   private fun labelsOf(name: String): List<String> = actionsOf(name).map { it.label }
 
