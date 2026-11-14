@@ -324,7 +324,7 @@ private fun TagEditorSheet(
           )
           TextButton(onClick = onDismiss) { Text("完成") }
         }
-        // Band 2, the only part that scrolls: the text that explains the labels, and the labels.
+        // Band 2, the only part that scrolls: the labels, and the text that explains them.
         // These are the two things with no ceiling — 1.5× text turns a paragraph into three lines,
         // and tags accumulate with use — so they are the ones that have to give way.
         Column(
@@ -333,26 +333,17 @@ private fun TagEditorSheet(
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
         ) {
-          // Two nodes rather than one sentence: an existing test pins the first line verbatim, and
-          // the second warns about the button at the bottom instead of explaining labels further.
-          Text(
-            text = "标签只用于关注页筛选，会随关注列表一起同步到已配对的设备。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp),
-          )
-          Text(
-            text = "取消关注会把主播从列表里移除，它的标签只在关注页用，也会一起消失。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
-          )
-
+          // Chips first, explanation underneath. At 1.5× the two paragraphs alone fill this band,
+          // so with the old order the first screen of the panel showed *no tags at all* — the one
+          // thing the panel exists for was a scroll away, with nothing on screen saying there was
+          // more below. The paragraphs are reference text; anything below them is optional reading,
+          // which is the right order for it.
           if (known.isEmpty() && tags.isEmpty()) {
             Text(
               text = "还没有任何标签，先加一个试试。",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(bottom = 4.dp),
             )
           }
           // A FlowRow rather than the LazyColumn this used to be. A lazy list inside a scroll
@@ -374,6 +365,21 @@ private fun TagEditorSheet(
               )
             }
           }
+
+          // Two nodes rather than one sentence: an existing test pins the first line verbatim, and
+          // the second warns about the button at the bottom instead of explaining labels further.
+          Text(
+            text = "标签只用于关注页筛选，会随关注列表一起同步到已配对的设备。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+          )
+          Text(
+            text = "取消关注会把主播从列表里移除，它的标签只在关注页用，也会一起消失。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+          )
         }
 
         // Band 3, fixed: writing a tag, and dropping the follow. Neither may scroll away.
