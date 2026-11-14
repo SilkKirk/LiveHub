@@ -19,25 +19,29 @@ private val BrandTealDark = Color(0xFF5FD3E4)
 private val LiveRed = Color(0xFFF5222D)
 
 /**
- * Neutrals.
+ * Neutrals — **true neutrals, not tinted ones**.
  *
- * The surfaces were a flat near-white and a near-black, which is what made every screen read as
- * "default Material 3": cards, chips and the page background were all the same value, so nothing
- * looked like a layer. These are pulled apart deliberately — a cool page background, a whiter card
- * surface, and a chip surface that sits between them — so depth comes from tone rather than from
- * borders drawn on everything.
+ * These used to carry a lilac cast (#F6F5F8, #EDEAF1, #E2DEE8): every screen had a slightly purple
+ * page, slightly purple chips and slightly purple borders. Against a vivid brand pink that cast does
+ * real damage — the pink is meant to be the only saturated thing on screen, and a second weak hue
+ * everywhere else makes the app read as "some purple-ish theme" rather than as a pink accent on a
+ * neutral canvas.
+ *
+ * So the greys are neutral to the byte — equal R, G and B for the page, the containers and the
+ * borders, with one to three points of step between layers. Depth comes from those steps plus the
+ * white card surface, and the brand colour is the only colour.
  */
-private val BackgroundLight = Color(0xFFF6F5F8)
+private val BackgroundLight = Color(0xFFF6F6F8)
 private val SurfaceLight = Color(0xFFFFFFFF)
-private val SurfaceContainerLight = Color(0xFFF1EFF4)
-private val SurfaceVariantLight = Color(0xFFEDEAF1)
-private val OutlineLight = Color(0xFFE2DEE8)
+private val SurfaceContainerLight = Color(0xFFF1F1F4)
+private val SurfaceVariantLight = Color(0xFFEDEDF1)
+private val OutlineLight = Color(0xFFE1E1E6)
 
-private val BackgroundDark = Color(0xFF0F0E12)
-private val SurfaceDark = Color(0xFF1A181F)
-private val SurfaceContainerDark = Color(0xFF221F28)
-private val SurfaceVariantDark = Color(0xFF2A2731)
-private val OutlineDark = Color(0xFF3A3642)
+private val BackgroundDark = Color(0xFF0D0D10)
+private val SurfaceDark = Color(0xFF17171C)
+private val SurfaceContainerDark = Color(0xFF1E1E24)
+private val SurfaceVariantDark = Color(0xFF26262E)
+private val OutlineDark = Color(0xFF3A3A44)
 
 private val LightScheme: ColorScheme = lightColorScheme(
   primary = BrandPink,
@@ -55,13 +59,13 @@ private val LightScheme: ColorScheme = lightColorScheme(
   secondaryContainer = Color(0xFFFFDDE3),
   onSecondaryContainer = Color(0xFF41000D),
   background = BackgroundLight,
-  onBackground = Color(0xFF1B1B1F),
+  onBackground = Color(0xFF18181B),
   surface = SurfaceLight,
-  onSurface = Color(0xFF1B1B1F),
+  onSurface = Color(0xFF18181B),
   surfaceVariant = SurfaceVariantLight,
-  onSurfaceVariant = Color(0xFF5A5560),
+  onSurfaceVariant = Color(0xFF5B5B66),
   surfaceContainer = SurfaceContainerLight,
-  surfaceContainerHigh = Color(0xFFE9E6EF),
+  surfaceContainerHigh = Color(0xFFE9E9ED),
   // Two container tokens, and the surfaces that read them are not the two you would guess: Material's
   // filled `Card` (which every card on 设置 and 同步 is) takes `surfaceContainerHighest`, while
   // `surfaceContainerLow` is what `ElevatedCard` and `ModalBottomSheet` use. Neither was set here, so
@@ -74,7 +78,7 @@ private val LightScheme: ColorScheme = lightColorScheme(
   // relationship the room tiles already use (`StreamerCard` is `surface` over `background`).
   surfaceContainerLow = SurfaceLight,
   surfaceContainerHighest = SurfaceLight,
-  outline = Color(0xFF9A94A3),
+  outline = Color(0xFF8E8E99),
   outlineVariant = OutlineLight,
   error = Color(0xFFBA1A1A),
   onError = Color.White,
@@ -92,17 +96,17 @@ private val DarkScheme: ColorScheme = darkColorScheme(
   secondaryContainer = Color(0xFF8A0022),
   onSecondaryContainer = Color(0xFFFFDDE3),
   background = BackgroundDark,
-  onBackground = Color(0xFFE7E3EA),
+  onBackground = Color(0xFFE8E8EC),
   surface = SurfaceDark,
-  onSurface = Color(0xFFE7E3EA),
+  onSurface = Color(0xFFE8E8EC),
   surfaceVariant = SurfaceVariantDark,
-  onSurfaceVariant = Color(0xFFB9B2C1),
+  onSurfaceVariant = Color(0xFFAFAFB9),
   surfaceContainer = SurfaceContainerDark,
-  surfaceContainerHigh = Color(0xFF2E2B36),
+  surfaceContainerHigh = Color(0xFF26262E),
   // Same pair as the light scheme: cards are one step above the page, not a tint of it.
   surfaceContainerLow = SurfaceDark,
   surfaceContainerHighest = SurfaceDark,
-  outline = Color(0xFF6E6878),
+  outline = Color(0xFF6B6B78),
   outlineVariant = OutlineDark,
   error = Color(0xFFFFB4AB),
   onError = Color(0xFF690005),

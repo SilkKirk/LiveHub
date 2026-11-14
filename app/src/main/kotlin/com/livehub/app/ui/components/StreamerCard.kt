@@ -443,14 +443,22 @@ private fun CoverImage(streamer: Streamer) {
   }
 }
 
-/** Deterministic gradient placeholder so a missing cover is still visually informative. */
+/**
+ * Deterministic gradient placeholder so a missing cover is still visually informative.
+ *
+ * **One family, four depths — not four hues.** The palette used to be a saturated dark teal, a
+ * purple-to-rose, a teal-to-green and a purple-to-pink: four unrelated hues, any two of which could
+ * land side by side in the grid. A screen of them reads as a bag of colours with the brand pink lost
+ * among it. These four keep the same mid value and low chroma (dusty rose, slate, muted plum, sage),
+ * so a grid looks composed and the pink accents on top of it are still the loudest thing on screen.
+ */
 @Composable
 private fun CoverPlaceholder(seed: String) {
   val palette = listOf(
-    Color(0xFF2C3E50) to Color(0xFF4CA1AF),
-    Color(0xFF3A1C71) to Color(0xFFD76D77),
-    Color(0xFF134E5E) to Color(0xFF71B280),
-    Color(0xFF642B73) to Color(0xFFC6426E),
+    Color(0xFF6E3B4A) to Color(0xFFA9868F),
+    Color(0xFF3D4653) to Color(0xFF8593A5),
+    Color(0xFF4E3B58) to Color(0xFF8F7F9C),
+    Color(0xFF46503F) to Color(0xFF8C987F),
   )
   val pair = palette[(seed.hashCode().absoluteValue) % palette.size]
 
