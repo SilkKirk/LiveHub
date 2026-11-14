@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -112,6 +113,8 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
     }
 
     item { ScopeCard() }
+
+    item { AutoSyncCard(state, onAction) }
 
     item { DeviceListCard(state, onAction) }
 
@@ -345,6 +348,42 @@ private fun ScopeCard() {
           "登录状态只在局域网内、只发给已配对的设备（明文传输，解除关联后不再发送）。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
+/**
+ * The 自动同步 switch: one decision, two consequences.
+ *
+ * On, the LAN server stays up for as long as the app is on screen (so the other device can start
+ * an exchange whenever it likes, instead of both users having to be parked on this page), and each
+ * arrival in the foreground runs one exchange by itself. Off, the page behaves the way it did
+ * before: the server listens only while this screen is open — pairing needs a socket before any
+ * device is paired — and every exchange is a tap on 立即同步.
+ *
+ * The subtitle states the trade rather than the mechanic: "只在前台运行" is the reassurance that
+ * matters here, because the alternative a user would fear is a socket that stays open with the app
+ * in their pocket.
+ */
+@Composable
+private fun AutoSyncCard(state: UiState, onAction: (UiAction) -> Unit) {
+  Card(modifier = Modifier.fillMaxWidth()) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text("自动同步", style = MaterialTheme.typography.titleMedium)
+        Text(
+          text = "应用打开时与已配对设备同步一次；服务端只在前台运行。",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      Switch(
+        checked = state.autoSyncEnabled,
+        onCheckedChange = { onAction(UiAction.SetAutoSync(it)) },
       )
     }
   }

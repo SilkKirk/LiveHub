@@ -96,6 +96,20 @@ data class UserSettings(
    */
   val selfSecret: String = "",
   /**
+   * Whether the LAN sync server runs outside the sync screen, and whether opening the app syncs
+   * once by itself.
+   *
+   * On by default, and that default is load-bearing twice: it is the behaviour the app is for
+   * (two paired devices keep each other current without being parked on the sync page), and a
+   * record written before this field existed decodes to it. The decode falls back to
+   * `UserSettings()` for a record it cannot read, so a field without a default would reset every
+   * other setting along with it.
+   *
+   * Off is not "no sync at all": the sync page still opens the server while it is on screen,
+   * because pairing a new device needs a listening socket before any peer exists.
+   */
+  val autoSync: Boolean = true,
+  /**
    * Whether the periodic background refresh of the follow list may run at all.
    *
    * On by default: that is exactly what the app did before this switch existed, and defaulting to
@@ -268,6 +282,16 @@ class UserPreferences(private val context: Context) {
    */
   fun setRefreshOnWifiOnly(wifiOnly: Boolean) {
     update { it.copy(refreshOnWifiOnly = wifiOnly) }
+  }
+
+  /**
+   * Turns the always-on LAN server and the one-sync-per-foreground-entry on or off.
+   *
+   * The setting is read by `MainViewModel` rather than by `SyncController`, because "may a socket
+   * be open right now" also depends on the foreground state, and only the ViewModel knows that.
+   */
+  fun setAutoSync(enabled: Boolean) {
+    update { it.copy(autoSync = enabled) }
   }
 
   fun setBlockedKeywords(keywords: List<String>) {

@@ -182,6 +182,14 @@ data class UiState(
   val blockedKeywords: List<String> = emptyList(),
   val peers: List<TrustedPeer> = emptyList(),
   val discoveredPeers: List<com.livehub.core.sync.DiscoveredPeer> = emptyList(),
+  /**
+   * Whether the LAN server runs while the app is in the foreground, and whether arriving in the
+   * foreground syncs once by itself.
+   *
+   * In the state, not read from preferences by the screen: the switch renders it and the screen is
+   * a JVM module below this one. See [UiAction.SetAutoSync].
+   */
+  val autoSyncEnabled: Boolean = true,
   val syncLog: List<SyncLogEntry> = emptyList(),
   val deviceName: String = "",
   val localAddress: String = "",
@@ -434,6 +442,14 @@ sealed interface UiAction {
   data class SetRefreshOnWifiOnly(val wifiOnly: Boolean) : UiAction
 
   data object RefreshPeers : UiAction
+
+  /**
+   * Turns the always-on LAN server, and the automatic sync on entering the foreground, on or off.
+   *
+   * Unlike [SetBackgroundRefresh] this needs no scheduling: the server is started and stopped
+   * directly from the new value, because the switch decides whether a socket is listening *now*.
+   */
+  data class SetAutoSync(val enabled: Boolean) : UiAction
 
   data class UnpairPeer(val deviceId: Long) : UiAction
 

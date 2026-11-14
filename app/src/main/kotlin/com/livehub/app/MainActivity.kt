@@ -85,7 +85,21 @@ class MainActivity : ComponentActivity() {
   }
 
   /**
-   * Pauses the stream when the app is hidden without a thumbnail.
+   * Every return to the foreground, including the first one.
+   *
+   * The LAN sync server now lives as long as the app is on screen (instead of only while the sync
+   * page is open), and arriving in the foreground is also when one automatic exchange is worth
+   * doing without being asked — both decisions belong to the ViewModel, which knows whether
+   * anything is paired and whether the user left the feature on. See
+   * [MainViewModel.onAppForeground].
+   */
+  override fun onStart() {
+    super.onStart()
+    viewModel.onAppForeground()
+  }
+
+  /**
+   * Pauses the stream when the app is hidden without a thumbnail, and puts the LAN server away.
    *
    * Everything above is about keeping a stream *visible*; this is the other half of the same
    * decision. A stream the user can no longer see must not keep making noise with nothing on screen
@@ -97,11 +111,16 @@ class MainActivity : ComponentActivity() {
    * A room in the mini window counts as watching: it is paused here just the same, because the mini
    * window goes away with the app.
    *
+   * The sync server stop happens **before** the picture-in-picture check, and deliberately: that
+   * check exists because a thumbnail is still a picture somebody is watching, while a listening
+   * socket has no equivalent argument — the app is not on screen, so it must not be reachable.
+   *
    * Nothing resumes automatically: coming back shows the frame the stream stopped on with the
    * 「已暂停 · 双击继续」 badge, which is also what a deliberate pause looks like.
    */
   override fun onStop() {
     super.onStop()
+    viewModel.onAppBackground()
     if (isInPictureInPictureMode) return
     val state = viewModel.state.value
     if (state.room != null && !state.playerPaused) {

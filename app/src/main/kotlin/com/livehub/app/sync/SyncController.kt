@@ -33,8 +33,13 @@ import kotlinx.coroutines.withContext
  * The Android side of cross-device sync.
  *
  * Owns the LAN server, the client transport, discovery and the pairing handshake so the
- * ViewModel only has to call [start], [syncNow] and [stop]. The server runs only while
- * the sync screen is open, which keeps the battery and the attack surface small.
+ * ViewModel only has to call [start], [syncNow] and [stop].
+ *
+ * **This class does not decide when it runs.** It used to: the server's contract was "only while
+ * the sync screen is open", which meant two devices could only ever meet while both users were
+ * parked on that page. The decision moved to `MainViewModel` (foreground + at least one paired
+ * device + the auto-sync switch), because the foreground state is something only the Activity
+ * knows. Everything here is the mechanism; the policy is one place, one screen away.
  */
 class SyncController(
   private val preferences: UserPreferences,
@@ -112,6 +117,10 @@ class SyncController(
 
   /**
    * Starts discovery and the LAN server.
+   *
+   * Idempotent, because every arrival in the foreground calls it: a server that is already
+   * listening is left exactly as it is rather than rebound (the second bind would fail, and the
+   * port the peers were told about would stop being the real one).
    *
    * Pairing is a two-step flow: [beginPairing] shows a code on one device, the other
    * device types it into [pairByCode], and both sides store the resulting
@@ -229,7 +238,19 @@ class SyncController(
     transport = null
     httpTransport = null
     discovered.clear()
-    // An open code must not outlive the page it was shown on: it is a live credential.
+    // Nothing is listening any more, so no code can be accepted: the window goes with the server.
+    cancelPairing()
+  }
+
+  /**
+   * Revokes the code on display without touching the server.
+   *
+   * The code is the sync *screen's* possession: [PairingWindow] is explicit that it must not
+   * outlive the page that showed it. [stop] used to be the only way to revoke it, which was fine
+   * while stopping the server and leaving the page were the same event. They are not any more —
+   * the server can outlive the page — so revoking the credential is its own act.
+   */
+  fun cancelPairing() {
     pairingWindow.cancel()
   }
 

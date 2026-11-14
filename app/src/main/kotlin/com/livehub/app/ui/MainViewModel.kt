@@ -66,6 +66,24 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   /** When the follow list was last checked; see [FOLLOW_REFRESH_MIN_INTERVAL_MILLIS]. */
   private var lastFollowRefreshAt: Long = 0L
 
+  /**
+   * Whether the app is in the foreground, as reported by `MainActivity.onStart`/`onStop`.
+   *
+   * Starts false and is only ever set by the activity: it is one of the three conditions that
+   * decide whether the LAN server may listen (see [autoSyncWanted]). A ViewModel that guessed
+   * "foreground" from being constructed would open a port from a background start.
+   */
+  private var appForeground: Boolean = false
+
+  /**
+   * When the last automatic sync ran, for [AUTO_SYNC_MIN_INTERVAL_MILLIS].
+   *
+   * In memory only, on purpose: this is a *throttle*, not a record. Persisting it would mean a
+   * disk read on every foreground entry to answer "was that recently?", and a user who force
+   * stopped the app is going to get one extra exchange, which is harmless.
+   */
+  private var lastAutoSyncAtMillis: Long? = null
+
   init {
     val preferences = container.preferences
     val settings = preferences.settings
@@ -98,6 +116,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         deviceName = preferences.deviceName,
         searchHistory = settings.searchHistory,
         recentRooms = settings.recentRooms,
+        autoSyncEnabled = settings.autoSync,
         followed = container.followStore.followed(),
         specialFollowKeys = container.followStore.specialKeys(),
         followTags = container.followStore.tagsByKey(),
@@ -193,6 +212,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       UiAction.RefreshPairingCode -> refreshPairingCode()
       UiAction.StartDiscovery -> startDiscovery()
       UiAction.SyncNow -> syncNow()
+      is UiAction.SetAutoSync -> {
+        container.preferences.setAutoSync(action.enabled)
+        _state.update { it.copy(autoSyncEnabled = action.enabled) }
+        applyAutoSyncPolicy()
+      }
       UiAction.ToggleTheme -> {
         // Cycles like the reference client: system → dark → light → system, so all three
         // states stay reachable. A two-state boolean made Light mode impossible to select.
@@ -233,43 +257,84 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       Screen.Search -> searchReturnScreen = current
       else -> Unit
     }
-    // Leaving the sync screen shuts the LAN server down. `SyncController`'s own contract says the
-    // server runs "only while the sync screen is open" — it used to keep listening until the
-    // process died, because the only `stop()` was in `onCleared`, which nothing called. Stopping
-    // here also cancels the pairing window, so a six digit code cannot outlive the screen that
-    // displayed it.
-    if (current == Screen.Sync && screen != Screen.Sync) stopSyncServer()
+    // Leaving the sync screen releases what the *page* owns — the six digit code and discovery —
+    // and leaves the server's own life to the foreground policy. It used to stop the server
+    // unconditionally, which is what made two devices able to meet only while both sat on this
+    // page. See [leaveSyncScreen].
+    if (current == Screen.Sync && screen != Screen.Sync) leaveSyncScreen()
     _state.update { it.copy(screen = screen) }
     when (screen) {
       Screen.Follow -> refreshFollowStatus()
-      Screen.Sync -> {
-        container.syncController.start()
-        refreshPeers()
-        startDiscovery()
-        // Show a fresh code on arrival: the device the user just picked up is the one they
-        // want the matching code from, and a stale code from a previous visit may already
-        // have expired.
-        val code = container.syncController.beginPairing()
-        _state.update {
-          it.copy(
-            localAddress = container.syncController.serverAddress.orEmpty(),
-            discoveredPeers = container.syncController.discoveredPeers(),
-            pairingCode = code,
-            pairingCodeSecondsLeft = container.syncController.pairingCodeSecondsLeft(),
-          )
-        }
-        startPairingCountdown()
-      }
+      Screen.Sync -> enterSyncScreen()
       else -> Unit
     }
   }
 
   /**
-   * Stops the LAN server and clears everything the sync screen owns.
+   * Everything the sync screen owns on arrival: a listening server, a fresh code, discovery, the
+   * device list, and the countdown that keeps the code's remaining life honest.
    *
-   * The UI state goes too: a code or an address left behind would be shown again on the next
-   * visit before `beginPairing()` had a chance to issue a new one, and the "我的设备" card would
-   * advertise a port nothing is listening on.
+   * Shared by [navigate] and [onAppForeground] on purpose. Returning to the app while this page is
+   * open has to re-arm it exactly like arriving does, because [onAppBackground] stops the server,
+   * and `SyncController.stop()` cancels the pairing window with it — a page left showing a code
+   * nothing accepts is worse than one that re-issues.
+   */
+  private fun enterSyncScreen() {
+    container.syncController.start()
+    refreshPeers()
+    startDiscovery()
+    // Show a fresh code on arrival: the device the user just picked up is the one they
+    // want the matching code from, and a stale code from a previous visit may already
+    // have expired.
+    val code = container.syncController.beginPairing()
+    _state.update {
+      it.copy(
+        localAddress = container.syncController.serverAddress.orEmpty(),
+        discoveredPeers = container.syncController.discoveredPeers(),
+        pairingCode = code,
+        pairingCodeSecondsLeft = container.syncController.pairingCodeSecondsLeft(),
+      )
+    }
+    startPairingCountdown()
+  }
+
+  /**
+   * Whether the LAN server should be up without the sync screen.
+   *
+   * Three conditions, and all three are necessary. Foreground: a socket in the background is
+   * battery and attack surface with nobody watching it. At least one paired device: before pairing
+   * there is nobody to talk to, and the pairing flow opens the server explicitly on the sync page
+   * — so an unpaired installation exposes no port at all. And the user's switch, which is the
+   * whole point of [UiAction.SetAutoSync].
+   */
+  private fun autoSyncWanted(): Boolean =
+    appForeground && _state.value.autoSyncEnabled && _state.value.peers.isNotEmpty()
+
+  /** Starts the server if the policy wants it. Idempotent; the foreground callback calls it often. */
+  private fun maybeStartSyncServer() {
+    if (!autoSyncWanted()) return
+    container.syncController.start()
+    // The port is only known once the server bound, and it may be an ephemeral one when the
+    // preferred port is taken — so the state is refreshed from the server rather than assumed.
+    _state.update { it.copy(localAddress = container.syncController.serverAddress.orEmpty()) }
+  }
+
+  /** Applies the policy after anything that could have changed its answer. */
+  private fun applyAutoSyncPolicy() {
+    if (autoSyncWanted()) {
+      maybeStartSyncServer()
+    } else if (_state.value.screen != Screen.Sync) {
+      // The sync page is the one place that needs a server regardless: pairing is what it is for.
+      stopSyncServer()
+    }
+  }
+
+  /**
+   * Stops the LAN server and collects everything it owned.
+   *
+   * The UI mirrors go too: `SyncController.stop()` cancels the pairing window as well, so a code
+   * left in the state would be shown on the next visit while nothing accepted it, and
+   * [UiState.localAddress] would advertise a port nobody is listening on.
    */
   private fun stopSyncServer() {
     discoveryJob?.cancel()
@@ -285,6 +350,35 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         discovering = false,
         localAddress = "",
       )
+    }
+  }
+
+  /**
+   * Collects what the sync screen owns when the user leaves it, without deciding the server's fate.
+   *
+   * The code is a live credential and dies with the page that displayed it whatever happens next;
+   * discovery is this page's own battery cost and stops too. Whether the socket survives is the
+   * policy's answer ([autoSyncWanted]), which is why an unpaired installation still sees the old
+   * "leaving the page shuts it down" behaviour while a paired one keeps syncing in the background
+   * of the rest of the app.
+   */
+  private fun leaveSyncScreen() {
+    container.syncController.cancelPairing()
+    discoveryJob?.cancel()
+    discoveryJob = null
+    pairingCountdownJob?.cancel()
+    pairingCountdownJob = null
+    if (autoSyncWanted()) {
+      _state.update {
+        it.copy(
+          pairingCode = "",
+          pairingCodeSecondsLeft = 0,
+          discoveredPeers = emptyList(),
+          discovering = false,
+        )
+      }
+    } else {
+      stopSyncServer()
     }
   }
 
@@ -306,9 +400,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       Screen.Search -> searchReturnScreen.takeIf { it != Screen.Search } ?: Screen.Home
       else -> Screen.Home
     }
-    // The back gesture is the other way off the sync screen, so it has to tear the server down
-    // for the same reason [navigate] does.
-    if (current == Screen.Sync) stopSyncServer()
+    // The back gesture is the other way off the sync screen, so it releases the same things
+    // [navigate] does — the page's code and discovery, not necessarily the server.
+    if (current == Screen.Sync) leaveSyncScreen()
     _state.update { it.copy(screen = target) }
   }
 
@@ -329,6 +423,69 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun expandPlayer() {
     if (_state.value.room == null) return
     _state.update { it.copy(screen = Screen.Player) }
+  }
+
+  // --------------------------------------------------------------- app lifecycle
+
+  /**
+   * The app came to the foreground. Called from `MainActivity.onStart`.
+   *
+   * This is what replaced "the sync server lives only while the sync page is open": from here on,
+   * a paired and switched-on installation listens (and syncs once) just because the app is on
+   * screen. Two things happen, in this order:
+   *
+   * 1. the server is brought up — or, when the sync page is the one on screen, that page is
+   *    re-armed, because [onAppBackground] stopped the server and took the code with it;
+   * 2. one silent exchange runs if [shouldAutoSync] allows it.
+   */
+  fun onAppForeground() {
+    appForeground = true
+    if (_state.value.screen == Screen.Sync) {
+      // Not `maybeStartSyncServer`: leaving the app stopped the server *and* revoked the code, so
+      // the page on screen has to be re-armed with a new one or it would show nothing usable.
+      enterSyncScreen()
+    } else {
+      maybeStartSyncServer()
+    }
+    autoSyncIfDue()
+  }
+
+  /**
+   * The app left the foreground. Called from `MainActivity.onStop`.
+   *
+   * Everything network-facing goes down, including the pairing code: a socket with nobody looking
+   * at it is the battery and attack-surface half of the old contract, and that half was right.
+   * Coming back re-arms whatever page is open.
+   */
+  fun onAppBackground() {
+    appForeground = false
+    stopSyncServer()
+  }
+
+  /**
+   * Runs one exchange after a foreground entry, if the throttle and the switch allow it.
+   *
+   * Silent, which is the point: [syncNow] reports through [UiState.message], and that is a
+   * snackbar. The user pressed nothing here — a toast appearing because they unlocked their phone
+   * would be noise. The exchange still lands in [UiState.syncLog], which is where someone who
+   * wants to know what happened looks.
+   */
+  private fun autoSyncIfDue() {
+    val now = System.currentTimeMillis()
+    if (!shouldAutoSync(
+        enabled = _state.value.autoSyncEnabled,
+        peerCount = _state.value.peers.size,
+        nowMillis = now,
+        lastAutoSyncAtMillis = lastAutoSyncAtMillis,
+      )
+    ) {
+      return
+    }
+    // Stamped before the run, not after: two foreground entries a second apart (a dialog, a
+    // notification) would otherwise both start an exchange, and the second would only be answered
+    // by the throttle once the first had finished.
+    lastAutoSyncAtMillis = now
+    syncNow(silent = true)
   }
 
   // ------------------------------------------------------------------- platform
@@ -1707,7 +1864,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
-  private fun syncNow() {
+  /**
+   * Runs one exchange and reports the outcome.
+   *
+   * [silent] is what separates the two callers: the 立即同步 button wants the summary as a
+   * snackbar, while the automatic run on foreground entry must not announce itself. Everything
+   * else — the `syncing` flag, the refreshed device list, the exchange log — is the same, because
+   * it is the same exchange.
+   */
+  private fun syncNow(silent: Boolean = false) {
     viewModelScope.launch {
       _state.update { it.copy(syncing = true) }
       val summary = runCatching { container.syncController.syncNow() }
@@ -1723,7 +1888,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           // Labels arrive inside the records, so a merge can add or remove them.
           followTags = container.followStore.tagsByKey(),
           syncLog = container.syncEngine.logEntries(),
-          message = summary.message,
+          // A silent run leaves whatever message was already on screen alone — it has no news the
+          // user did not ask for, and clearing an unrelated one would be worse than saying nothing.
+          message = if (silent) it.message else summary.message,
         )
       }
     }
@@ -1772,4 +1939,38 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
      */
     const val FOLLOW_REFRESH_MIN_INTERVAL_MILLIS = 30_000L
   }
+}
+
+/**
+ * How long an automatic sync trusts the previous one.
+ *
+ * Five minutes, the same order as the pairing code's own window: long enough that flicking between
+ * apps does not start an exchange every time, short enough that "I added a room on the tablet, let
+ * me look at the phone" works without thinking about it. Both devices run this rule independently,
+ * so the pair converges within one interval either way.
+ */
+private const val AUTO_SYNC_MIN_INTERVAL_MILLIS = 5 * 60 * 1000L
+
+/**
+ * Whether an arrival in the foreground should run a sync.
+ *
+ * A pure function taking the clock as an argument rather than reading it, so the whole table —
+ * "switched off", "nothing paired", "just synced", "never synced", "it has been a while" — is
+ * checkable without waiting five minutes or sleeping a test.
+ *
+ * The three "no" answers are deliberately in order of how cheap they are to check; the last one
+ * treats a clock that moved *backwards* as "recently synced", which fails safe: a missed automatic
+ * sync costs one manual tap, while trusting a bogus timestamp could start a sync loop.
+ */
+internal fun shouldAutoSync(
+  enabled: Boolean,
+  peerCount: Int,
+  nowMillis: Long,
+  lastAutoSyncAtMillis: Long?,
+): Boolean {
+  if (!enabled) return false
+  if (peerCount <= 0) return false
+  // Never synced in this process: the app was just opened, which is exactly when to look.
+  val last = lastAutoSyncAtMillis ?: return true
+  return nowMillis - last >= AUTO_SYNC_MIN_INTERVAL_MILLIS
 }
