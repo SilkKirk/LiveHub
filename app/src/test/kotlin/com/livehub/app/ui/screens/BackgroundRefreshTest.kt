@@ -193,8 +193,13 @@ class BackgroundRefreshTest {
 
     scrollTo("后台刷新开播状态")
     composeRule.onNodeWithText("后台刷新开播状态").assertIsDisplayed()
-    composeRule.onNodeWithText("每 30 分钟检查一次关注列表里谁开播了").assertIsDisplayed()
+    // The switch shares its row with the title, so it is inside the viewport as soon as the title
+    // is. The subtitle does not: `performScrollToNode` stops the moment its target becomes
+    // visible, which can leave the line under it below the fold — asserting it without scrolling
+    // to it first is how this test failed on its first CI run.
     composeRule.onNodeWithTag(BACKGROUND_REFRESH_SWITCH_TAG).assertIsDisplayed()
+    scrollTo("每 30 分钟检查一次关注列表里谁开播了")
+    composeRule.onNodeWithText("每 30 分钟检查一次关注列表里谁开播了").assertIsDisplayed()
 
     // Scrolled to separately so the second row is provably inside the viewport, not merely
     // composed: `assertIsDisplayed` fails on a node that is clipped by the fold.
