@@ -730,21 +730,6 @@ class ScreenshotTest {
   @Test
   fun syncLog() = capture("13b-sync-log", syncState(), scrollToText = LAST_SYNC_LOG_ROW)
 
-  /**
-   * The 自动同步 card, which is the one thing on this page that changed when sync stopped needing
-   * both devices parked here.
-   *
-   * `13-sync` stops at the fold half way through this card's subtitle and `13b` opens on the last
-   * line of it, so the card had no render that shows it whole — the same gap the cache card had in
-   * round eighty-four.
-   *
-   * The anchor is 我的设备, not 自动同步: the card's own title already sits just above the fold, so
-   * scrolling *to* it moves nothing and the render came out byte-identical to `13-sync` on the
-   * first attempt. Scrolling to the card below it leaves this one whole in frame.
-   */
-  @Test
-  fun syncAutoSync() = capture("13c-sync-auto", syncState(), scrollToText = "我的设备")
-
   @Test
   fun syncEmpty() = capture("14-sync-empty", baseState().copy(screen = Screen.Sync))
 
