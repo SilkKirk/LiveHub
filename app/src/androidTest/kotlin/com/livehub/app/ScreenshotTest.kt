@@ -1410,6 +1410,12 @@ class ScreenshotTest {
         runCatching { scrollables[index].performScrollToNode(hasText(scrollToText)) }.isSuccess
       }
       check(reached) { "no scrollable on this screen could reach \"$scrollToText\"" }
+      // Animations the scroll started are given time to finish *before* the clock is frozen.
+      // Freezing mid-animation is not a slow capture, it is a capture that may never return: the
+      // recomposer still has work pending and `waitForIdle` has no clock to advance it. The home
+      // header folding away on a downward scroll is exactly that case (round 98), which is why this
+      // advances rather than waits.
+      composeRule.mainClock.advanceTimeBy(500L)
       composeRule.mainClock.autoAdvance = false
       composeRule.waitForIdle()
     }
