@@ -63,9 +63,15 @@ class ResilientPlatformRepository(
   /**
    * Runs [block] and retries transient failures.
    *
-   * [Retryable] failures are network hiccups and 5xx responses. Domain errors such as
-   * "主播未开播" or "room not found" are surfaced immediately — retrying them only
-   * wastes battery.
+   * [Retryable] means "the same request might work in a moment": a dropped connection, a timeout,
+   * a 5xx or a 429. Everything else is answered immediately, because retrying it spends battery on
+   * a request whose answer cannot change:
+   *
+   *  * domain errors ("主播未开播", "room not found", "log in first") are decisions, not accidents;
+   *  * **4xx responses are decisions too** — a signed URL whose signature expired, a 404, a rejected
+   *    parameter. `NetworkException` extends `IOException`, so the old rule treated every one of
+   *    them as transient and re-fetched a whole room page three times with backoff, adding a second
+   *    of delay to a failure that was already final.
    */
   suspend fun <T> withRetry(block: suspend () -> T): T {
     val backoff = BackoffPolicy(retryPolicy.initialDelay, retryPolicy.maxDelay, retryPolicy.multiplier)
@@ -89,6 +95,10 @@ class ResilientPlatformRepository(
     is com.livehub.platform.api.PlatformNotFoundException -> false
     is com.livehub.platform.api.PlatformAuthRequiredException -> false
     is com.livehub.platform.api.PlatformProtocolException -> false
+    // An HTTP status is the server's final answer for this request. Only the two that mean "try
+    // again" are retried; 408 is the third, and it arrives as a socket timeout rather than a
+    // response on this stack.
+    is com.livehub.core.network.NetworkException -> error.code >= 500 || error.code == 429
     is java.io.IOException -> true
     else -> false
   }
