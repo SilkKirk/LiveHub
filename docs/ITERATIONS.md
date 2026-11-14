@@ -2822,3 +2822,55 @@ dialog"而不是"点错了地方"。改成先 `performScrollToNode` 再点（这
 - 关注页头部仍高（头像行 + 一行 chip），可以套用首页那套折叠。
 - 设置页「添加屏蔽词」的输入框仍是最响的元素（`OutlinedTextField` 的描边）；可换填充式。
 - 深色模式只做了同样的中性化，没有单独推敲（`23-home-dark` / `23b-settings-dark` 已重拍）。
+
+
+---
+
+## 第一百零二轮迭代：折叠抽成组件、关注页复用（用户："能用已有组件的尽量用"）
+
+上一轮的折叠是写在 `HomeScreen` 里的。关注页的头部更高（标题 + 搜索框 + 特别关注头像行 + 两行
+chip），同样该折——但不能抄第二份。
+
+### 做了什么
+
+- **`components/CollapsibleHeader.kt`**：`CollapsibleHeaderState`（一个布尔 + 一个
+  `NestedScrollConnection`）、`rememberCollapsibleHeaderState(hasScrolled)`、
+  `CollapsibleHeader(state){ ... }`、`Modifier.collapsibleHeaderScroll(state)`，以及纯函数
+  `headerVisibleAfterDrag` 与它的 5 条决策表用例（`components/CollapsibleHeaderTest`）。
+- **首页**改成用组件（行为不变，"什么算滚动过"的 lambda 传进去）。
+- **关注页**：`rememberLazyGridState` 从 `FollowGrid` 提到页面级（头部要问"列表动过没有"），
+  头部整体包进 `CollapsibleHeader`。
+- **chip 语言统一**（上一轮）之后，这一轮没有再动视觉，只复用了已有组件。
+
+### 顺带修的两处测试写法
+
+1. **锚点不能拿 fixture 当锚点**：关注页的折叠用例原本断言「全部」chip，可关注页显示哪些 chip
+   取决于列表内容（全是同一平台时平台行本来就不画）。改用只属于头部的「正在直播」副标题。
+2. **半露的卡片不能当手势起点**：底部那张卡的圆心通常落在窗口外，注入的触摸点无效，失败会
+   显示成"头部没回来"。展开手势改成从窗口中心往下拖。
+
+### 截图 harness 的一个真缺口
+
+`scrollToText` 走的是列表的**语义动作**（`scrollToItem`），**不产生嵌套滚动事件**——所以"靠滚动
+折叠头部"的页面在语义滚动下什么都不折。`01d` 上一轮能折纯属运气（语义滚动先在 chip 行上试、
+再落到网格上的副作用），`07f` 第一次拍就直接暴露了。
+
+新增 `capture(swipeUpCount = n)`：从窗口中心往上真拖，手势与折叠动画期间放开时钟、之后冻结。
+`01d` 与 `07f` 都改用它，两张图从此各只说明一件事。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ **866** 个用例（折叠决策表 5 + 两屏各两条手势用例），0 失败 |
+| 仪器测试 | ✅ **64** 张截图（+`07f-follow-header-collapsed`） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `ce1306b` 三个 job 全绿 |
+
+### 留下的
+
+- 设置页「添加屏蔽词」的输入框仍是全页最响的元素（`OutlinedTextField` 描边）。
+- 深色模式没有单独推敲。
+- 播放页的清晰度/弹幕面板里还有 8 处 chip，现在也走同一个组件了，但没有专门的截图覆盖它们
+  在大字号下的样子。
