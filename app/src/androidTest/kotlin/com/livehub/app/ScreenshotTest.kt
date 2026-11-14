@@ -1178,9 +1178,11 @@ class ScreenshotTest {
   /**
    * The sync page at 1.5×: the six-digit code, the action row and 自动同步.
    *
-   * The code is the largest text the app draws (`displaySmall`), and the row under it is a `Row` of
-   * three fixed-size children — a `Button`, an `OutlinedButton` and an `IconButton` — with no wrap.
-   * That makes it the second container in the app that cannot give way, after the player's action row.
+   * The code is the largest text the app draws (`displaySmall`), and the row under it holds three
+   * fixed-size children — a `Button`, an `OutlinedButton` and an `IconButton`. It used to be a plain
+   * `Row`, which squeezed 「关联设备」 into one character per line and the refresh icon into a sliver
+   * at this scale; round 95 made it a `FlowRow`, so what this render now checks is that the row
+   * *wraps* — labels on one line each, the icon at its full 48dp, whichever line it lands on.
    */
   @Test
   fun syncLargeFont() = capture("31-sync-large-font", syncState(), fontScale = 1.5f)
@@ -1188,10 +1190,12 @@ class ScreenshotTest {
   /**
    * The tag editor at 1.5×, opened the way a user opens it — the long press is all there is.
    *
-   * The sheet is `fillMaxHeight(0.6f)` and everything above the chip list is fixed content: the title
-   * row, two explanatory paragraphs, then the new-tag field. Below the list sits the 取消关注 row,
-   * which is the part this render exists to prove is still on screen. 完成 is asserted so that a press
-   * which opened nothing cannot pass as a render of the sheet.
+   * The sheet became three bands in round 95: a fixed title row, a scrolling middle (the two
+   * explanatory paragraphs and the tag chips) and a fixed bottom (the new-tag field, the divider and
+   * the 取消关注 row). This render is what that restructure is for — at 1.5× the two paragraphs alone
+   * used to fill a `fillMaxHeight(0.6f)` sheet and push both the chips and 取消关注 out of it. What to
+   * look for: chips visible in the middle band, and 取消关注 still at the bottom edge. 完成 is
+   * asserted so that a press which opened nothing cannot pass as a render of the sheet.
    */
   @Test
   fun followTagEditorLargeFont() = capture(
