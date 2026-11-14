@@ -696,6 +696,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         } else {
           _state.update { it.copy(loading = false) }
         }
+      } catch (cancelled: CancellationException) {
+        // Re-thrown, like the other seven cancel-aware blocks in this file. `loadCategories`
+        // cancels the previous `roomsJob` and starts a new one, and the cancelled coroutine resumes
+        // *after* the new one has already written `loading = true, error = null` — so a swallowed
+        // CancellationException would overwrite the fresh state with `error = "Job was cancelled"`.
+        // That string is English, and [HomeScreen] now renders `error` above the grid, so the bug
+        // would be visible to the user rather than merely wrong.
+        throw cancelled
       } catch (error: PlatformException) {
         _state.update { it.copy(loading = false, error = error.message) }
       } catch (error: Exception) {
@@ -792,6 +800,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             hasNextPage = page.hasMore,
           )
         }
+      } catch (cancelled: CancellationException) {
+        // A new request replaced this one (a category switch, a pull-to-refresh, a platform
+        // change). The replacement already owns every flag this block would touch, and it is the
+        // one that has to report a failure — see the comment on `loadCategories`.
+        throw cancelled
       } catch (error: Exception) {
         _state.update {
           it.copy(
@@ -1349,6 +1362,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             loading = false,
           )
         }
+      } catch (cancelled: CancellationException) {
+        // Opening a second room cancels the first resolve. The new one owns `loading` and `error`;
+        // letting the cancelled one write would leave "Job was cancelled" on the screen, and the
+        // success branch below deliberately does not clear `error`, so it would survive until the
+        // next room.
+        throw cancelled
       } catch (error: Exception) {
         _state.update {
           it.copy(loading = false, error = error.message ?: "无法播放该直播间")
@@ -1420,6 +1439,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             playerError = null,
           )
         }
+      } catch (cancelled: CancellationException) {
+        // Switching quality twice cancels the first re-resolve; only the newest one may write
+        // `switchingQuality` and report a failure.
+        throw cancelled
       } catch (error: Exception) {
         _state.update {
           it.copy(switchingQuality = false, message = error.message ?: "切换失败")
@@ -1764,6 +1787,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           )
         }
         pollUntilConfirmed(qr.key)
+      } catch (cancelled: CancellationException) {
+        // The user pressed 取消 while the QR code was being fetched or polled. `cancelBilibiliLogin`
+        // already reset the card synchronously; without this the cancelled coroutine would paint
+        // "Job was cancelled" — in English — over its own 取消 button.
+        throw cancelled
       } catch (error: Exception) {
         _state.update {
           it.copy(
