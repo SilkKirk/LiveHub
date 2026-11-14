@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
@@ -496,7 +497,9 @@ class ScreenshotTest {
   fun homeHeaderCollapsed() = capture(
     "01d-home-header-collapsed",
     baseState(),
-    scrollToText = "大司马",
+    // A gesture, not `scrollToText`: the fold is driven by nested scroll, which the semantics
+    // scroll action does not produce (see the parameter's KDoc).
+    swipeUpCount = 1,
   )
 
   private val followRooms = listOf(
@@ -521,7 +524,7 @@ class ScreenshotTest {
       followed = followRooms,
       specialFollowKeys = listOf(followRooms[0].key, followRooms[3].key, followRooms[4].key),
     ),
-    scrollToText = "复出首播",
+    swipeUpCount = 1,
   )
 
   /**
@@ -1319,6 +1322,15 @@ class ScreenshotTest {
     onScreenText: String? = null,
     scrollToText: String? = null,
     /**
+     * Swipes up through the list before capturing, with a real gesture.
+     *
+     * `scrollToText` drives the lazy list through its semantics action, which does **not** go
+     * through nested scrolling — so it scrolls a page that folds its header on scroll without
+     * folding anything. This is the parameter for those pages: the same gesture a finger makes,
+     * delivered to the window centre (which is always inside the grid).
+     */
+    swipeUpCount: Int = 0,
+    /**
      * The aspect the player should assume before a decoder reports one.
      *
      * A vertical stream is the only thing that puts the player into its full-bleed portrait
@@ -1440,6 +1452,20 @@ class ScreenshotTest {
       // recomposer still has work pending and `waitForIdle` has no clock to advance it. The home
       // header folding away on a downward scroll is exactly that case (round 98), which is why this
       // advances rather than waits.
+      composeRule.mainClock.advanceTimeBy(500L)
+      composeRule.mainClock.autoAdvance = false
+      composeRule.waitForIdle()
+    }
+
+    if (swipeUpCount > 0) {
+      // A real gesture: the fold on 首页 and 关注 is driven by nested scroll, which `scrollToText`
+      // never produces. The clock runs free while the gesture and the fold animation play out, then
+      // freezes, so the collapsed state is what the PNG shows.
+      composeRule.mainClock.autoAdvance = true
+      repeat(swipeUpCount) {
+        composeRule.onRoot().performTouchInput { swipeUp(startY = centerY, endY = top) }
+        composeRule.waitForIdle()
+      }
       composeRule.mainClock.advanceTimeBy(500L)
       composeRule.mainClock.autoAdvance = false
       composeRule.waitForIdle()
