@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -61,6 +62,9 @@ import com.livehub.app.ui.FollowLiveFilter
 import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.app.ui.components.CollapsibleHeader
+import com.livehub.app.ui.components.collapsibleHeaderScroll
+import com.livehub.app.ui.components.rememberCollapsibleHeaderState
 import com.livehub.app.ui.components.CardMinWidth
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.RefreshableBox
@@ -148,35 +152,49 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
           "关注之后可以在页顶点亮星标，把常看的主播放进特别关注。",
       )
     } else {
-      Column(modifier = Modifier.fillMaxSize()) {
-        FollowHeader(
-          total = state.followed.size,
-          liveCount = liveCount,
-          filter = filter,
-          onFilterChange = { onAction(UiAction.SetFollowLiveFilter(it)) },
-          platforms = platforms,
-          platformFilter = platformFilter,
-          onPlatformChange = { onAction(UiAction.SetFollowPlatformFilter(it)) },
-          query = state.followQuery,
-          onQueryChange = { onAction(UiAction.SetFollowQuery(it)) },
-          tags = knownTags,
-          tagFilter = tagFilter,
-          onTagFilterChange = { onAction(UiAction.SetFollowTagFilter(it)) },
-          special = special,
-          onOpenSpecial = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
-          onReorderSpecial = { streamer, index ->
-            // `full` is the whole follow list, not `special`: the stored order is one order over
-            // every followed room, and the avatar row is only a filtered view of it. Reconciling
-            // against `special` would hand `SetFollowOrder` a partial list and drop everyone the
-            // row was filtering out.
-            onAction(
-              UiAction.SetFollowOrder(
-                FollowOrdering.moveWithin(state.followed, special, streamer, index),
-              ),
-            )
-          },
-          onAddSpecial = { pickerOpen = true },
-        )
+      // Same fold as the home page, through the same component: this header is taller still (title,
+      // search field, the 特别关注 avatar row and two chip rows), and once the grid is being scrolled
+      // all of it is answering a question the user has already answered.
+      // Hoisted out of `FollowGrid` so the header can ask whether the list has moved.
+      val followGridState = rememberLazyGridState()
+      val headerFold = rememberCollapsibleHeaderState(
+        hasScrolled = {
+          followGridState.firstVisibleItemIndex > 0 ||
+            followGridState.firstVisibleItemScrollOffset > 0
+        },
+      )
+
+      Column(modifier = Modifier.fillMaxSize().collapsibleHeaderScroll(headerFold)) {
+        CollapsibleHeader(state = headerFold) {
+          FollowHeader(
+            total = state.followed.size,
+            liveCount = liveCount,
+            filter = filter,
+            onFilterChange = { onAction(UiAction.SetFollowLiveFilter(it)) },
+            platforms = platforms,
+            platformFilter = platformFilter,
+            onPlatformChange = { onAction(UiAction.SetFollowPlatformFilter(it)) },
+            query = state.followQuery,
+            onQueryChange = { onAction(UiAction.SetFollowQuery(it)) },
+            tags = knownTags,
+            tagFilter = tagFilter,
+            onTagFilterChange = { onAction(UiAction.SetFollowTagFilter(it)) },
+            special = special,
+            onOpenSpecial = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
+            onReorderSpecial = { streamer, index ->
+              // `full` is the whole follow list, not `special`: the stored order is one order over
+              // every followed room, and the avatar row is only a filtered view of it. Reconciling
+              // against `special` would hand `SetFollowOrder` a partial list and drop everyone the
+              // row was filtering out.
+              onAction(
+                UiAction.SetFollowOrder(
+                  FollowOrdering.moveWithin(state.followed, special, streamer, index),
+                ),
+              )
+            },
+            onAddSpecial = { pickerOpen = true },
+          )
+          }
 
         if (visible.isEmpty()) {
           // The name filter and the tag filter each get their own copy: "关注的主播都没有在播" would be
@@ -213,6 +231,7 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
             modifier = Modifier.fillMaxSize(),
           ) {
             FollowGrid(
+              gridState = followGridState,
               streamers = visible,
               specialKeys = specialKeys.toSet(),
               onClick = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
@@ -548,13 +567,13 @@ private fun SpecialPickerSheet(
  */
 @Composable
 private fun FollowGrid(
+  gridState: LazyGridState,
   streamers: List<Streamer>,
   specialKeys: Set<String>,
   onClick: (Streamer) -> Unit,
   onToggleSpecial: (Streamer) -> Unit,
   onLongPress: (Streamer) -> Unit,
 ) {
-  val gridState = rememberLazyGridState()
   LazyVerticalGrid(
     // Same adaptive rule as the home grid; see CardMinWidth.
     columns = GridCells.Adaptive(minSize = CardMinWidth),

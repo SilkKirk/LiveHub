@@ -1,4 +1,4 @@
-package com.livehub.app.ui.screens
+package com.livehub.app.ui.components
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -11,7 +11,10 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
+import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
+import com.livehub.app.ui.screens.FollowScreen
+import com.livehub.app.ui.screens.HomeScreen
 import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
@@ -24,22 +27,24 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * 下滑收起分区、上滑显示 — with a gesture, not with the pure function.
+ * 下滑收起、上滑显示 — with a gesture, on both screens that use the fold.
  *
- * `HomeHeaderCollapseTest` pins the decision table; this pins that the decision is actually wired to
- * the grid's scroll and to the header's visibility, in both directions. A version that computed the
- * right answer and never applied it would pass that file and fail this one.
+ * `CollapsibleHeaderTest` pins the decision table; this pins that the decision is wired to a real
+ * list and to a real header, in both directions, on each page. Two tests per screen, because the
+ * per-screen part is exactly the wiring: the component is shared, the lambda that says "the list has
+ * moved" is not, and a screen that remembered its grid state in the wrong place would pass the pure
+ * test and fail here.
  *
- * The tree is identified by its group chips (网游 / 手游 / 娱乐): they exist only while the tree is
- * composed, so "the node is gone" is the same statement as "the tree folded".
+ * The header is identified by text that only exists while it is composed — the group chips on 首页,
+ * the filter row on 关注 — so "the node is gone" means "the header folded".
  *
- * Both swipes are performed on the **root** rather than on a card. The first version grabbed a card
- * by its title, which works until the fold happens — then that card is scrolled away and the second
- * gesture cannot be aimed. The window centre is inside the grid in both states.
+ * Gestures are aimed at a card rather than at the list: matching the list is ambiguous (the platform
+ * pager is a scrollable too, and it contains the same cards), and the root starts inside the tabs,
+ * where nothing scrolls.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
-class HomeHeaderCollapseUiTest {
+class CollapsibleHeaderUiTest {
 
   @get:Rule
   val composeRule = createComposeRule()
@@ -85,17 +90,23 @@ class HomeHeaderCollapseUiTest {
     composeRule.waitForIdle()
   }
 
-  private fun groupRowCount(): Int =
-    composeRule.onAllNodesWithText("网游").fetchSemanticsNodes().size
+  private fun composeFollow() {
+    composeRule.setContent {
+      LiveHubTheme {
+        Box(modifier = Modifier.size(320.dp, 640.dp)) {
+          FollowScreen(
+            state = UiState(screen = Screen.Follow, followed = rooms),
+            onAction = {},
+          )
+        }
+      }
+    }
+    composeRule.waitForIdle()
+  }
 
-  /**
-   * The cards, in tree order: the first one is at the top of the grid, the last one at the bottom.
-   *
-   * A gesture has to start *inside* the container it means to scroll. Matching the grid itself is
-   * ambiguous — the platform pager is a scrollable too, and it contains the same cards — so the
-   * gesture is aimed at a card instead: the first for a downward scroll, the last for an upward one,
-   * which is still inside the grid in both cases.
-   */
+  private fun count(text: String): Int =
+    composeRule.onAllNodesWithText(text).fetchSemanticsNodes().size
+
   private fun cards() = composeRule.onAllNodesWithText("直播标题", substring = true)
 
   private fun topCard() = cards().let { it[0] }
@@ -103,31 +114,59 @@ class HomeHeaderCollapseUiTest {
   private fun bottomCard() = cards().let { it[it.fetchSemanticsNodes().size - 1] }
 
   @Test
-  fun `swiping the grid up folds the category tree away`() {
+  fun `home - swiping the grid up folds the category tree away`() {
     composeHome()
-    assertTrue("the tree starts open", groupRowCount() == 1)
+    assertTrue("the tree starts open", count("网游") == 1)
 
     topCard().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
 
     assertTrue(
-      "after a downward scroll the group row must be gone, found ${groupRowCount()}",
-      groupRowCount() == 0,
+      "after a downward scroll the group row must be gone, found ${count("网游")}",
+      count("网游") == 0,
     )
   }
 
   @Test
-  fun `swiping back down brings it back`() {
+  fun `home - swiping back down brings it back`() {
     composeHome()
 
     topCard().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
-    assertTrue("folded first", groupRowCount() == 0)
+    assertTrue("folded first", count("网游") == 0)
 
     bottomCard().performTouchInput { swipeDown() }
     composeRule.waitForIdle()
 
-    assertTrue("scrolling back up must bring the tree back", groupRowCount() == 1)
+    assertTrue("scrolling back up must bring the tree back", count("网游") == 1)
     composeRule.onNodeWithText("网游").assertIsDisplayed()
+  }
+
+  @Test
+  fun `follow - swiping the grid up folds the whole header away`() {
+    composeFollow()
+    assertTrue("the filter row starts visible", count("全部") == 1)
+
+    topCard().performTouchInput { swipeUp() }
+    composeRule.waitForIdle()
+
+    assertTrue(
+      "after a downward scroll the filter row must be gone, found ${count("全部")}",
+      count("全部") == 0,
+    )
+  }
+
+  @Test
+  fun `follow - swiping back down brings it back`() {
+    composeFollow()
+
+    topCard().performTouchInput { swipeUp() }
+    composeRule.waitForIdle()
+    assertTrue("folded first", count("全部") == 0)
+
+    bottomCard().performTouchInput { swipeDown() }
+    composeRule.waitForIdle()
+
+    assertTrue("scrolling back up must bring the header back", count("全部") == 1)
   }
 }

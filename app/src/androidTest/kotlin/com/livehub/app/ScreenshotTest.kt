@@ -506,6 +506,25 @@ class ScreenshotTest {
   )
 
   /**
+   * The follow page with its header folded away, which is what a downward scroll leaves behind.
+   *
+   * `07-follow-list` is the first frame, so it always shows the title, the search field, the
+   * 特别关注 avatar row and two chip rows. Round 102 gave this page the same fold as 首页 (the
+   * component is shared), and this render is what says the wiring is in the right place: the header
+   * is gone and the grid starts under the status bar area.
+   */
+  @Test
+  fun followHeaderCollapsed() = capture(
+    "07f-follow-header-collapsed",
+    baseState().copy(
+      screen = Screen.Follow,
+      followed = followRooms,
+      specialFollowKeys = listOf(followRooms[0].key, followRooms[3].key, followRooms[4].key),
+    ),
+    scrollToText = "复出首播",
+  )
+
+  /**
    * The follow list: the 特别关注 avatar row over a two-column grid.
    *
    * The layout is a *visual* claim that no JVM assertion can hold — a strip of circular avatars

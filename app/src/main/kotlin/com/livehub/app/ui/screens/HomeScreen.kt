@@ -1,12 +1,6 @@
 package com.livehub.app.ui.screens
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -60,18 +54,17 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.livehub.app.ui.components.CollapsibleHeader
 import com.livehub.app.ui.components.CardMinWidth
+import com.livehub.app.ui.components.collapsibleHeaderScroll
+import com.livehub.app.ui.components.rememberCollapsibleHeaderState
 import com.livehub.app.ui.components.EmptyState
 import com.livehub.app.ui.components.ErrorState
 import com.livehub.app.ui.components.InlineLoader
@@ -205,36 +198,6 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
   }
 }
 
-/**
- * How much of a drag counts as "the user is scrolling", in pixels.
- *
- * Not zero: a tap and a scroll share the same frame at first, and a header that folds on a stray
- * pixel would flicker on every attempt to tap a card. 6px is below the touch slop of any device this
- * ships to, so a real drag crosses it on its first event.
- */
-internal const val FOLD_DRAG_THRESHOLD_PX = 6f
-
-/**
- * Whether the category tree stays open, given one drag delta from the grid.
- *
- * Dragging up (a negative `deltaY`: content moving up, the list scrolling down) folds it away;
- * dragging down brings it back; a delta too small to be a scroll changes nothing. `scrolledAway`
- * gates the fold, because at the top of the list there is nothing behind the tree to reveal.
- *
- * **This replaced a decision based on `firstVisibleItemIndex`/`ScrollOffset`** (round 98), which was
- * self-referential: the fold changes the grid's height, so the numbers the fold was derived from
- * moved because of the fold. On the emulator that turned a 4-minute suite into a 17-minute one. A
- * drag delta is an input, not a consequence.
- */
-internal fun categoriesVisibleAfterDrag(
-  visible: Boolean,
-  deltaY: Float,
-  scrolledAway: Boolean,
-): Boolean = when {
-  deltaY < -FOLD_DRAG_THRESHOLD_PX && scrolledAway -> false
-  deltaY > FOLD_DRAG_THRESHOLD_PX -> true
-  else -> visible
-}
 
 /**
  * One platform's page: the category tree and the grid.
@@ -313,31 +276,16 @@ private fun PlatformPage(
   // state the decision was derived from, and the two fed each other. The instrumented suite went
   // from 4 minutes to 17 on a change that was supposed to be cosmetic — a `NestedScrollConnection`
   // sees the drag itself, a handful of times per gesture, and cannot be written back into layout.
-  var categoriesVisible by remember(state.platform) { mutableStateOf(true) }
-  val foldHeader = remember(gridState) {
-    object : NestedScrollConnection {
-      override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-        categoriesVisible = categoriesVisibleAfterDrag(
-          visible = categoriesVisible,
-          deltaY = available.y,
-          // Nothing is hidden while the list is still at its top: the tree IS the content there.
-          scrolledAway = gridState.firstVisibleItemIndex > 0 ||
-            gridState.firstVisibleItemScrollOffset > 0,
-        )
-        return Offset.Zero
-      }
-    }
-  }
+  // The state lives in `components/CollapsibleHeader.kt` because the follow page folds its header
+  // the same way; the only per-screen part is what "the list has scrolled" means here.
+  val categoryFold = rememberCollapsibleHeaderState(
+    hasScrolled = {
+      gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+    },
+  )
 
-  Column(modifier = Modifier.fillMaxSize().nestedScroll(foldHeader)) {
-    AnimatedVisibility(
-      visible = categoriesVisible,
-      // Vertical slide plus a size change, because the grid has to move up with it rather than
-      // being covered by a floating bar. 160ms is the short end of Material's "expressive" range:
-      // long enough to read as a fold, short enough that the list does not wait for it.
-      enter = expandVertically(animationSpec = tween(160)) + fadeIn(tween(160)),
-      exit = shrinkVertically(animationSpec = tween(160)) + fadeOut(tween(120)),
-    ) {
+  Column(modifier = Modifier.fillMaxSize().collapsibleHeaderScroll(categoryFold)) {
+    CollapsibleHeader(state = categoryFold) {
       CategoryTree(
         state = state,
         levels = levels,
