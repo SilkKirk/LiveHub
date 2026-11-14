@@ -126,7 +126,7 @@ fun LiveHubRoot(
     onAction(UiAction.Back)
   }
 
-  LiveHubTheme(mode = state.themeMode) {
+  LiveHubTheme(mode = state.themeMode, dynamicColor = state.dynamicColor) {
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
       val playerOnly = state.screen == Screen.Player
       // While picture-in-picture is up the system draws this window alone, so the shell steps

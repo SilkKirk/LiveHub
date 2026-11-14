@@ -1,12 +1,16 @@
 package com.livehub.core.designsystem
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 
 /** Which palette the user selected in settings. */
 enum class ThemeMode { System, Light, Dark }
@@ -118,32 +122,65 @@ val LiveBadgeColor: Color = LiveRed
 /**
  * Resolves the colour scheme for [mode].
  *
- * Material You (dynamic colour) used to be a parameter here, threaded from a `dynamicColor` field
- * in `UserSettings` that **nothing ever read**: the setting existed, defaulted to `true`, and the
- * whole pipeline was unreachable because `LiveHubTheme` was only ever called with `mode`. Both are
- * gone rather than left as a switch nobody can flip — and the brand palette is deliberate anyway
- * (the comment in the old parameter said wallpaper-derived colours made covers and chips look
- * washed out).
+ * The brand palette is the default. [dynamicColor] switches to Material You — the wallpaper's
+ * tonal palette, which `dynamicLightColorScheme` / `dynamicDarkColorScheme` derive from the system
+ * accent colours on Android 12 and newer — because the user asked for the Material 3 theming
+ * system including its dynamic colour, and because "my wallpaper, not the app's pink" is a real
+ * preference. It stays **off** by default: the brand palette is a deliberate design decision
+ * (see the neutral-scale note above), so a wallpaper-derived scheme is something the user asks
+ * for rather than something the app does to them.
+ *
+ * The SDK comparison is written inline rather than behind [supportsDynamicColor]. That is not
+ * redundancy: lint only recognises the literal `Build.VERSION.SDK_INT >= Build.VERSION_CODES.S`
+ * comparison as a guard for the `@RequiresApi(31)` dynamic-scheme functions, and a helper hides
+ * it (NewApi error → `:app:lintDebug` fails). [supportsDynamicColor] is what the settings switch
+ * reads; both compare the same constant.
  */
 @Composable
-fun liveHubColorScheme(mode: ThemeMode): ColorScheme {
+fun liveHubColorScheme(mode: ThemeMode, dynamicColor: Boolean = false): ColorScheme {
   val dark = when (mode) {
     ThemeMode.System -> isSystemInDarkTheme()
     ThemeMode.Light -> false
     ThemeMode.Dark -> true
   }
+  if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    val context = LocalContext.current
+    return if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+  }
   return if (dark) DarkScheme else LightScheme
 }
 
-/** Root theme wrapper. */
+/**
+ * Whether this device can honour [dynamicColor].
+ *
+ * Android 12 (API 31) is where the system accent resources the dynamic schemes read first exist,
+ * and the app's `minSdk` is 26, so the switch has to be disabled rather than missing on older
+ * phones: a control that disappears reads as "this app does not have the feature", while a
+ * disabled one with its reason underneath says "this phone cannot".
+ *
+ * Public because the settings screen lives in `:app` and `internal` here would stop at the module
+ * boundary; the `sdkInt` parameter exists so a unit test can exercise the boundary without an
+ * emulator.
+ */
+fun supportsDynamicColor(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
+  sdkInt >= Build.VERSION_CODES.S
+
+/**
+ * Root theme wrapper.
+ *
+ * `shapes` is passed explicitly: without it `MaterialTheme` falls back to Material's own scale and
+ * the app's corner radii stay literals at the call sites (see [LiveHubShapes]).
+ */
 @Composable
 fun LiveHubTheme(
   mode: ThemeMode = ThemeMode.System,
+  dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   MaterialTheme(
-    colorScheme = liveHubColorScheme(mode),
+    colorScheme = liveHubColorScheme(mode, dynamicColor),
     typography = LiveHubTypography,
+    shapes = LiveHubShapes,
     content = content,
   )
 }

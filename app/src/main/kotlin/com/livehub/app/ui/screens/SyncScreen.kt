@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
@@ -26,6 +28,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -50,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
 import com.livehub.app.ui.components.SectionHeader
+import com.livehub.app.ui.components.listRowColors
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.sync.SyncLogEntry
@@ -409,78 +413,91 @@ private fun ScopeCard() {
  * The subtitle states the trade rather than the mechanic: "只在前台运行" is the reassurance that
  * matters here, because the alternative a user would fear is a socket that stays open with the app
  * in their pocket.
+ *
+ * The row itself is the official `ListItem` (round 103). "One title, one explanation, one control at
+ * the end" is exactly the shape the component exists for, and it brings the two-line height, the
+ * 16dp insets and the merged semantics for a screen reader with it. Deliberately no padding of our
+ * own: `ListItem` already carries its own, and wrapping it would double the inset.
  */
 @Composable
 private fun AutoSyncCard(state: UiState, onAction: (UiAction) -> Unit) {
   Card(modifier = Modifier.fillMaxWidth()) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(16.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Column(modifier = Modifier.weight(1f)) {
-        Text("自动同步", style = MaterialTheme.typography.titleMedium)
+    ListItem(
+      headlineContent = { Text("自动同步") },
+      // `style = labelSmall` on every supporting line on this page — here and in the three rows
+      // below. The project's type scale is a pinned decision (`TypographyFloorTest` names the sync
+      // page's notes as what labelSmall carries) and these explanations were labelSmall before the
+      // rows became list items, so keeping the style makes this a structure change rather than a
+      // type-scale change: `ListItem` would otherwise draw them a step larger, at bodyMedium.
+      supportingContent = {
         Text(
           text = "应用打开时与已配对设备同步一次；服务端只在前台运行。",
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-      }
-      Switch(
-        checked = state.autoSyncEnabled,
-        onCheckedChange = { onAction(UiAction.SetAutoSync(it)) },
-        modifier = Modifier.testTag(AUTO_SYNC_SWITCH_TAG),
-      )
-    }
+      },
+      // The switch stays the control — the row is not clickable and does not pretend to be. Its
+      // tag has to stay on the switch itself: `SyncAutoCardTest` finds the control by that tag and
+      // asserts the checked state of what it finds.
+      trailingContent = {
+        Switch(
+          checked = state.autoSyncEnabled,
+          onCheckedChange = { onAction(UiAction.SetAutoSync(it)) },
+          modifier = Modifier.testTag(AUTO_SYNC_SWITCH_TAG),
+        )
+      },
+      colors = listRowColors(),
+    )
   }
 }
 
 @Composable
 private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
   Card(modifier = Modifier.fillMaxWidth()) {
-    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Text("我的设备", style = MaterialTheme.typography.titleMedium)
+    // The title keeps the card's own 16dp inset; the rows below are `ListItem`s, which bring that
+    // inset with them. Padding the column instead would put the title at 16dp and the device names
+    // at 32dp, and the eye reads that as a nested list rather than as one list under a heading.
+    Column(modifier = Modifier.fillMaxWidth()) {
+      Text(
+        text = "我的设备",
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 4.dp),
+      )
 
       // This device is listed first, the way WeChat's page shows 本机 above the others.
-      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = state.deviceName.ifBlank { "LiveHub 设备" },
-            style = MaterialTheme.typography.bodyLarge,
-          )
-          Text(
-            text = "本机",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      }
+      ListItem(
+        headlineContent = { Text(state.deviceName.ifBlank { "LiveHub 设备" }) },
+        supportingContent = { Text("本机", style = MaterialTheme.typography.labelSmall) },
+        colors = listRowColors(),
+      )
 
       if (state.peers.isEmpty()) {
         Text(
           text = "还没有关联设备。点「关联设备」输入对方屏幕上的六位匹配码即可。",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 16.dp),
         )
       } else {
         state.peers.forEach { peer ->
+          // The divider is kept rather than replaced by a list-item colour: these rows share a
+          // card with 本机, and a line is what separates rows inside one surface.
           HorizontalDivider()
-          Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = peer.deviceName.ifBlank { "未知设备" },
-                style = MaterialTheme.typography.bodyLarge,
-              )
+          ListItem(
+            headlineContent = { Text(peer.deviceName.ifBlank { "未知设备" }) },
+            supportingContent = {
               Text(
                 text = "关联于 ${timeFormatOrDash(peer.pairedAt)}" +
                   if (peer.lastSeenAt > 0) " · 最近 ${timeFormatOrDash(peer.lastSeenAt)}" else "",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
-            }
-            IconButton(onClick = { onAction(UiAction.UnpairPeer(peer.deviceId)) }) {
-              Icon(Icons.Filled.Delete, contentDescription = "解除关联")
-            }
-          }
+            },
+            trailingContent = {
+              IconButton(onClick = { onAction(UiAction.UnpairPeer(peer.deviceId)) }) {
+                Icon(Icons.Filled.Delete, contentDescription = "解除关联")
+              }
+            },
+            colors = listRowColors(),
+          )
         }
       }
     }
@@ -505,27 +522,40 @@ private fun SyncLogRow(entry: SyncLogEntry, timeFormat: SimpleDateFormat) {
     append(" 条")
     entry.note?.takeIf { it.isNotBlank() && !it.contains("条") }?.let { append(" · ").append(it) }
   }
+  val push = entry.direction == SyncLogEntry.Direction.PUSH
 
-  Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-    Text(
-      text = if (entry.direction == SyncLogEntry.Direction.PUSH) "↑" else "↓",
-      style = MaterialTheme.typography.titleMedium,
-      color = if (entry.success) {
-        MaterialTheme.colorScheme.primary
-      } else {
-        MaterialTheme.colorScheme.error
-      },
-      modifier = Modifier.padding(end = 8.dp),
-    )
-    Column(modifier = Modifier.weight(1f)) {
-      Text("${entry.scope} · ${entry.peerName}", style = MaterialTheme.typography.bodyMedium)
+  // The direction used to be a `↑` / `↓` character whose only state cue was its tint. The direction
+  // itself was already in the row's text (`detail` starts with 发送/接收), so what the glyph hid was
+  // **failure**: a failed exchange was a red tint and nothing a screen reader could hear, and the
+  // note beside it may be absent.
+  //
+  // The icon now carries both — which way the records went, and whether it worked.
+  ListItem(
+    leadingContent = {
+      Icon(
+        imageVector = if (push) Icons.Filled.ArrowUpward else Icons.Filled.ArrowDownward,
+        contentDescription = when {
+          !entry.success -> if (push) "发送，失败" else "接收，失败"
+          push -> "发送"
+          else -> "接收"
+        },
+        modifier = Modifier.size(20.dp),
+        tint = if (entry.success) {
+          MaterialTheme.colorScheme.primary
+        } else {
+          MaterialTheme.colorScheme.error
+        },
+      )
+    },
+    headlineContent = { Text("${entry.scope} · ${entry.peerName}") },
+    supportingContent = {
       Text(
         text = "${timeFormat.format(Date(entry.at))}  $detail",
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-    }
-  }
+    },
+    colors = listRowColors(),
+  )
 }
 
 /**
@@ -543,8 +573,13 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
   }
 
   Card(modifier = Modifier.fillMaxWidth()) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+      // Same split as 我的设备: the heading and its two controls keep the card's 16dp inset, the
+      // rows below are `ListItem`s and bring their own.
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 16.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
         Text(
           text = "附近设备",
           style = MaterialTheme.typography.titleMedium,
@@ -567,25 +602,26 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
           },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 16.dp),
         )
       } else {
         candidates.forEach { peer ->
-          Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-              Text(peer.deviceName.ifBlank { "未命名设备" }, style = MaterialTheme.typography.bodyMedium)
+          ListItem(
+            headlineContent = { Text(peer.deviceName.ifBlank { "未命名设备" }) },
+            supportingContent = {
               Text(
                 text = "${peer.host}:${peer.port}",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
-            }
-          }
+            },
+            colors = listRowColors(),
+          )
         }
-        Spacer(modifier = Modifier.height(2.dp))
         Text(
           text = "在对方设备上打开本页读出六位匹配码，点「关联设备」输入即可。",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 16.dp),
         )
       }
     }

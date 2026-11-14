@@ -2,7 +2,6 @@ package com.livehub.app.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,19 +25,21 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -54,6 +55,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -506,50 +510,70 @@ private fun SpecialPickerSheet(
         ) {
           items(followed, key = { it.key }) { streamer ->
             val selected = streamer.key in chosen
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onToggle(streamer) }
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              // The live dot is the reason to look at this list before the grid: pinning somebody
-              // who is offline right now is still a valid choice, but it should be a visible one.
-              Box(
-                modifier = Modifier
-                  .size(6.dp)
-                  .clip(CircleShape)
-                  .background(
-                    if (streamer.isLive) LiveBadgeColor else MaterialTheme.colorScheme.outlineVariant,
-                  ),
-              )
-              Text(
-                text = streamer.streamerName.ifBlank { "未知主播" },
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.onSurface
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).padding(start = 10.dp),
-              )
-              Text(
-                text = streamer.platform.displayName,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-              if (selected) {
-                Icon(
-                  imageVector = Icons.Filled.Check,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(18.dp).padding(start = 6.dp),
+            // `ListItem` with `toggleable`, not a hand-rolled Row. That pairing is Material's own
+            // selectable-list shape, and it is what puts 已选中 / 未选中 on the row for a screen
+            // reader: before this the 18dp tick at the end was the only thing that carried the
+            // state, and it was a decoration with no semantics at all.
+            //
+            // The checkbox is display-only (`onCheckedChange = null`) because the *row* owns the
+            // toggle. Two live toggleables would be two checkboxes announcing one state, and the
+            // smaller of them is the 24dp box rather than the line the finger is already on.
+            ListItem(
+              headlineContent = {
+                Text(
+                  text = streamer.streamerName.ifBlank { "未知主播" },
+                  fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                  color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurface
+                  },
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
                 )
-              }
-            }
+              },
+              leadingContent = {
+                // The live dot is the reason to look at this list before the grid: pinning somebody
+                // who is offline right now is still a valid choice, but it should be a visible one.
+                Box(
+                  modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(
+                      if (streamer.isLive) {
+                        LiveBadgeColor
+                      } else {
+                        MaterialTheme.colorScheme.outlineVariant
+                      },
+                    )
+                    // 6dp of colour and no text of its own: without the description the one fact
+                    // this list adds over the grid is the one a screen reader never hears.
+                    .semantics {
+                      contentDescription = if (streamer.isLive) "直播中" else "未开播"
+                    },
+                )
+              },
+              trailingContent = {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Text(
+                    text = streamer.platform.displayName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                  Checkbox(checked = selected, onCheckedChange = null)
+                }
+              },
+              modifier = Modifier.toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                // The store owns this state, so the requested value is dropped: the row redraws
+                // from `specialKeys` like every other view of it.
+                onValueChange = { onToggle(streamer) },
+              ),
+            )
           }
         }
       }

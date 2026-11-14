@@ -29,15 +29,27 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 /**
  * User facing settings persisted with DataStore.
  *
- * Two fields were removed rather than wired up: `dynamicColor` (Material You — the theme never
- * received it, so it was a switch with nothing behind it) and `autoRefreshFollows` (nothing read
- * it; the refresh worker is scheduled unconditionally at startup). Decoding is lenient
- * (`ignoreUnknownKeys`), so an installation that still has them in its stored JSON simply drops
- * them on the next write.
+ * One field was removed rather than wired up: `autoRefreshFollows` (nothing read it; the refresh
+ * worker is scheduled from `backgroundRefresh` instead). Decoding is lenient
+ * (`ignoreUnknownKeys`), so an installation that still has it in its stored JSON simply drops it on
+ * the next write.
+ *
+ * `dynamicColor` was removed for the same reason in an earlier round — the setting existed but the
+ * theme never received it, so it was a switch with nothing behind it — and is back now that the
+ * theme takes it (`LiveHubTheme(dynamicColor = …)`). It defaults to **off**: the brand palette is
+ * the app's design, and a wallpaper-derived scheme (Material You) is an opt-in, not the default
+ * every existing installation would silently adopt on upgrade.
  */
 @Serializable
 data class UserSettings(
   val themeMode: String = "system",
+  /**
+   * Whether the theme follows the system wallpaper (Material You) instead of the brand palette.
+   *
+   * Android 12 and newer only; older phones store whatever was last chosen and simply keep drawing
+   * the brand palette, because the theme checks the SDK before reading this.
+   */
+  val dynamicColor: Boolean = false,
   val danmakuEnabled: Boolean = true,
   val danmakuOpacity: Float = 1.0f,
   val danmakuFontScale: Float = 1.0f,
@@ -252,6 +264,18 @@ class UserPreferences(private val context: Context) {
   // stops the write handle leaking out of this class.
   fun setThemeMode(mode: String) {
     update { it.copy(themeMode = mode) }
+  }
+
+  /**
+   * Switches the palette between the brand colours and the wallpaper's (Material You).
+   *
+   * A no-op on Android 11 and older is not needed here: the write is cheap and harmless, and the
+   * theme is what refuses to draw a dynamic scheme it cannot build. Keeping the preference honest
+   * ("what the user chose") rather than conditional ("what this phone can do") means downgrading
+   * the ROM does not silently rewrite the choice.
+   */
+  fun setDynamicColor(enabled: Boolean) {
+    update { it.copy(dynamicColor = enabled) }
   }
 
   fun setLastPlatform(platform: Platform) {

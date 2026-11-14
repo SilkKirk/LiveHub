@@ -110,6 +110,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       it.copy(
         platform = platform,
         themeMode = themeMode,
+        dynamicColor = settings.dynamicColor,
         danmakuEnabled = settings.danmakuEnabled,
         danmakuOpacity = settings.danmakuOpacity,
         danmakuFontScale = settings.danmakuFontScale,
@@ -236,6 +237,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         setThemeMode(next)
       }
       is UiAction.SetThemeMode -> setThemeMode(action.mode)
+      is UiAction.SetDynamicColor -> setDynamicColor(action.enabled)
       UiAction.StartBilibiliLogin -> startBilibiliLogin()
       UiAction.CancelBilibiliLogin -> cancelBilibiliLogin()
       UiAction.LogoutBilibili -> logoutBilibili()
@@ -1566,6 +1568,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       },
     )
     _state.update { it.copy(themeMode = mode) }
+  }
+
+  /**
+   * Persists and applies the Material You choice.
+   *
+   * Both halves are needed for the same reason [setThemeMode] documents: the theme is composed from
+   * [UiState], so writing the preference alone would change the next launch instead of this one.
+   */
+  private fun setDynamicColor(enabled: Boolean) {
+    container.preferences.setDynamicColor(enabled)
+    _state.update { it.copy(dynamicColor = enabled) }
   }
 
   /** Danmaku area and font scale are persisted so the choice survives a restart. */

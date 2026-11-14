@@ -589,6 +589,24 @@ class MainViewModelTest {
   }
 
   /**
+   * Material You is a persisted choice, and it reaches the state the theme is composed from.
+   *
+   * Both halves matter: `LiveHubTheme` is composed from [UiState], so a preference write alone
+   * would change the *next* launch instead of this one — the exact defect the old, unwired
+   * `dynamicColor` field had (it existed, defaulted to true and reached no theme at all).
+   */
+  @Test
+  fun `material you is persisted and published to the state`() {
+    assertFalse("a fresh install starts on the brand palette", state.dynamicColor)
+
+    viewModel.onAction(UiAction.SetDynamicColor(true))
+    idle()
+
+    assertTrue("the state is what the theme reads", state.dynamicColor)
+    assertTrue("the preference has to survive a restart", container.preferences.settings.dynamicColor)
+  }
+
+  /**
    * Picking a quality must be remembered per platform.
    *
    * `UserPreferences.preferredQuality` and its setter existed from the start, but nothing

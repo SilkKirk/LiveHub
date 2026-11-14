@@ -19,7 +19,7 @@
 | 播放 | Media3 (ExoPlayer) 播放 FLV/HLS，清晰度与线路切换，断流自动重试一次（换清晰度后重新计次），错误可重试；**横屏即全屏**（转回竖屏自动退出全屏），竖屏直播铺满窗口时同样有返回与关注；退出播放页缩成右下角小窗继续播（点小窗回去，× 或返回键停止）；离开应用时缩成画中画（Android 8+）；音频焦点跟随系统，不和别的音频叠着放 |
 | 弹幕 | 四平台弹幕接入，滚动弹幕渲染，字号/透明度/显示区域可调，屏蔽词过滤，连接失败显示平台给出的原因 |
 | 同步 | 局域网内按六位匹配码配对（不必输 IP）+ mDNS/网段扫描发现，HLC + 墓碑式增量同步；离开同步页即停止服务、匹配码随之失效 |
-| 设置 | 深色主题、弹幕开关、屏蔽词管理、哔哩哔哩扫码登录、抖音扫码登录、版本号 |
+| 设置 | 深浅主题（跟随系统 / 深色 / 浅色）+ 可选 Material You 动态取色、弹幕开关、屏蔽词管理、图片缓存占用与清理、哔哩哔哩扫码登录、抖音扫码登录、版本号 |
 
 ---
 
@@ -28,7 +28,12 @@
 - **语言**：Kotlin 2.3.21，Java 17 目标字节码
 - **构建**：AGP 9.5.0（内置 Kotlin 支持）、Gradle 9.8.2、Version Catalog
 - **UI**：Jetpack Compose（Material 3）。导航是 `UiState.screen` 这一个枚举，没有 NavHost——
-  `navigation-compose` 曾经在依赖里，但没有一行代码用它
+  `navigation-compose` 曾经在依赖里，但没有一行代码用它。主题集中在 `:core:designsystem`
+  （`ColorScheme` / `Typography` / `Shapes` 三个系统都由 `MaterialTheme` 下发），动态取色
+  （Material You）是可选项，默认关闭、使用品牌配色。控件一律用 `androidx.compose.material3`
+  的官方实现（`NavigationBar` / `ListItem` / `FilterChip` / `Switch` / `Button` /
+  `IconButton` / `ModalBottomSheet` / `Snackbar` / `Card` …）；只有视频画面、弹幕动画层、
+  二维码与手势层是自己画的
 - **播放**：AndroidX Media3 1.11.1（ExoPlayer + HLS）
 - **网络**：OkHttp 5（HTTP + WebSocket）
 - **存储**：DataStore Preferences
@@ -47,7 +52,7 @@
 :core:network           OkHttp 封装、CookieJar、哈希与编码工具（纯 JVM）
 :core:data              平台网关 + 重试/缓存策略（纯 JVM）
 :core:sync              同步引擎、合并算法、HLC、LAN 服务端与传输层（纯 JVM）
-:core:designsystem      Compose 主题与排版
+:core:designsystem      Compose 主题：配色、排版、圆角（+ 可选 Material You）
 :platform-api           平台适配器契约（LivePlatformAdapter）
 :platform:douyu         斗鱼适配器
 :platform:huya          虎牙适配器

@@ -246,6 +246,15 @@ data class UiState(
    */
   val themeMode: com.livehub.core.designsystem.ThemeMode = com.livehub.core.designsystem.ThemeMode.System,
   /**
+   * Whether the theme should follow the wallpaper's colours (Material You) instead of the brand
+   * palette.
+   *
+   * Mirrors `UserSettings.dynamicColor`. It is in the state because [LiveHubRoot] passes it into
+   * `LiveHubTheme` and the settings page renders it — a screen cannot read `UserPreferences`, which
+   * lives below it (see [UiAction.SetDynamicColor]).
+   */
+  val dynamicColor: Boolean = false,
+  /**
    * Whether the periodic background refresh of the follow list is switched on.
    *
    * Mirrors `UserSettings.backgroundRefresh`. Default on because that is what the app did before
@@ -473,6 +482,14 @@ sealed interface UiAction {
 
   /** Sets the theme cycle position explicitly (system → dark → light). */
   data class SetThemeMode(val mode: com.livehub.core.designsystem.ThemeMode) : UiAction
+
+  /**
+   * Switches the palette between the brand colours and the wallpaper's (Material You).
+   *
+   * The write and the state update travel together: the theme is composed from [UiState], so a
+   * preference written without the state update would not be drawn until the next restart.
+   */
+  data class SetDynamicColor(val enabled: Boolean) : UiAction
 
   data object StartBilibiliLogin : UiAction
 

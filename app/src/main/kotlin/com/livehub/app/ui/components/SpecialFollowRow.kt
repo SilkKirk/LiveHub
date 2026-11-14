@@ -35,7 +35,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -81,6 +86,8 @@ fun SpecialFollowRow(
       SpecialAvatar(
         streamer = streamer,
         dragging = draggingKey == streamer.key,
+        openRoom = onClick,
+        reorder = reorderActionsFor(streamer, streamers, onReorder),
         modifier = Modifier.pointerInput(streamer.key, streamers.size) {
           // Tap and long-press-drag in **one** handler rather than `clickable` plus a drag
           // detector. Two independent detectors on the same node both see the down event, and a
@@ -137,6 +144,17 @@ fun SpecialFollowRow(
 private fun SpecialAvatar(
   streamer: Streamer,
   dragging: Boolean,
+  /**
+   * The tap and the reorder steps the caller's pointer handler implements, re-published here as
+   * semantics. Neither is how the slot draws itself; they exist only for the semantics block below.
+   *
+   * That block exists because the handler is a press, a hold and then horizontal movement, which a
+   * screen reader or a switch cannot produce: without it the slot could be announced and still not
+   * opened or moved. `clickable` is still not the answer — it would fire on the release of a
+   * reorder, which is the bug the single handler exists to prevent.
+   */
+  openRoom: (Streamer) -> Unit,
+  reorder: List<CustomAccessibilityAction>,
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -147,7 +165,18 @@ private fun SpecialAvatar(
       // No `clip` here: it would cut the name line into a circle along with the avatar. The
       // semantics label carries the same information for TalkBack, which is what the clip was
       // standing in for.
-      .semantics { contentDescription = "特别关注 ${streamer.streamerName}" },
+      .semantics {
+        contentDescription = "特别关注 ${streamer.streamerName}"
+        role = Role.Button
+        // Labelled, because an unlabelled button here would be announced as "double-tap to
+        // activate" with no noun attached to it.
+        onClick(label = "打开直播间") {
+          openRoom(streamer)
+          true
+        }
+        // Only the neighbours that exist; see reorderActionsFor.
+        if (reorder.isNotEmpty()) customActions = reorder
+      },
   ) {
     Box(contentAlignment = Alignment.Center) {
       // The ring is the live indicator: the reference draws a green circle around whoever is
@@ -250,6 +279,37 @@ private fun AddSlot(onClick: () -> Unit) {
       modifier = Modifier.padding(top = 6.dp),
     )
   }
+}
+
+/**
+ * The reorder outcomes that exist for one slot, as accessibility actions.
+ *
+ * The drag handler turns a pixel delta into a target index. A menu cannot express a delta, so a
+ * screen reader gets the two steps it can say — and nothing here is new behaviour: both entries call
+ * the `onReorder` the gesture calls, with the index next door. A slot at either end offers only the
+ * direction it can still move: an 上移 that does nothing reads as a broken control rather than as
+ * the start of the row.
+ */
+private fun reorderActionsFor(
+  streamer: Streamer,
+  streamers: List<Streamer>,
+  onReorder: (Streamer, Int) -> Unit,
+): List<CustomAccessibilityAction> {
+  val from = streamers.indexOfFirst { it.key == streamer.key }
+  val actions = mutableListOf<CustomAccessibilityAction>()
+  if (from > 0) {
+    actions += CustomAccessibilityAction(label = "上移") {
+      onReorder(streamer, from - 1)
+      true
+    }
+  }
+  if (from in 0 until streamers.lastIndex) {
+    actions += CustomAccessibilityAction(label = "下移") {
+      onReorder(streamer, from + 1)
+      true
+    }
+  }
+  return actions
 }
 
 /** Outer diameter of the ring, which is also the touch target. */

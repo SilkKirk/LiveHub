@@ -5,9 +5,7 @@ import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,7 +21,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -49,13 +46,18 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -73,8 +75,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -648,13 +649,13 @@ private fun PortraitTopBar(
 }
 
 /**
- * An icon floating over the picture: a 48dp target around an 18dp glyph on a dark disc.
+ * An icon floating over the picture: an official `IconButton` wrapping an 18dp glyph on a dark disc.
  *
  * The disc is the difference between readable and invisible over a bright cover — the side
  * column's translucent-white circles work because they sit on a scrimmed edge, and a bare white
- * arrow on a white thumbnail is nothing at all. The description sits on the clickable node, not
- * on the glyph, so the node a test (or TalkBack) reaches is the one that is 48dp, not the 34dp
- * disc inside it.
+ * arrow on a white thumbnail is nothing at all. The description stays on the glyph but merges into
+ * the button, so TalkBack and a test both reach the 48dp target `IconButton` guarantees rather than
+ * the 34dp disc inside it.
  */
 @Composable
 private fun PictureButton(
@@ -662,17 +663,10 @@ private fun PictureButton(
   description: String,
   onClick: () -> Unit,
 ) {
-  Box(
-    modifier = Modifier
-      .size(48.dp)
-      .clip(CircleShape)
-      .clickable(onClick = onClick)
-      .semantics { contentDescription = description },
-    contentAlignment = Alignment.Center,
-  ) {
+  IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
     Icon(
       imageVector = icon,
-      contentDescription = null,
+      contentDescription = description,
       tint = Color.White,
       modifier = Modifier
         .size(34.dp)
@@ -702,19 +696,17 @@ private fun FullscreenBar(
       .padding(horizontal = 6.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    // Both glyphs keep their size and gain a 48dp target: these two are drawn over the picture
-    // with no disc behind them, so a miss does not look like a miss — it looks like the button was
-    // never there. `size(34.dp)` on the *clickable* node shrank the target along with the icon.
-    Icon(
-      imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-      contentDescription = exitDescription,
-      tint = Color.White,
-      modifier = Modifier
-        .size(48.dp)
-        .clip(CircleShape)
-        .clickable(onClick = onExit)
-        .padding(12.dp),
-    )
+    // Both are official `IconButton`s, which is where the 48dp target comes from: drawn straight
+    // on the picture with no disc behind them, a miss does not look like a miss — it looks like the
+    // button was never there.
+    IconButton(onClick = onExit, modifier = Modifier.size(48.dp)) {
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+        contentDescription = exitDescription,
+        tint = Color.White,
+        modifier = Modifier.size(24.dp),
+      )
+    }
     Text(
       text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
       color = Color.White,
@@ -724,16 +716,21 @@ private fun FullscreenBar(
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.weight(1f),
     )
-    Icon(
-      imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
-      contentDescription = "关注",
-      tint = Color.White,
-      modifier = Modifier
-        .size(48.dp)
-        .clip(CircleShape)
-        .clickable { state.room?.let { onAction(UiAction.ToggleFollow(it)) } }
-        .padding(13.dp),
-    )
+    // A toggle, not a button that happens to redraw a filled star. The description tells the
+    // action from the state — it used to say 关注 in both, so TalkBack offered to follow a room
+    // the user had already followed. `PortraitTopBar` has always got this right.
+    IconToggleButton(
+      checked = followed,
+      onCheckedChange = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
+      modifier = Modifier.size(48.dp),
+    ) {
+      Icon(
+        imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
+        contentDescription = if (followed) "取消关注" else "关注",
+        tint = Color.White,
+        modifier = Modifier.size(24.dp),
+      )
+    }
   }
 }
 
@@ -891,16 +888,12 @@ private fun ControlFab(
   description: String,
   onClick: () -> Unit,
 ) {
-  // 48dp touch target around a 38dp disc.
-  //
-  // The `Surface` used to be the clickable node at 38dp, which is below the 48dp minimum. These
+  // An official 48dp `IconButton` holding a 38dp disc: the disc is what keeps the glyph readable
+  // over a bright cover, and the button is what makes the target big enough for a thumb. These
   // float over the video, so a miss does not just fail to open the sheet — it toggles the chrome
   // (the tap-to-show-controls layer underneath) and the buttons disappear, which reads as a
   // broken control rather than as a missed tap.
-  Box(
-    modifier = Modifier.size(48.dp).clip(CircleShape).clickable(onClick = onClick),
-    contentAlignment = Alignment.Center,
-  ) {
+  IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
     Surface(
       modifier = Modifier.size(38.dp),
       shape = CircleShape,
@@ -1134,16 +1127,20 @@ internal fun PlayerSettings(
     }
 
     SettingsLabel("弹幕")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      LiveHubFilterChip(
-        selected = state.danmakuEnabled,
-        onClick = { onAction(UiAction.ToggleDanmaku(true)) },
-        label = { Text("开") },
-      )
-      LiveHubFilterChip(
-        selected = !state.danmakuEnabled,
-        onClick = { onAction(UiAction.ToggleDanmaku(false)) },
-        label = { Text("关") },
+    // One switch, the same official control the 设置 page uses for this very setting. The two
+    // chips labelled 开 and 关 carried the state in their selection and the action in their click,
+    // so neither read as "this is how it is now" — and the same stored value had two different
+    // control shapes depending on which screen the user was on.
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text("显示弹幕", style = MaterialTheme.typography.bodyMedium)
+      Spacer(Modifier.weight(1f))
+      Switch(
+        checked = state.danmakuEnabled,
+        onCheckedChange = { onAction(UiAction.ToggleDanmaku(it)) },
+        modifier = Modifier.testTag(DANMAKU_SWITCH_TAG),
       )
     }
 
@@ -1403,41 +1400,34 @@ private fun CenteredNotice(
 
 // ----------------------------------------------------------------- helpers ---
 
+/**
+ * A pill-shaped action: the official `Button`, recoloured for the two emphases this screen uses.
+ *
+ * What is left here is only the look — a 20dp corner, a filled/tonal pair of colours and tighter
+ * padding. Everything the hand-rolled version used to spell out (a 48dp ring around a `Surface`
+ * with a `Modifier.clickable` on it, the `Role.Button` semantics a test and TalkBack depend on, the
+ * press ripple, `labelLarge`) is what `Button` is, so none of it is written twice.
+ */
 @Composable
 private fun PillButton(label: String, filled: Boolean, onClick: () -> Unit) {
-  // 48dp of touch target around the pill, which is about 34dp tall on its own.
-  //
-  // The `Surface` used to be the clickable node and its height came from the label plus 7dp of
-  // vertical padding — well under the 48dp minimum. 关注, 重试 and 返回 are the most consequential
-  // controls on the screen (a missed 重试 leaves a dead stream on screen). The pill itself is drawn
-  // exactly as before; what grows is the ring around it, which is also where the press ripple now
-  // reaches.
-  Box(
-    modifier = Modifier
-      .heightIn(min = 48.dp)
-      .clip(RoundedCornerShape(24.dp))
-      .clickable(onClick = onClick),
-    contentAlignment = Alignment.Center,
-  ) {
-    Surface(
-      color = if (filled) {
+  Button(
+    onClick = onClick,
+    shape = RoundedCornerShape(20.dp),
+    colors = ButtonDefaults.buttonColors(
+      containerColor = if (filled) {
         MaterialTheme.colorScheme.primary
       } else {
         MaterialTheme.colorScheme.surfaceVariant
       },
-      shape = RoundedCornerShape(20.dp),
-    ) {
-      Text(
-        text = label,
-        style = MaterialTheme.typography.labelLarge,
-        color = if (filled) {
-          MaterialTheme.colorScheme.onPrimary
-        } else {
-          MaterialTheme.colorScheme.onSurfaceVariant
-        },
-        modifier = Modifier.padding(horizontal = 18.dp, vertical = 7.dp),
-      )
-    }
+      contentColor = if (filled) {
+        MaterialTheme.colorScheme.onPrimary
+      } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+      },
+    ),
+    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 7.dp),
+  ) {
+    Text(text = label, style = MaterialTheme.typography.labelLarge)
   }
 }
 
@@ -1471,3 +1461,13 @@ private val LANDSCAPE_DANMAKU_FONT_SCALES = listOf(
 
 private const val PORTRAIT_HIDE_DELAY_MILLIS = 4_000L
 private const val FULLSCREEN_HIDE_DELAY_MILLIS = 3_000L
+
+/**
+ * Tag for the 显示弹幕 switch, for `PlayerControlsTest`.
+ *
+ * The switch carries no text of its own — 「显示弹幕」 is the node beside it — so a tag is the only
+ * way to address the control rather than its label, and "is it on, and does a tap ask for the
+ * opposite?" is an assertion about the control. Same shape and same reason as the settings
+ * screen's switch tags (`BACKGROUND_REFRESH_SWITCH_TAG`).
+ */
+internal const val DANMAKU_SWITCH_TAG = "danmakuSwitch"

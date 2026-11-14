@@ -12,13 +12,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,14 +40,29 @@ import com.livehub.app.BuildConfig
 import com.livehub.app.sync.FollowRefreshWorker
 import com.livehub.app.ui.components.SectionHeader
 import com.livehub.app.ui.components.LiveHubFilterChip
+import com.livehub.app.ui.components.listRowColors
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.supportsDynamicColor
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Settings screen: theme, danmaku, blocked keywords, the image cache and accounts. */
+/**
+ * Settings screen: theme, danmaku, blocked keywords, the image cache and accounts.
+ *
+ * The cards are M3 `Card`s full of `ListItem`s rather than hand-built `Row`s of two `Text`s and a
+ * trailing control. The difference is not cosmetic: a `ListItem` owns its 16dp insets, its
+ * one/two/three-line minimum height and the relationship between headline and supporting text, so
+ * the page has one definition of "a settings row" instead of six copies of the same arithmetic —
+ * and the row is a single semantics node for TalkBack.
+ *
+ * The supporting lines keep the app's `labelSmall` (11sp) instead of Material's `bodyMedium`: the
+ * type scale is a deliberate, pinned decision of this project (`TypographyFloorTest`), and the
+ * explanatory lines under each switch are exactly the text that scale exists for. The component
+ * still supplies the layout, the insets and the colours.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
@@ -51,6 +70,8 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
   // The sheet owns a WebView, so its visibility is page state, not ViewModel state: a
   // configuration change should close it rather than silently keep a logged-in browser alive.
   var showDouyinLogin by remember { mutableStateOf(false) }
+  // Constant for the process: the SDK does not change while the app is running.
+  val dynamicColorSupported = supportsDynamicColor()
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
@@ -60,7 +81,10 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
     item {
       SectionHeader("外观")
       Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
           Text("主题", style = MaterialTheme.typography.bodyLarge)
           Text(
             text = "选择「跟随系统」时跟随系统的深浅色设置；选择深色或浅色则固定不变。",
@@ -79,38 +103,67 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
             }
           }
         }
+        HorizontalDivider()
+        ListItem(
+          colors = listRowColors(),
+          headlineContent = { Text("动态取色") },
+          supportingContent = {
+            Text(
+              text = if (dynamicColorSupported) {
+                "跟随系统壁纸取色（Material You）。关掉则使用品牌配色。"
+              } else {
+                "需要 Android 12 及以上系统；本机使用品牌配色。"
+              },
+              style = MaterialTheme.typography.labelSmall,
+            )
+          },
+          // Disabled rather than hidden on old phones: a control that is not there reads as "this
+          // app has no such feature", while a disabled one with its reason underneath says "this
+          // phone cannot". The value is still read from the state so a stored `true` shows up the
+          // moment the same account lands on a newer phone.
+          trailingContent = {
+            Switch(
+              checked = state.dynamicColor,
+              onCheckedChange = { onAction(UiAction.SetDynamicColor(it)) },
+              enabled = dynamicColorSupported,
+              modifier = Modifier.testTag(DYNAMIC_COLOR_SWITCH_TAG),
+            )
+          },
+        )
       }
     }
 
     item {
       SectionHeader("弹幕")
       Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(16.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text("显示弹幕", style = MaterialTheme.typography.bodyLarge)
-            Text(
-              text = "关闭后仅播放画面",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+        ListItem(
+          colors = listRowColors(),
+          headlineContent = { Text("显示弹幕") },
+          supportingContent = {
+            Text("关闭后仅播放画面", style = MaterialTheme.typography.labelSmall)
+          },
+          trailingContent = {
+            Switch(
+              checked = state.danmakuEnabled,
+              onCheckedChange = { onAction(UiAction.ToggleDanmaku(it)) },
             )
-          }
-          Switch(
-            checked = state.danmakuEnabled,
-            onCheckedChange = { onAction(UiAction.ToggleDanmaku(it)) },
-          )
-        }
+          },
+        )
       }
     }
 
     item {
       SectionHeader("弹幕屏蔽词")
       Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
+        Column(modifier = Modifier.fillMaxWidth()) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            // Filled rather than outlined: the outline was the loudest element on the page, and a
+            // filled field is Material's other official variant — the quiet one, which is what a
+            // single optional input in a list of settings should be.
+            TextField(
               value = keywordDraft,
               onValueChange = { keywordDraft = it },
               label = { Text("添加屏蔽词") },
@@ -131,20 +184,21 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
               text = "暂无屏蔽词",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
             )
           } else {
             state.blockedKeywords.forEach { keyword ->
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Text(keyword, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                TextButton(
-                  onClick = {
-                    onAction(UiAction.SetBlockedKeywords(state.blockedKeywords - keyword))
-                  },
-                ) { Text("移除") }
-              }
+              ListItem(
+                colors = listRowColors(),
+                headlineContent = { Text(keyword) },
+                trailingContent = {
+                  TextButton(
+                    onClick = {
+                      onAction(UiAction.SetBlockedKeywords(state.blockedKeywords - keyword))
+                    },
+                  ) { Text("移除") }
+                },
+              )
             }
           }
         }
@@ -232,40 +286,34 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
 @Composable
 private fun BackgroundRefreshCard(state: UiState, onAction: (UiAction) -> Unit) {
   Card(modifier = Modifier.fillMaxWidth()) {
-    Column(
-      modifier = Modifier.fillMaxWidth().padding(16.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text("后台刷新开播状态", style = MaterialTheme.typography.bodyLarge)
-          Text(
-            text = "每 ${FollowRefreshWorker.INTERVAL_MINUTES} 分钟检查一次关注列表里谁开播了",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
+    ListItem(
+      colors = listRowColors(),
+      headlineContent = { Text("后台刷新开播状态") },
+      supportingContent = {
+        Text(
+          text = "每 ${FollowRefreshWorker.INTERVAL_MINUTES} 分钟检查一次关注列表里谁开播了",
+          style = MaterialTheme.typography.labelSmall,
+        )
+      },
+      trailingContent = {
         Switch(
           checked = state.backgroundRefreshEnabled,
           onCheckedChange = { onAction(UiAction.SetBackgroundRefresh(it)) },
           modifier = Modifier.testTag(BACKGROUND_REFRESH_SWITCH_TAG),
         )
-      }
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text("仅 Wi-Fi 下刷新", style = MaterialTheme.typography.bodyLarge)
-          Text(
-            text = "移动数据下不检查，避免在不知情时用掉流量。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
+      },
+    )
+    HorizontalDivider()
+    ListItem(
+      colors = listRowColors(),
+      headlineContent = { Text("仅 Wi-Fi 下刷新") },
+      supportingContent = {
+        Text(
+          text = "移动数据下不检查，避免在不知情时用掉流量。",
+          style = MaterialTheme.typography.labelSmall,
+        )
+      },
+      trailingContent = {
         Switch(
           checked = state.refreshOnWifiOnly,
           onCheckedChange = { onAction(UiAction.SetRefreshOnWifiOnly(it)) },
@@ -275,11 +323,10 @@ private fun BackgroundRefreshCard(state: UiState, onAction: (UiAction) -> Unit) 
           enabled = state.backgroundRefreshEnabled,
           modifier = Modifier.testTag(WIFI_ONLY_SWITCH_TAG),
         )
-      }
-    }
+      },
+    )
   }
 }
-
 
 /**
  * The image cache card: what Coil is holding on disk and in memory, and the one control that
@@ -290,12 +337,17 @@ private fun BackgroundRefreshCard(state: UiState, onAction: (UiAction) -> Unit) 
  * thread and the card says "—" until (or unless) the read succeeds: a cache that has never been
  * written is `0 B`, so printing `0 B` after a failed read would hide the failure behind a number
  * that looks like success.
+ *
+ * The button turns into a spinner and disables itself while a clear is running. Before that, a
+ * second tap during the first one started a second clear and sent a second snackbar — the only
+ * control on the page whose input was not idempotent.
  */
 @Composable
 private fun ImageCacheCard(onAction: (UiAction) -> Unit) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   var cacheBytes by remember { mutableStateOf<Long?>(null) }
+  var clearing by remember { mutableStateOf(false) }
 
   LaunchedEffect(context) { cacheBytes = readImageCacheBytes(context) }
 
@@ -303,39 +355,49 @@ private fun ImageCacheCard(onAction: (UiAction) -> Unit) {
   val sizeText = cacheBytes?.let { formatCacheSize(it) } ?: "—"
 
   Card(modifier = Modifier.fillMaxWidth()) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(16.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Column(modifier = Modifier.weight(1f)) {
-        Text("图片缓存", style = MaterialTheme.typography.bodyLarge)
+    ListItem(
+      colors = listRowColors(),
+      headlineContent = { Text("图片缓存") },
+      supportingContent = {
         Text(
           text = "当前占用 ${sizeText}，清除后封面需要重新加载。",
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-      }
-      // `heightIn(min = 48.dp)` is a floor on top of Material's own minimum interactive size, so
-      // the target stays 48dp even if that enforcement is switched off through a CompositionLocal.
-      // It also cannot shrink the way `size(48.dp)` around smaller content can — sizing the
-      // caller-side modifier is exactly how this project broke the 48dp minimum twice.
-      TextButton(
-        onClick = {
-          // The clear walks Coil's disk directory, so it runs off the main thread, and the
-          // snackbar is sent from the same coroutine so "已清除图片缓存" is not a claim about a
-          // clear that has not run yet. The size is read again rather than assumed to be zero:
-          // what clearing actually left behind is the honest thing to show.
-          scope.launch {
-            clearImageCaches(context)
-            cacheBytes = readImageCacheBytes(context)
-            onAction(UiAction.ShowMessage("已清除图片缓存"))
+      },
+      trailingContent = {
+        // `heightIn(min = 48.dp)` is a floor on top of Material's own minimum interactive size, so
+        // the target stays 48dp even if that enforcement is switched off through a CompositionLocal.
+        // It also cannot shrink the way `size(48.dp)` around smaller content can — sizing the
+        // caller-side modifier is exactly how this project broke the 48dp minimum twice.
+        TextButton(
+          onClick = {
+            if (clearing) return@TextButton
+            clearing = true
+            // The clear walks Coil's disk directory, so it runs off the main thread, and the
+            // snackbar is sent from the same coroutine so "已清除图片缓存" is not a claim about a
+            // clear that has not run yet. The size is read again rather than assumed to be zero:
+            // what clearing actually left behind is the honest thing to show.
+            scope.launch {
+              try {
+                clearImageCaches(context)
+                cacheBytes = readImageCacheBytes(context)
+                onAction(UiAction.ShowMessage("已清除图片缓存"))
+              } finally {
+                clearing = false
+              }
+            }
+          },
+          enabled = !clearing,
+          modifier = Modifier.heightIn(min = 48.dp),
+        ) {
+          if (clearing) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+          } else {
+            Text("清除缓存")
           }
-        },
-        modifier = Modifier.heightIn(min = 48.dp),
-      ) {
-        Text("清除缓存")
-      }
-    }
+        }
+      },
+    )
   }
 }
 
@@ -365,7 +427,7 @@ private const val CACHE_MB = 1024L * CACHE_KB
 private const val CACHE_GB = 1024L * CACHE_MB
 
 /**
- * Identifiers for the two background-refresh switches.
+ * Identifiers for the three switches, for the tests that pin them.
  *
  * The label next to each switch is a separate semantics node, so `onNodeWithText` finds the text
  * and never the control — and "is the Wi-Fi switch disabled while the feature is off?" is exactly
@@ -374,6 +436,7 @@ private const val CACHE_GB = 1024L * CACHE_MB
  */
 internal const val BACKGROUND_REFRESH_SWITCH_TAG = "backgroundRefreshSwitch"
 internal const val WIFI_ONLY_SWITCH_TAG = "wifiOnlySwitch"
+internal const val DYNAMIC_COLOR_SWITCH_TAG = "dynamicColorSwitch"
 
 /** Log tag for the two cache calls; a failed read or clear should not disappear silently. */
 private const val CACHE_TAG = "SettingsScreen"
