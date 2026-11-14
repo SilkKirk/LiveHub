@@ -2874,3 +2874,110 @@ chip），同样该折——但不能抄第二份。
 - 深色模式没有单独推敲。
 - 播放页的清晰度/弹幕面板里还有 8 处 chip，现在也走同一个组件了，但没有专门的截图覆盖它们
   在大字号下的样子。
+
+---
+
+## 第一百零三轮迭代：官方组件收口（用户：「尽量使用官方组件，别自己写」）
+
+上一轮把折叠头部抽成组件后，用户给了这一轮的题目：新应用应该 Compose-first、用
+`androidx.compose.material3`，把动态色彩、色调表面、弹簧动效这些 MD3 特性用起来，
+**尽量用官方组件，别自己写**。所以这一轮不是找功能 bug，而是把「我们自己写的、材料里
+其实已经有了」的控件换回官方实现，并把主题系统缺的那两块补上。
+
+### 缺陷是什么
+
+1. **播放页有七个自造控件。** `PillButton`（`Box` + `clickable` 包一个 `Surface`）、
+   `ControlFab`、`PictureButton`、全屏栏的返回与关注、弹幕的「开/关」两个 chip。三类后果：
+   `Modifier.clickable` 不带 `Role.Button`（读屏只说"可双击"，不说"按钮"）；全屏关注星
+   无论是否已关注都描述成「关注」（读屏会劝你关注一个已经关注的房间，而同一页的竖屏
+   顶栏一直是对的）；同一个「显示弹幕」在设置页是 `Switch`、在播放页是两个 chip。
+2. **设置页与同步页的「标题 + 说明 + 控件」行是手搭的 `Row`。** 六处复制同一套
+   16dp padding + `Column` + `labelSmall` 算术，行高、内边距、字阶各自为政。
+3. **关注页两处 a11y 缺陷。** 「选择特别关注」的选中态只有一个 18dp 对勾
+   （`contentDescription = null`），读屏听不出哪些已选；特别关注头像的点击是裸
+   `pointerInput`，读屏与开关访问**没有任何动作可触发**（既不能打开也不能上移下移）。
+4. **主题只下发了 `ColorScheme` 与 `Typography`，没有 `Shapes`。** `MaterialTheme` 的第三个
+   系统是空的，圆角散在 17 处字面量里；**Material You 只是一个不存在的开关**——第 99 轮把
+   `dynamicColor` 字段删了，理由正是"它没接到主题上"。
+5. **同步记录的成功/失败只靠颜色。** `↑`/`↓` 是 `Text`，失败是红 tint，读屏读不出失败。
+6. 顺带：**清除缓存连点会清两次、发两条 snackbar**，中间没有任何"进行中"反馈。
+
+### 怎么修的
+
+- **播放页**：五个 pill 落到一个 `Button`（20dp 圆角 + `buttonColors` + `contentPadding`
+  保留原视觉）；`ControlFab`/`PictureButton`/全屏栏返回 → `IconButton`（包住原来的
+  38dp / 34dp 圆盘与白图标，像素基本不变）；全屏关注星 → `IconToggleButton`（描述随状态变
+  关注 / 取消关注，选中态有了）；弹幕开/关 → 一个 `Switch`，与设置页同一个控件。
+- **设置 / 同步**：卡片里的行改 `ListItem`，容器色显式透明
+  （`ListItem` 自己填 `surface`，而 filled `Card` 是 `surfaceContainerHighest`——品牌配色下
+  这两个 token 恰好同色、动态配色下不同，不覆盖就会在卡片里再画一层矩形）。说明文字仍用
+  `labelSmall`：字阶是第 82 轮钉死的，这一轮**只换结构不换字阶**，截图因此只差行高与内边距。
+  屏蔽词输入 → 填充式 `TextField`（第 99 轮记过描边是全页最响的元素）。
+- **关注页**：选择行 → `ListItem` + `Modifier.toggleable(Role.Checkbox)` + 只读
+  `Checkbox`（行拥有状态、勾选框只显示，读屏能听到已选中）；头像的同一节点补
+  `role = Role.Button`、`onClick("打开直播间")`、`customActions` 上移/下移（复用拖动用的
+  `onReorder`，只有真能移动的方向才给，不新造行为）。
+- **主题**：新增 `LiveHubShapes`（6 / 10 / 12 / 20 / 28dp）交给 `MaterialTheme`；新增
+  `dynamicColor`（默认关）：`dynamicLightColorScheme` / `dynamicDarkColorScheme`，
+  Android 12 起可用，设置页开关 + 持久化，品牌配色仍是默认。SDK 判断写在分支里而不是藏在
+  helper 后面——**lint 只认字面量比较**，藏在 helper 里会 `NewApi` 打红 `:app:lintDebug`。
+- **同步记录**：箭头图标带 `contentDescription`，失败追加「，失败」——方向本来就在行文本里，
+  只有失败是读屏拿不到的。
+- **清除缓存**：`clearing` 守卫 + 按钮位置换 `CircularProgressIndicator`、`enabled = false`。
+
+### 一处只有 CI 才能发现的错
+
+本地没有编译器，第一次推送只报一处：`SemanticsProperties.CustomActions` 不存在。
+compose-ui 1.12.1 把这个键放在 **`SemanticsActions`**（`AccessibilityKey`，merge policy 把
+父子列表拼起来），`SemanticsProperties` 里只有 `Role` / `ToggleableState` 之类。改成
+`config.getOrNull(SemanticsActions.CustomActions)`（键缺失时给空列表而不是抛异常）后全绿。
+**这一轮的价值有一半来自这里**：`ListItem` 的合并语义、`expectValue(Role, …)`、
+动态配色的资源读取、`Button`/`IconToggleButton` 的重载全都一次编译通过，说明"按 1.4.0
+源码逐个核参数"这套做法是可靠的。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error（`TouchTargetSizeCheck` 仍是 unknown issue id 的旧告警，与本轮无关） |
+| JVM 单元测试 | ✅ **887** 个用例，0 失败（866 → +21：主题 3、动态取色 3、播放控件 6、同步行 4、关注语义 4、ViewModel 1） |
+| 仪器测试 | ✅ **64** 张截图全部重拍；**44 张有变化、20 张逐字节未变** |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `762c4f7` 三个 job 全绿 |
+
+截图逐张看过的结论：
+
+- **播放页 13 张**：pill 由 34dp 变 40dp（M3 `Button` 的最小高度）、全屏星标 22→24dp、
+  设置面板里弹幕由两个 chip 变一个开关。没有裁切、没有位置错位。
+- **设置/同步 8 张**：卡片变成 M3 列表（行高 72dp、16dp 内边距、行间分隔线），
+  动态取色行出现在外观卡底部，大字号（`27`）下说明文字折成三行而开关仍在行内。
+- **关注 6 张**：选择面板的行变成 56dp 的 `ListItem` + 复选框，选中项红色标题 + 勾选；
+  1.5× 下（`29`，非面板）头像与 chip 未变形。
+- **搜索 12 张 + 大字号 2 张**：这批不是本轮的控件改动，而是 `Shapes` 生效后
+  `AssistChip` 的圆角 8→10dp、输入框 4→6dp。**这是有意让主题接管形状的可见代价**，
+  逐张确认只是圆角变化、没有布局位移。
+- 首页/分类/卡片网格 20 张逐字节未变，证明 `shapes.medium` 保持 12dp、卡片没有被这一轮碰到。
+
+### 留下的（按价值排，下轮可直接开工）
+
+1. **播放页横屏设置抽屉退不出**（真缺陷，本轮没动）：`PlayerSettingsDrawer` 是手搭的
+   scrim + `Surface`，系统返回键关不掉它——`BackHandler` 只在
+   `fullscreen && !compact && !isLandscape` 时启用，而抽屉只在 `isLandscape` 时出现；
+   scrim 也没有 dismiss 语义。改成 `ModalNavigationDrawer` + `ModalDrawerSheet` 能一次解决
+   三条，代价是宽度/形状默认值与现在的 42% / 320dp 不同，且没有截图基线。
+2. **`StreamerCard` 的 1dp 阴影画不出来**：`clip(CardShape)` 在 `Surface` 外面，阴影被裁掉。
+   官方 `Card(onClick = …)` 能修，但 `Card` 没有 `onLongClick`，关注页的长按需要一个分支，
+   且会动 20+ 张截图——单独立项。
+3. **`StreamerCard` 的关注星**仍是 `IconButton` + 条件图标，可以换成 `IconToggleButton`
+   （与全屏栏那次同样的收益），低风险，只是不在本轮四个文件里。
+4. **搜索页没有用官方 `SearchBar`**：现在是 `OutlinedTextField` + chip 行。换成
+   `DockedSearchBar` 是一次交互改版（焦点、IME、320dp 下的折叠），要单独一轮。
+5. **`MatchingCodeDialog` 仍是 `Dialog` + `Surface`**：第 36/37 轮记录了理由
+   （`AlertDialog` 的固有宽度测量 + 输入框导致 `AppNotIdle`），没有推翻依据前不动。
+6. **填充式输入框的填色等于卡片色**：本项目的主题把 `surfaceContainerHighest` 映射成卡片色，
+   所以「填充」在视觉上只剩一条下划线。要更明显就得给 `TextField` 覆盖 container token
+   （`surfaceContainer`），属于视觉轮的活。
+7. **动态配色下的观感没有渲染证据**：64 张截图全是品牌配色。打开 Material You 后的
+   卡片/芯片/列表行对比度需要一次专门的截图（harness 支持传 `dynamicColor` 之后）。
+8. 官方组件里本项目**没有用途**的：`NavigationRail` / `BottomAppBar` / `DatePicker` /
+   `SearchBar` / `Badge` / `LinearProgressIndicator`。不为"用上"而加。
