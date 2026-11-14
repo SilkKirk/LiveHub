@@ -1,9 +1,12 @@
 package com.livehub.app.ui.screens
 
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
 import com.livehub.core.designsystem.LiveHubTheme
@@ -68,6 +71,12 @@ class SyncDialogSpaceTest {
       LiveHubTheme { SyncScreen(state = state(), onAction = {}) }
     }
     composeRule.waitForIdle()
+    // Scrolled to first, because the action moved below the 本机 card when the primary button became
+    // full width (round 96). In the 640×360 landscape window that card alone fills the viewport: the
+    // button is composed but clipped, and a click at its centre lands outside the window, so nothing
+    // opened and the failure showed up as "no dialog" rather than as "clicked the wrong place".
+    // What this file measures is the dialog's geometry, not where the button sits.
+    composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("关联设备"))
     composeRule.onNodeWithText("关联设备").performClick()
     composeRule.waitForIdle()
   }
