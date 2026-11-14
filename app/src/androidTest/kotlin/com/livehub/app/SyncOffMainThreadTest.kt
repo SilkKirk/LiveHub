@@ -178,4 +178,47 @@ class SyncOffMainThreadTest {
     assertFalse("stop() must leave the controller not running", controller.isRunning)
     assertTrue("and no code may be left showing", controller.pairingCode.isNullOrBlank())
   }
+
+  /**
+   * `startAsync()` survives being called from the main thread — which is where it is called from.
+   *
+   * Every arrival in the foreground asks for the server from `MainActivity.onStart`, i.e. on the UI
+   * thread, so this is the entry point a regression would break first.
+   *
+   * **What this proves, and what it does not.** Android's main-thread network guard is enforced per
+   * socket operation inside libcore, and `mainThreadForbidsNetwork` above only establishes that
+   * `connect` is one of the operations it covers. Whether it also covers `ServerSocket.bind` varies
+   * by API level and is **not** verified here. So a green run means exactly this: calling the
+   * function on the main thread returned an address and left the server listening. The thread
+   * attribution — the whole point of moving the bind — rests on `SyncController.startAsync`'s
+   * `withContext(Dispatchers.IO)` and on nothing else. Do not read this test as a direct proof of
+   * the hop; if the guard happens to cover `bind` on some API level it is a stronger net, not a
+   * documented one.
+   *
+   * `stop()` first is load-bearing rather than tidiness: `setUp` already left a server running, and
+   * a second start against a live one early-returns with the existing address — proving nothing
+   * about binding. Stopping forces this call to bind a fresh socket.
+   *
+   * The address assertion assumes at least one non-loopback IPv4 interface. Every emulator and
+   * normal phone has one (the emulator's is `10.0.2.15`); a device with none gets an empty string by
+   * design, and this fails loudly rather than papering over it.
+   */
+  @Test
+  fun startAsyncFromMainThreadCompletes() {
+    controller.stop()
+    assertFalse("the controller must be stopped for this to test a real bind", controller.isRunning)
+
+    val outcome = runCatching { onMainThread { controller.startAsync() } }
+
+    assertTrue(
+      "startAsync must be callable from the main thread: ${outcome.exceptionOrNull()}",
+      outcome.isSuccess,
+    )
+    assertTrue("startAsync must leave the server listening", controller.isRunning)
+    val address = outcome.getOrNull().orEmpty()
+    assertTrue(
+      "startAsync must return the address peers can use, but returned '$address'",
+      address.isNotEmpty(),
+    )
+  }
 }

@@ -184,6 +184,38 @@ class AutoSyncTest {
     )
   }
 
+  /**
+   * The address in the state is the one the server actually bound.
+   *
+   * `UiState.localAddress` is what the sync page renders, and it is the only value the rest of the
+   * app may trust (see `MainViewModel.startSyncServer`), while the controller can always be asked
+   * what it is listening on. The two have to agree — including when both are empty, which is the
+   * legitimate answer on a machine with no non-loopback IPv4 interface. The bug shape this rejects
+   * is "one side has an address and the other does not": a page advertising a port that is not the
+   * one listening, or an empty line over a live server.
+   *
+   * The second wait is not a relaxation of the assertion below it. `startAsync` publishes the server
+   * inside its IO hop and returns only afterwards, and the ViewModel writes the address in the
+   * continuation after that — so `isRunning` can be true for one dispatch before the state catches
+   * up. Waiting for the two to agree is what makes the equality a statement about the settled
+   * state; the equality itself is exact, and one empty side fails it.
+   */
+  @Test
+  fun `the state publishes the address the server bound`() {
+    pairDevice()
+    viewModel.onAppForeground()
+    awaitCondition { container.syncController.isRunning }
+    awaitCondition {
+      viewModel.state.value.localAddress == container.syncController.serverAddress.orEmpty()
+    }
+
+    assertEquals(
+      "the state and the controller must agree on where peers reach this device",
+      container.syncController.serverAddress.orEmpty(),
+      viewModel.state.value.localAddress,
+    )
+  }
+
   @Test
   fun `no port is opened before anything is paired`() {
     viewModel.onAppForeground()
