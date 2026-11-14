@@ -104,8 +104,17 @@ class CollapsibleHeaderUiTest {
     composeRule.waitForIdle()
   }
 
-  private fun count(text: String): Int =
-    composeRule.onAllNodesWithText(text).fetchSemanticsNodes().size
+  private fun count(text: String, substring: Boolean = false): Int =
+    composeRule.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().size
+
+  /**
+   * The follow header's own subtitle, "4/5 正在直播".
+   *
+   * The filter row was the obvious anchor and it was the wrong one: which chips a follow list shows
+   * depends on what is in the list (the platform row disappears when everything is on one platform),
+   * so an assertion on 「全部」 was really an assertion about the fixture.
+   */
+  private fun headerCount(): Int = count("正在直播", substring = true)
 
   private fun cards() = composeRule.onAllNodesWithText("直播标题", substring = true)
 
@@ -145,14 +154,14 @@ class CollapsibleHeaderUiTest {
   @Test
   fun `follow - swiping the grid up folds the whole header away`() {
     composeFollow()
-    assertTrue("the filter row starts visible", count("全部") == 1)
+    assertTrue("the header starts visible, found ${headerCount()}", headerCount() == 1)
 
     topCard().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
 
     assertTrue(
-      "after a downward scroll the filter row must be gone, found ${count("全部")}",
-      count("全部") == 0,
+      "after a downward scroll the header must be gone, found ${headerCount()}",
+      headerCount() == 0,
     )
   }
 
@@ -162,11 +171,11 @@ class CollapsibleHeaderUiTest {
 
     topCard().performTouchInput { swipeUp() }
     composeRule.waitForIdle()
-    assertTrue("folded first", count("全部") == 0)
+    assertTrue("folded first, found ${headerCount()}", headerCount() == 0)
 
     bottomCard().performTouchInput { swipeDown() }
     composeRule.waitForIdle()
 
-    assertTrue("scrolling back up must bring the header back", count("全部") == 1)
+    assertTrue("scrolling back up must bring the header back, found ${headerCount()}", headerCount() == 1)
   }
 }
