@@ -2,6 +2,8 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -91,27 +93,7 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
   ) {
     item { ThisDeviceCard(shownState, onAction) }
 
-    item {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-          onClick = { onAction(UiAction.SyncNow) },
-          enabled = state.peers.isNotEmpty() && !state.syncing,
-        ) {
-          Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-          Text(if (state.syncing) "同步中…" else "立即同步")
-        }
-        OutlinedButton(
-          onClick = { showCodeDialog = true },
-          enabled = !state.pairing,
-        ) {
-          Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-          Text(if (state.pairing) "匹配中…" else "关联设备")
-        }
-        IconButton(onClick = { onAction(UiAction.RefreshPeers) }) {
-          Icon(Icons.Filled.Refresh, contentDescription = "刷新")
-        }
-      }
-    }
+    item { SyncActionsRow(state, onAction, onOpenMatchingCode = { showCodeDialog = true }) }
 
     item { ScopeCard() }
 
@@ -152,6 +134,63 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
       },
       onRefreshCode = { onAction(UiAction.RefreshPairingCode) },
     )
+  }
+}
+
+/**
+ * The three actions at the top of the page: 立即同步, 关联设备 and the peer-list refresh.
+ *
+ * A `FlowRow`, not a `Row`, because these are three *actions* with one tap target each. A `Row`
+ * measures its children against whatever width is left, so at 1.5× the text scale it squeezed
+ * 「关联设备」into one character per line and the 48dp refresh icon into a sliver — the icon was
+ * still in the tree and simply not on the screen (`31-sync-large-font`). A wrapping row moves what
+ * does not fit onto the next line instead, so every action keeps its own width and its own touch
+ * target, and all three stay within a thumb's reach of where they were.
+ *
+ * The two alternatives are worse for the same reason:
+ *  * a horizontal scroll keeps one line by pushing the last action off the screen, and an action
+ *    that has to be scrolled for is the one nobody finds;
+ *  * shrinking the labels would fit the row by making it harder to read, which is the opposite of
+ *    what someone who raised the system font size asked for.
+ *
+ * **The 1.0× margin is negative, and it was already.** By Material's own tokens the row needs about
+ * 134 + 8 + 134 + 8 + 48 ≈ 332dp — two buttons at 24dp of side padding each plus a 24dp leading icon
+ * and a 14sp four-character label, one 48dp icon button, two 8dp gaps — while the 320×640 device the
+ * screenshots are rendered on leaves 320 - 2 × 16 = 288dp. That is ~44dp over budget at 1.0×, so the
+ * old `Row` was squeezing the refresh icon there as well, which is why `13-sync` does not show it
+ * complete. Wrapping repairs that too — the icon drops to a second line at its full size — and on a
+ * wider phone (411dp leaves 379dp) the row still fits on one line with roughly 45dp to spare, which
+ * is where the 1.0× render is unchanged.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SyncActionsRow(
+  state: UiState,
+  onAction: (UiAction) -> Unit,
+  onOpenMatchingCode: () -> Unit,
+) {
+  FlowRow(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Button(
+      onClick = { onAction(UiAction.SyncNow) },
+      enabled = state.peers.isNotEmpty() && !state.syncing,
+    ) {
+      Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+      Text(if (state.syncing) "同步中…" else "立即同步")
+    }
+    OutlinedButton(
+      onClick = onOpenMatchingCode,
+      enabled = !state.pairing,
+    ) {
+      Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+      Text(if (state.pairing) "匹配中…" else "关联设备")
+    }
+    IconButton(onClick = { onAction(UiAction.RefreshPeers) }) {
+      Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+    }
   }
 }
 

@@ -2,7 +2,9 @@ package com.livehub.app.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
@@ -10,10 +12,12 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.screens.AUTO_SYNC_SWITCH_TAG
 import com.livehub.app.ui.screens.SyncScreen
@@ -39,6 +43,9 @@ import org.robolectric.annotation.Config
  * there, and the bounds comparisons prove the card — not just its first line — ends up inside the
  * window. `assertIsDisplayed()` alone would pass with the subtitle and the switch parked under the
  * bottom edge.
+ *
+ * The second half of the file covers the row *above* that card — 立即同步 / 关联设备 / 刷新 — which
+ * is where a 1.5× text scale used to break two controls at once (`31-sync-large-font`).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -71,12 +78,23 @@ class SyncAutoCardTest {
    * Renders the page in a 320×640 box — the smallest phone the app targets — and tags that box, so
    * the bounds checks below measure against the page rather than against whatever size the test
    * window happens to be.
+   *
+   * [fontScale] mirrors the system accessibility text multiplier the way `ScreenshotTest` applies it:
+   * the *font* scale is replaced while the pixel density stays, so dp sizes (and therefore the page)
+   * are unchanged and only the text grows.
    */
-  private fun render(state: UiState, onAction: (UiAction) -> Unit = {}) {
+  private fun render(
+    state: UiState,
+    fontScale: Float = 1f,
+    onAction: (UiAction) -> Unit = {},
+  ) {
     composeRule.setContent {
+      val density = LocalDensity.current
       LiveHubTheme {
-        Box(modifier = Modifier.size(320.dp, 640.dp).testTag(VIEWPORT_TAG)) {
-          SyncScreen(state = state, onAction = onAction)
+        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+          Box(modifier = Modifier.size(320.dp, 640.dp).testTag(VIEWPORT_TAG)) {
+            SyncScreen(state = state, onAction = onAction)
+          }
         }
       }
     }
@@ -149,6 +167,88 @@ class SyncAutoCardTest {
       listOf<UiAction>(UiAction.SetAutoSync(true)),
       actions,
     )
+  }
+
+  // ---------------------------------------------------------------- the action row ---
+
+  private fun scrollToActions() {
+    composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("立即同步"))
+    composeRule.waitForIdle()
+  }
+
+  /**
+   * Both labels on one line, both buttons on screen, and the icon-only button at its own size.
+   *
+   * The label comparison is between two nodes of the same style in the same row: a squeezed label
+   * stacks one character per line and ends up several lines tall while its neighbour stays at one,
+   * so the heights only agree while the text is laid out the way it is meant to be. The `+ 1` is
+   * rounding, not tolerance for a second line — one line at 14sp and 1.5× is ~30dp.
+   *
+   * The floor for the icon button is 40dp, its own box, rather than the 48dp tap target: Material
+   * adds the rest through its interactive-size enforcement, which is a property of the theme (it can
+   * be switched off through a `CompositionLocal`) and not of this screen. 40dp is still four times
+   * the few dp the squeezed button had, so the assertion fails on the defect and passes on any
+   * variant of the fix.
+   */
+  private fun assertActionRowUsable() {
+    composeRule.onNodeWithText("立即同步").assertIsDisplayed()
+    composeRule.onNodeWithText("关联设备").assertIsDisplayed()
+
+    val syncLabel = composeRule.onNodeWithText("立即同步", useUnmergedTree = true)
+      .fetchSemanticsNode().size.height
+    val pairLabel = composeRule.onNodeWithText("关联设备", useUnmergedTree = true)
+      .fetchSemanticsNode().size.height
+    assertTrue(
+      "「关联设备」的标签竖排了：它高 ${pairLabel}px，" +
+        "同一行的「立即同步」只有 ${syncLabel}px",
+      pairLabel <= syncLabel + 1,
+    )
+
+    val icon = composeRule.onNodeWithContentDescription("刷新").fetchSemanticsNode().size
+    val floor = with(composeRule.density) { 40.dp.roundToPx() }
+    assertTrue(
+      "刷新图标的按钮只有 ${icon.width}×${icon.height}px，低于它自己的 ${floor}px（40dp）",
+      icon.width >= floor && icon.height >= floor,
+    )
+  }
+
+  /**
+   * The row as it renders today, at 1.0×.
+   *
+   * Worth pinning at the normal text size too, because the row is already over budget there: by
+   * Material's tokens two icon-and-label buttons plus a 48dp icon button need about 332dp and this
+   * 320dp screen leaves 288dp. The old `Row` squeezed the refresh icon to a few dp whenever it ran
+   * out of width, so the assertion below catches at 1.0× the same squeeze the 1.5× test catches at
+   * the larger scale.
+   */
+  @Test
+  fun `the three actions are usable at the normal text size`() {
+    val actions = mutableListOf<UiAction>()
+    render(state(autoSync = true), onAction = { actions += it })
+    scrollToActions()
+    assertActionRowUsable()
+
+    composeRule.onNodeWithContentDescription("刷新").performClick()
+    composeRule.waitForIdle()
+
+    assertEquals(
+      "点刷新图标必须发出重新扫描的指令",
+      listOf<UiAction>(UiAction.RefreshPeers),
+      actions,
+    )
+  }
+
+  /**
+   * The same row at 1.5×, which is the render that showed the defect: 「关联设备」came out as
+   * 关/联/设/备 down the side of a one-character-wide button and the refresh icon was squeezed to
+   * nothing. A wrapping row puts the overflow on a second line, so both labels stay whole and the
+   * icon-only button keeps its own box.
+   */
+  @Test
+  fun `the three actions are usable at 1_5x text`() {
+    render(state(autoSync = true), fontScale = 1.5f)
+    scrollToActions()
+    assertActionRowUsable()
   }
 
   private companion object {
