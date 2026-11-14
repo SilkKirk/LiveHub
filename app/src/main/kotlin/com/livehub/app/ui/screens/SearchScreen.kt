@@ -41,7 +41,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,7 +62,6 @@ import com.livehub.app.ui.components.StreamerListSkeleton
 import com.livehub.app.ui.components.StreamerSearchCard
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
-import kotlinx.coroutines.flow.first
 
 /**
  * Search screen.
@@ -380,11 +379,24 @@ private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
   // — the *default* selection, visible all along — at the left edge and cut 全部 in half on the
   // idle screen. Waiting for a measured layout is what makes this a repair rather than a nudge.
   //
+  // `withFrameNanos` first, and that is not decoration: a `snapshotFlow` on `layoutInfo` resumes
+  // inside the very layout pass that produced the snapshot, and `scrollToItem` from there asks the
+  // list to measure while it is already measuring —
+  //
+  //   IllegalArgumentException: performMeasureAndLayout called during measure layout
+  //
+  // Which is a real crash, not a test artefact: it was found by the first large-font render, where
+  // the fifth chip is finally far enough off screen for the scroll to be more than a no-op. So the
+  // scroll waits for the next frame, whose clock callback runs before composition and measure.
+  //
   // `scrollToItem`, not `animateScrollToItem`: an animation would leave a frozen-clock render
   // mid-flight and buys nothing for a one-off jump.
   LaunchedEffect(selectedIndex) {
-    val measured = snapshotFlow { listState.layoutInfo }.first { it.visibleItemsInfo.isNotEmpty() }
-    if (measured.visibleItemsInfo.none { it.index == selectedIndex }) {
+    withFrameNanos { }
+    val measured = listState.layoutInfo
+    if (measured.visibleItemsInfo.isNotEmpty() &&
+      measured.visibleItemsInfo.none { it.index == selectedIndex }
+    ) {
       listState.scrollToItem(selectedIndex)
     }
   }
