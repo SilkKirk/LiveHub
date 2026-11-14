@@ -1,7 +1,6 @@
 package com.livehub.app.ui.screens
 
 import android.os.Looper
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
@@ -12,6 +11,7 @@ import androidx.compose.ui.test.performScrollToNode
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -30,6 +30,12 @@ import org.robolectric.annotation.Config
  * an empty cache. The card itself has no other seam — Coil's caches are a process-wide singleton —
  * so the honest assertions are "rendering the page does not crash", "the control is reachable",
  * and "clearing sends exactly one snackbar".
+ *
+ * The page is rendered inside [LiveHubTheme], as every screen test in this package has been since
+ * round 85: these assertions describe a real `SettingsScreen`, and the `scrollTo` calls below are
+ * statements about where the fold falls on a 320dp-wide page — a height that comes from the app's
+ * type scale rather than from Material's defaults. The 48dp target is floored inside the card
+ * itself, so it is the scroll, not the button, that a type-scale change would move.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -41,7 +47,7 @@ class CacheSettingsTest {
   /** The settings page is a `LazyColumn`, so a card below the fold is only composed once scrolled to. */
   private fun renderSettings(actions: MutableList<UiAction>) {
     composeRule.setContent {
-      MaterialTheme {
+      LiveHubTheme {
         SettingsScreen(state = UiState(screen = Screen.Settings), onAction = { actions += it })
       }
     }

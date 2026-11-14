@@ -2,7 +2,6 @@ package com.livehub.app.ui.screens
 
 import android.content.Context
 import android.os.Looper
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -21,6 +20,7 @@ import com.livehub.app.ui.MainViewModel
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -48,6 +48,12 @@ import org.robolectric.annotation.Config
  *    the same in a screenshot-less test only if the row is asserted to still exist.
  *  * the preference has to reach disk. A switch whose value dies with the process is the exact
  *    defect this feature was opened for: the worker kept running with no way to stop it.
+ *
+ * The page is rendered inside [LiveHubTheme], as every screen test in this package has been since
+ * round 85. The two switch rows are `bodyLarge` titles with `labelSmall` subtitles, which the app's
+ * scale draws identically to Material's — but `the background refresh card sits above the storage
+ * card` compares two y positions, and a position only means something in the scale that produced
+ * it.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -168,7 +174,7 @@ class BackgroundRefreshTest {
     actions: MutableList<UiAction> = mutableListOf(),
   ) {
     composeRule.setContent {
-      MaterialTheme {
+      LiveHubTheme {
         SettingsScreen(
           state = UiState(
             screen = Screen.Settings,

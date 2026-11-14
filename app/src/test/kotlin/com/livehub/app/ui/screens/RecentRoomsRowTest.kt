@@ -2,7 +2,6 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -13,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
+import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Assert.assertEquals
@@ -33,6 +33,12 @@ import org.robolectric.annotation.Config
  *
  * The empty case matters as much as the populated one: the row is written to disappear when there
  * is no history, and a header over an empty strip is worse than no strip at all.
+ *
+ * Rendered inside [LiveHubTheme], as every screen test in this package has been since round 85: the
+ * assertions have to describe the page the app lays out rather than Material's default type scale.
+ * Presence is what this file pins today — the strip is a `LazyRow` of fixed-width cards — and the
+ * point of the theme is that the first position assertion added here already measures the real
+ * scale.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -51,7 +57,7 @@ class RecentRoomsRowTest {
     actions: MutableList<UiAction> = mutableListOf(),
   ): MutableList<UiAction> {
     composeRule.setContent {
-      MaterialTheme {
+      LiveHubTheme {
         Box(modifier = Modifier.size(320.dp, 640.dp)) {
           SearchScreen(state = state, onAction = { actions += it })
         }
