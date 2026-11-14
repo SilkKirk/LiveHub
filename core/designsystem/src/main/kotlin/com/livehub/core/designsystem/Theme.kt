@@ -62,12 +62,18 @@ private val LightScheme: ColorScheme = lightColorScheme(
   onSurfaceVariant = Color(0xFF5A5560),
   surfaceContainer = SurfaceContainerLight,
   surfaceContainerHigh = Color(0xFFE9E6EF),
-  // Material's filled `Card` takes this one, and at `0xFFFBFAFD` it was the page background with a
-  // hair more white in it: a screen of settings cards read as one flat sheet with text floating on
-  // it. The page is `BackgroundLight` (a cool near-white) and the cards are pure white, so a card
-  // is a thing sitting on the page rather than a tint of it — the same relationship the room tiles
-  // already use (`StreamerCard` is `surface` over `background`).
+  // Two container tokens, and the surfaces that read them are not the two you would guess: Material's
+  // filled `Card` (which every card on 设置 and 同步 is) takes `surfaceContainerHighest`, while
+  // `surfaceContainerLow` is what `ElevatedCard` and `ModalBottomSheet` use. Neither was set here, so
+  // both fell back to the M3 baseline — a purple-grey (#E6E0E9) belonging to no palette of ours, and
+  // close enough to the page background that a column of cards read as one flat sheet with text
+  // floating on it.
+  //
+  // Both are the card surface now: the page is `BackgroundLight` (a cool near-white) and the cards
+  // are pure white, so a card is a thing sitting *on* the page rather than a tint of it — the same
+  // relationship the room tiles already use (`StreamerCard` is `surface` over `background`).
   surfaceContainerLow = SurfaceLight,
+  surfaceContainerHighest = SurfaceLight,
   outline = Color(0xFF9A94A3),
   outlineVariant = OutlineLight,
   error = Color(0xFFBA1A1A),
@@ -93,7 +99,9 @@ private val DarkScheme: ColorScheme = darkColorScheme(
   onSurfaceVariant = Color(0xFFB9B2C1),
   surfaceContainer = SurfaceContainerDark,
   surfaceContainerHigh = Color(0xFF2E2B36),
+  // Same pair as the light scheme: cards are one step above the page, not a tint of it.
   surfaceContainerLow = SurfaceDark,
+  surfaceContainerHighest = SurfaceDark,
   outline = Color(0xFF6E6878),
   outlineVariant = OutlineDark,
   error = Color(0xFFFFB4AB),
