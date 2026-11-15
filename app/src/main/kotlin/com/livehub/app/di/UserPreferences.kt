@@ -149,9 +149,17 @@ data class UserSettings(
  * read is a field access.
  *
  * Writes are **not** synchronous. They are serialised onto [writeScope] so a click handler never
- * blocks on a file write; see [update]. `saveTrustedPeers` and `savePeerAddresses` still write on
- * the caller's thread, because every caller of those is already on a background dispatcher
- * (`SyncController` runs its whole exchange on `Dispatchers.IO`).
+ * blocks on a file write; see [update]. [update] is also the only writer whose *read-modify-write*
+ * is atomic, which is why everything that mutates a field goes through it.
+ *
+ * [saveTrustedPeers] and [savePeerAddresses] are the exception: they still write on the caller's
+ * thread, and **not** every caller is on a background dispatcher. `SyncController` is (its whole
+ * exchange runs on `Dispatchers.IO`), but `MainViewModel.unpair` is not — it reaches both through
+ * `SyncEngine.unpair` and `SyncController.forgetPeer` from a click handler, so removing a paired
+ * device performs a blocking read and two blocking writes on the main thread. That is a known,
+ * unfixed cost, recorded in `docs/ITERATIONS.md`; it is not a property of the design, and the
+ * earlier version of this paragraph claimed otherwise. Fixing it means making the peer list part
+ * of the cached settings record (like every other field) rather than a separate key.
  */
 class UserPreferences(private val context: Context) {
   private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -179,6 +187,19 @@ class UserPreferences(private val context: Context) {
     java.util.concurrent.ConcurrentHashMap.newKeySet()
 
   @Volatile private var cached: UserSettings? = null
+
+  /**
+   * Guards the read-modify-write in [update].
+   *
+   * Not the same job as [writeScope]. That queue only orders the *disk writes*; the value they
+   * write is computed from `cached` on the caller's thread, and two callers that compute from the
+   * same base lose one of the two changes — from the cache and from the file alike. The lock is
+   * what makes "read the record, transform it, publish it" one step.
+   *
+   * The two are genuinely different concerns and both are needed: this lock makes one update
+   * atomic, [writeScope] keeps the writes in the order the lock was released.
+   */
+  private val updateLock = Any()
 
   /**
    * The context this store was built with, which is the container's application context.
@@ -210,21 +231,33 @@ class UserPreferences(private val context: Context) {
    * this process sees it immediately — which is what the whole app depends on (`UiState` is built
    * from `preferences.settings` synchronously).
    *
-   * The disk write itself no longer runs on the calling thread. It used to be a `runBlocking {
+   * The disk write itself does not run on the calling thread. It used to be a `runBlocking {
    * dataStore.edit { … } }`, and the callers are Compose click handlers: every star tap, every
-   * theme chip, every danmaku slider blocked the main thread on a file write. The write is now
+   * theme chip, every danmaku slider blocked the main thread on a file write. The write is
    * serialised onto a single-threaded IO dispatcher instead.
    *
-   * **Serialisation matters.** `update` is read-modify-write over the *whole* settings record, so
-   * two overlapping writes could otherwise land out of order and resurrect the older value. One
-   * worker thread means the writes are applied in the order the calls were made.
+   * **Two separate guarantees, and they need two mechanisms.**
+   *
+   *  * *Order.* Writes reach the file in the order the calls were made, so an older value cannot
+   *    land after a newer one and resurrect itself.
+   *  * *Atomicity.* [transform] runs under [updateLock] and sees the result of the previous one, so
+   *    it is a real read-modify-write rather than a read and a later write.
+   *
+   * The second one was missing, and only the first was documented — which is the more dangerous
+   * half, because the loss is silent. `update` is called from the UI thread (a star tap, a danmaku
+   * slider) **and** from the sync server's own threads (`FollowRecordSet.persist` and
+   * `CredentialStore.persist` both run inside `SyncEngine.applyPayload`). A tap that lands while an
+   * exchange is applying a payload made both callers read the same base record, and whichever
+   * published second overwrote the other's field: the follow was not saved, or the synced record
+   * was not. `update` is a whole-record read-modify-write, so "one field lost" means "one *change*
+   * lost", both in memory and on disk.
    *
    * @return a job that completes once this write has reached disk. Callers that only need the new
    *   value to be visible (every UI path) ignore it; tests that construct a second
    *   [UserPreferences] over the same DataStore file must `join()` it, because that instance reads
    *   the file rather than this object's cache.
    */
-  fun update(transform: (UserSettings) -> UserSettings): Job {
+  fun update(transform: (UserSettings) -> UserSettings): Job = synchronized(updateLock) {
     val next = transform(settings)
     cached = next
     val encoded = json.encodeToString(UserSettings.serializer(), next)
@@ -236,8 +269,39 @@ class UserPreferences(private val context: Context) {
     // `awaitWrites` runs on a test thread.
     pendingWrites += job
     job.invokeOnCompletion { pendingWrites -= job }
-    return job
+    // Enqueued inside the lock, so the queue order is the order the transforms were applied in:
+    // the single-threaded executor runs submissions in FIFO order.
+    job
   }
+
+  /**
+   * Returns this installation's pairing secret, generating and storing one on first use.
+   *
+   * Extracted from `SyncController` so the rule lives next to the storage it protects, and so it
+   * can be tested without a live server. Four call sites reach it — the pairing handler (a server
+   * connection thread), transport construction, `pairByCode` and the peer sweep — and they can
+   * overlap.
+   *
+   * **The transform must not clobber.** A plain `it.copy(selfSecret = generated)` was the previous
+   * shape, and it is wrong even with an atomic `update`: the *value* is generated before the
+   * transform runs, so a loser would still overwrite the winner's key while the winner had already
+   * handed its own key to a peer in `PairingOutcome.Accepted`. The peer would then authenticate
+   * against a secret this device never stored — a permanent "未配对" with no way back except
+   * re-pairing. Keeping whatever is already there, and reading the stored value back rather than
+   * returning the local guess, makes every caller agree on one secret.
+   */
+  internal fun selfSecretOrGenerate(generate: () -> String = ::randomSecret): String {
+    val known = settings.selfSecret
+    if (known.isNotBlank()) return known
+    update { current ->
+      if (current.selfSecret.isNotBlank()) current else current.copy(selfSecret = generate())
+    }
+    // Read back rather than return the generated value: a concurrent caller may have won, and the
+    // stored secret is the only one a peer can be holding.
+    return settings.selfSecret
+  }
+
+  private fun randomSecret(): String = UUID.randomUUID().toString().replace("-", "")
 
   /**
    * Completes when every write issued so far has reached disk.

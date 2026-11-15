@@ -563,15 +563,17 @@ class SyncController(
   /**
    * Secret this installation presents to peers.
    *
-   * Derived from the persisted device id so it survives restarts and is identical for
-   * every peer: a peer stores exactly this value and compares it on each request.
+   * A random value stored on first pairing and then stable for the life of the installation; every
+   * peer stores exactly what it was given and compares it on each request, so it must not change.
+   *
+   * The resolution rule lives in `UserPreferences.selfSecretOrGenerate`, not here: it is a
+   * read-modify-write against stored settings, and this method is reachable from the pairing
+   * handler (a server connection thread), transport construction, `pairByCode` and the peer sweep
+   * at the same time. Generating the value here and writing it unconditionally is what let two
+   * threads mint two secrets — one handed to a peer, the other on disk — and left that peer locked
+   * out with a permanent "未配对".
    */
-  private fun selfSecret(): String =
-    preferences.settings.selfSecret.ifBlank {
-      val generated = java.util.UUID.randomUUID().toString().replace("-", "")
-      preferences.update { it.copy(selfSecret = generated) }
-      generated
-    }
+  private fun selfSecret(): String = preferences.selfSecretOrGenerate()
 
   companion object {
     const val DEFAULT_PORT = 47653
