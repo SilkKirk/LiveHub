@@ -115,6 +115,34 @@ class SyncServerLifecycleTest {
   }
 
   /**
+   * The address the page shows is never one nothing is listening on.
+   *
+   * `SyncController.serverAddress` documents that it is only meaningful *after* a bind has landed,
+   * and `enterSyncScreen` reads it synchronously, one statement after asking for a bind that
+   * happens on another thread. The port field is still zero at that moment, so the value was
+   * `"192.168.1.23:0"` — a plausible-looking endpoint that no peer can reach, drawn on the first
+   * frame of the page until the bind's continuation replaced it.
+   *
+   * Asserted on the state *immediately after* the action, without draining the main looper: that is
+   * the frame the page would draw, and it is where the old code published the zero port.
+   */
+  @Test
+  fun `the sync page never advertises a port that is not listening`() {
+    viewModel.onAction(UiAction.Navigate(Screen.Sync))
+
+    val address = viewModel.state.value.localAddress
+    assertFalse(
+      "a listening port is never 0, so an address ending in :0 is a promise nothing keeps: $address",
+      address.endsWith(":0"),
+    )
+    if (address.isNotBlank()) {
+      // Whatever is published has to be a real endpoint: host and a port in range.
+      val port = address.substringAfterLast(':').toIntOrNull()
+      assertTrue("a published address must carry a port in 1..65535: $address", port != null && port in 1..65535)
+    }
+  }
+
+  /**
    * The reversal, stated as a test.
    *
    * In the foreground with a paired device and 自动同步 on, walking off the sync page leaves the

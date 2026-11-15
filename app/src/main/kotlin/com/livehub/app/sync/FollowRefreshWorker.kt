@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.livehub.app.LiveHubApplication
+import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -71,9 +72,18 @@ class FollowRefreshWorker(
     val hlc = container.syncEngine.nextHlc()
 
     followed.forEach { streamer ->
-      val status = runCatching {
+      val status = try {
         container.platformRepository.liveStatus(streamer.platform, streamer.roomId)
-      }.getOrNull()
+      } catch (cancelled: CancellationException) {
+        // WorkManager cancels a worker that outlived its constraints or was superseded. `runCatching`
+        // swallowed that and turned it into `null`, i.e. "this room failed" — so a cancelled run
+        // kept walking the rest of the list one network request at a time instead of stopping, and
+        // reported `Result.retry()` for a job nobody wanted any more.
+        throw cancelled
+      } catch (error: Exception) {
+        // One room failing leaves its row as it was; a platform rate limiting us is normal.
+        null
+      }
 
       if (status == null) {
         failures++

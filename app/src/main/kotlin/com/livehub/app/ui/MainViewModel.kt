@@ -47,6 +47,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private var pairingCountdownJob: Job? = null
 
   /**
+   * Whether an exchange is running; see [syncNow].
+   *
+   * A plain field rather than a `Flow`, and safe as one because every writer runs on the main
+   * dispatcher: `UiAction.SyncNow` is dispatched from a click handler and `autoSyncIfDue` from a
+   * `viewModelScope` coroutine.
+   */
+  private var syncInFlight: Boolean = false
+
+  /**
    * Counter behind [com.livehub.core.model.DanmakuMessage.seq], reset per room.
    *
    * Only the danmaku collector touches it, and it runs on the main dispatcher, so a plain `Long`
@@ -315,7 +324,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val code = container.syncController.beginPairing()
     _state.update {
       it.copy(
-        localAddress = container.syncController.serverAddress.orEmpty(),
+        // Guarded on `isRunning`, not read unconditionally: [SyncController.serverAddress] is only
+        // meaningful once the bind has landed (its own KDoc says so), and `startSyncServer` above is
+        // asynchronous. Reading it here without the guard produced `"192.168.1.23:0"` — the local
+        // address glued to the port field's initial zero — for the frame between this write and the
+        // bind's continuation, which is what the sync page draws first.
+        localAddress = addressIfListening(),
         discoveredPeers = container.syncController.discoveredPeers(),
         pairingCode = code,
         pairingCodeSecondsLeft = container.syncController.pairingCodeSecondsLeft(),
@@ -341,6 +355,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     if (!autoSyncWanted()) return
     startSyncServer()
   }
+
+  /**
+   * Where peers can reach this device, or `""` while nothing is listening yet.
+   *
+   * `SyncController.serverAddress` documents that it is only meaningful after a bind has landed,
+   * and every caller here runs before that line. Reporting an address anyway means reporting the
+   * port field's initial zero (`…:0`), which the sync page draws as if it were a real endpoint.
+   * [startSyncServer]'s continuation is the one place that publishes a listening server's address.
+   */
+  private fun addressIfListening(): String =
+    if (container.syncController.isRunning) container.syncController.serverAddress.orEmpty() else ""
 
   /**
    * Brings the LAN server up, off the main thread, and publishes the address once it is listening.
@@ -747,9 +772,20 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   private fun loadSubCategories(platform: Platform, category: Category) {
     subCategoriesJob?.cancel()
     subCategoriesJob = viewModelScope.launch {
-      val children = runCatching {
+      val children = try {
         container.platformRepository.subCategories(platform, category.id)
-      }.getOrDefault(emptyList())
+      } catch (cancelled: CancellationException) {
+        // Re-thrown for consistency with the other thirteen cancel-aware blocks in this file, and
+        // because two mechanisms were masking a swallowed cancellation here rather than one:
+        // `selectCategory` clears the row synchronously anyway, and the key guard below refuses a
+        // write for a category that is no longer selected. Neither of those was written to cover a
+        // *cancelled* request, so relying on them is accidental — the cancellation is not a failure
+        // and must not be converted into an empty answer that a future change might act on.
+        throw cancelled
+      } catch (error: Exception) {
+        // A platform that cannot answer has no third level to show; the row stays as it was.
+        emptyList()
+      }
       // A slow answer for a category the user has already left must not repopulate the row.
       _state.update { if (it.selectedCategory?.key == category.key) it.copy(subCategories = children) else it }
     }
@@ -1750,7 +1786,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
           discovering = false,
           discoveredPeers = container.syncController.discoveredPeers(),
           message = if (it.discoveredPeers.isEmpty()) {
-            "没有发现其他设备。请确认两台设备在同一 Wi-Fi 下，或手动填写对方地址。"
+            // Names the one thing the user can actually do. It used to end with "或手动填写对方
+            // 地址", pointing at a control that does not exist: the other device's dialog has a
+            // six-digit field and nothing else (`MatchingCodeDialog` is deliberately address-free,
+            // because reading an IP off another screen is the step this flow exists to remove).
+            "没有发现其他设备。请确认两台设备连的是同一个 Wi-Fi，然后在另一台设备上输入这 6 位匹配码。"
           } else {
             null
           },
@@ -1922,7 +1962,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       it.copy(
         peers = container.preferences.trustedPeers(),
         syncLog = container.syncEngine.logEntries(),
-        localAddress = container.syncController.serverAddress.orEmpty(),
+        localAddress = addressIfListening(),
         discoveredPeers = container.syncController.discoveredPeers(),
         pairingCode = container.syncController.pairingCode.orEmpty(),
         pairingCodeSecondsLeft = container.syncController.pairingCodeSecondsLeft(),
@@ -2020,25 +2060,50 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * it is the same exchange.
    */
   private fun syncNow(silent: Boolean = false) {
+    // One exchange at a time.
+    //
+    // `syncing` is the UI's truth and it is set *inside* the coroutine, so it cannot guard the entry
+    // point: the button and the automatic run on a foreground entry are two callers, and the second
+    // one passes the check before the first has had a chance to set anything. Two concurrent
+    // exchanges then share one `SyncEngine` and one single-connection HTTP server, so they queue
+    // behind each other until the socket timeout, and whichever finishes first clears `syncing`
+    // while the other is still running — leaving the button live over an exchange in progress.
+    // This flag is set synchronously on the caller's thread (always the main one), which closes the
+    // window; `syncing` stays for rendering.
+    if (syncInFlight) return
+    syncInFlight = true
+    // Published on the caller's frame as well, so the button is disabled immediately rather than
+    // one dispatch later — the flag above is what makes the *entry* safe, this is what makes the
+    // screen agree with it.
+    _state.update { it.copy(syncing = true) }
     viewModelScope.launch {
-      _state.update { it.copy(syncing = true) }
-      val summary = runCatching { container.syncController.syncNow() }
-        .getOrElse { error ->
-          SyncController.SyncSummary(0, 0, error.message ?: "同步失败")
+      try {
+        val summary = runCatching { container.syncController.syncNow() }
+          .getOrElse { error ->
+            SyncController.SyncSummary(0, 0, error.message ?: "同步失败")
+          }
+        _state.update {
+          it.copy(
+            peers = container.preferences.trustedPeers(),
+            followed = container.followStore.followed(),
+            specialFollowKeys = container.followStore.specialKeys(),
+            // Labels arrive inside the records, so a merge can add or remove them.
+            followTags = container.followStore.tagsByKey(),
+            syncLog = container.syncEngine.logEntries(),
+            // A silent run leaves whatever message was already on screen alone — it has no news
+            // the user did not ask for, and clearing an unrelated one would be worse than saying
+            // nothing.
+            message = if (silent) it.message else summary.message,
+          )
         }
-      _state.update {
-        it.copy(
-          syncing = false,
-          peers = container.preferences.trustedPeers(),
-          followed = container.followStore.followed(),
-          specialFollowKeys = container.followStore.specialKeys(),
-          // Labels arrive inside the records, so a merge can add or remove them.
-          followTags = container.followStore.tagsByKey(),
-          syncLog = container.syncEngine.logEntries(),
-          // A silent run leaves whatever message was already on screen alone — it has no news the
-          // user did not ask for, and clearing an unrelated one would be worse than saying nothing.
-          message = if (silent) it.message else summary.message,
-        )
+      } finally {
+        // Order matters: the guard is released first, so "the screen says the exchange finished"
+        // implies "the next one may start". The other order leaves a window where `syncing` is
+        // already false and `syncNow` still refuses.
+        syncInFlight = false
+        // Also covers a cancelled exchange: the screen is gone by then, but leaving the flag set
+        // would be a trap for whoever reads this next.
+        _state.update { it.copy(syncing = false) }
       }
     }
   }
