@@ -16,6 +16,7 @@ import com.livehub.core.sync.discovery.PeerDiscovery
 import com.livehub.core.sync.discovery.PeerLocator
 import com.livehub.core.sync.discovery.SubnetScanner
 import com.livehub.core.sync.server.PairingOutcome
+import com.livehub.core.sync.server.PayloadRejectedException
 import com.livehub.core.sync.server.ScopeDisabledException
 import com.livehub.core.sync.server.SyncHttpServer
 import com.livehub.core.sync.transport.LanSyncHttpTransport
@@ -273,7 +274,15 @@ class SyncController(
           // Incoming data for a switched-off scope is refused rather than stored: "关掉关注列表
           // 同步" has to mean the list stays put, not just that it stops being sent.
           if (!isShared(scope)) throw ScopeDisabledException(scope)
-          engine.applyPayload(payload, peer)
+          // A refusal has to travel back as a refusal. The result used to be discarded and the
+          // server answered 200, so the sender recorded a delivery that never happened, confirmed
+          // this device's watermark and pruned tombstones this device never received — after which
+          // its next pull brought the deleted records back. The realistic trigger is a schema
+          // difference, which is exactly what `SyncPayload.SCHEMA` exists for.
+          val applied = engine.applyPayload(payload, peer)
+          if (!applied.accepted) {
+            throw PayloadRejectedException(applied.rejectedReason ?: "本机无法应用对端数据")
+          }
           // Answer with the delta only: the peer provably holds every record it just sent,
           // so echoing those back would double the traffic for no gain. Anything else this
           // device knows still has to travel, otherwise a record the peer lacks would never

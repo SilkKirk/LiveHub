@@ -239,6 +239,15 @@ class SyncHttpServer(
       handler.onPush(envelope, payload, peer)
     } catch (disabled: ScopeDisabledException) {
       return Response(200, scopeDisabledBody(disabled.scope))
+    } catch (rejected: PayloadRejectedException) {
+      // **Not** a 2xx. The handler understood the request and refused to store it — an older schema
+      // on this device, or a scope it cannot serve — so nothing was written and the caller must not
+      // be told otherwise. Answering 200 here was a silent data-integrity bug: the sender recorded
+      // the delivery, raised this peer's "everything up to here is confirmed" watermark
+      // (`SyncCoordinator.confirmPeer`), and then pruned the tombstones it believed were delivered.
+      // The tombstones were the only thing keeping a delete from being undone, so the next pull from
+      // this peer brought the deleted records back.
+      return Response(409, errorBody(rejected.reason))
     }
     return Response(
       200,
@@ -376,6 +385,9 @@ class SyncHttpServer(
     400 -> "Bad Request"
     403 -> "Forbidden"
     404 -> "Not Found"
+    // A payload this device understood but cannot store (an older schema, most often). Distinct
+    // from 403 so the sender's log names the real problem instead of implying a revoked pairing.
+    409 -> "Conflict"
     else -> "Error"
   }
 
@@ -433,3 +445,15 @@ sealed interface PairingOutcome {
  */
 class ScopeDisabledException(val scope: SyncScope) : Exception("未共享该同步范围: ${scope.displayName}")
 
+/**
+ * Thrown by a [SyncHttpServer.Handler] when it understood a payload but could not store it.
+ *
+ * The distinction from [ScopeDisabledException] is what the answer means, not how serious it is.
+ * A switched-off scope is a *setting*: nothing was attempted, nothing failed, and the caller should
+ * skip it with a note in the log. A rejected payload is a *refusal*: this device has a payload it
+ * cannot apply — most often a newer peer's schema — so the caller must treat the scope as failed.
+ * That matters beyond the message: `SyncCoordinator` only records "the peer now holds everything"
+ * for a scope that finished without an error, and that record is what allows tombstones to be
+ * pruned. Telling the sender a rejection was a success is how a delete gets undone.
+ */
+class PayloadRejectedException(val reason: String) : Exception(reason)

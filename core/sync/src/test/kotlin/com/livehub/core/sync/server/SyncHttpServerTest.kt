@@ -35,6 +35,9 @@ class SyncHttpServerTest {
   private var pullDisabled = false
   private var pushRefuses = false
 
+  /** When set, `onPush` refuses the payload with this reason, the way an older schema would. */
+  private var pushRejects: String? = null
+
   @BeforeEach
   fun setUp() {
     server = SyncHttpServer(
@@ -76,6 +79,7 @@ class SyncHttpServerTest {
         override fun onPush(envelope: SyncEnvelope, payload: SyncPayload, peer: TrustedPeer?): SyncPayload? {
           pushCalls++
           if (pushRefuses) throw ScopeDisabledException(payload.parsedScope ?: SyncScope.FOLLOWS)
+          pushRejects?.let { throw PayloadRejectedException(it) }
           lastPushed = payload
           return null
         }
@@ -267,6 +271,77 @@ class SyncHttpServerTest {
       SyncEnvelope.encode(SyncEnvelope(deviceId = 2, deviceName = "tablet", secret = "sekret")),
     )
     assertEquals(400, response.status)
+  }
+
+  /**
+   * A payload this device cannot store is refused **loudly**.
+   *
+   * `SyncController.onPush` used to discard `applyPayload`'s result, so the server answered 200 for
+   * a payload it had not stored. The sender treated that as a delivery, raised this device's
+   * "everything up to here is confirmed" watermark, and pruned the tombstones it believed were
+   * delivered — the tombstones are the only thing keeping a delete from being undone, so the next
+   * pull from here resurrected the deleted records.
+   *
+   * The realistic trigger is a schema difference between two app versions, which is exactly what
+   * `SyncPayload.SCHEMA` exists for. 409 rather than 403 so the sender's log names the real
+   * problem instead of implying a revoked pairing.
+   */
+  @Test
+  fun `a payload this device cannot store is answered with a refusal, not a success`() {
+    pushRejects = "对端版本过新 (schema=3)"
+    val payload = SyncPayload(
+      scope = "follows",
+      sourceDeviceId = 2,
+      sequence = 9,
+      createdAt = 0,
+      entries = """[{"key":"a","deleted":false,"hlc":"1-0","deviceId":2,"updatedAt":1}]""",
+    )
+
+    val response = post(
+      SyncEnvelope.PATH_PUSH,
+      SyncEnvelope.encode(
+        SyncEnvelope(deviceId = 2, deviceName = "tablet", secret = "sekret", payload = payload),
+      ),
+    )
+
+    assertEquals(409, response.status)
+    assertEquals("对端版本过新 (schema=3)", SyncEnvelope.decode(response.body).error)
+    assertNull(lastPushed, "a rejected payload must not reach the store")
+  }
+
+  /**
+   * The client half of the same rule: a refusal becomes a failed scope carrying the reason.
+   *
+   * The coordinator only records "this peer now holds everything" for a scope that finished without
+   * an error, so the exception type and the message both matter — a generic
+   * "对方返回 HTTP 409" would tell the user nothing they can act on.
+   */
+  @Test
+  fun `the real client reports a refused payload as a failure carrying the reason`() {
+    pushRejects = "对端版本过新 (schema=3)"
+    val transport = LanSyncTransport(
+      deviceId = 2,
+      deviceName = "tablet",
+      localSecret = "sekret",
+      peersProvider = { paired },
+      addressProvider = { peer -> DiscoveredPeer(peer.deviceId, peer.deviceName, "127.0.0.1", port) },
+      timeoutMillis = 3_000,
+    )
+    val payload = SyncPayload(
+      scope = "follows",
+      sourceDeviceId = 2,
+      sequence = 9,
+      createdAt = 0,
+      entries = """[{"key":"a","deleted":false,"hlc":"1-0","deviceId":2,"updatedAt":1}]""",
+    )
+
+    val error = runCatching {
+      runBlocking { transport.push(paired.first(), payload) }
+    }.exceptionOrNull()
+
+    val failure = error as? SyncTransportException
+    assertEquals(SyncFailureReason.PROTOCOL, failure?.reason)
+    assertEquals("对端版本过新 (schema=3)", failure?.message)
   }
 
   @Test

@@ -205,19 +205,23 @@ class LanSyncTransport(
       )
     }
 
-    if (response.status == 403) {
-      // The server puts the reason in the envelope body — "配对码已过期", "配对码不正确",
-      // "未配对" … — and that is the text the user needs. Falling back to a fixed string
-      // hid the difference between an expired code and a revoked pairing.
+    if (response.status !in 200..299) {
+      // The server puts the reason in the envelope body — "配对码已过期", "未配对", "对端版本过新"
+      // — and that is the text the user needs. Falling back to the status code hid the difference
+      // between a revoked pairing and a peer that cannot store this payload, which are two very
+      // different things to do something about.
       val stated = runCatching { SyncEnvelope.decode(response.body).error }
         .getOrNull()?.takeIf { it.isNotBlank() }
+      if (response.status == 403) {
+        throw SyncTransportException(
+          SyncFailureReason.UNAUTHORIZED,
+          stated ?: "配对已失效，请重新配对",
+        )
+      }
       throw SyncTransportException(
-        SyncFailureReason.UNAUTHORIZED,
-        stated ?: "配对已失效，请重新配对",
+        SyncFailureReason.PROTOCOL,
+        stated ?: "对方返回 HTTP ${response.status}",
       )
-    }
-    if (response.status !in 200..299) {
-      throw SyncTransportException(SyncFailureReason.PROTOCOL, "对方返回 HTTP ${response.status}")
     }
     val decoded = runCatching { SyncEnvelope.decode(response.body) }
       .getOrElse { throw SyncTransportException(SyncFailureReason.PROTOCOL, "响应无法解析") }
