@@ -238,6 +238,6 @@ class ResilientPlatformRepositoryRetryTest {
     }
 
     assertEquals("superseded", thrown.message)
-    assertEquals("a cancelled request is not retried either", 1, calls)
+    assertEquals(1, calls, "a cancelled request is not retried either")
   }
 }
