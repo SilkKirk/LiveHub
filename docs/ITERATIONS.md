@@ -3440,3 +3440,83 @@ README 去掉"按名字/标题过滤"。
 6. README 三处与代码相反（功能表「离开同步页即停止服务」早在第 87 轮反转、签名说明、
    workflow 列表缺 `release.yml`）。
 
+
+---
+
+## 第一百一十轮迭代：英文异常泄漏、读屏重复、README 三处与代码相反
+
+第一百零九轮清单里挑出的三条低风险项，共同点是「代码/文档说的话与事实不符」。这一轮
+没有新增 UI，64 张截图与上一轮**逐字节相同**——这本身就是改动范围的证据。
+
+### 缺陷是什么
+
+1. **JDK 的英文异常会被原样显示在界面上**。`Crypto.urlDecodeOnce` 的注释写着
+   「invalid escapes are kept verbatim rather than throwing」，代码却是裸的
+   `URLDecoder.decode`。参考项目（`HuyaStreamUrlResolverAndroid.urlDecodeOnce`）确实是
+   `runCatching{}.getOrDefault(s)` —— 我们照抄了注释，没照抄行为。后果不是理论上的：
+   `URLDecoder` 对「`%` 后面不是两位十六进制」抛 `IllegalArgumentException`，它**不是**
+   `PlatformException`，于是没有任何一层给它归类：从 `HuyaSigner` 逃出去、穿过重试策略
+   （未知异常视为不可重试）、到 `MainViewModel` 的 catch，而那里把 `error.message` 原样显示。
+2. **读屏把名字念两遍**（两处，各一行）。设置页与同步页早就因为 `ListItem` 会合并子节点
+   而不给图标写 `contentDescription`，但全 app 最高频的两个控件没跟上：
+   底栏五个 tab（图标与 label 同文，念成「首页，首页，已选择」）、每张房间卡（封面
+   `contentDescription = 标题`，而标题 `Text` 就在同一个 `combinedClickable` 合并节点里）。
+3. **README 三处与代码相反**：功能表「离开同步页即停止服务」（第 87 轮已反转）、workflow
+   列表漏了 `release.yml`、「否则 release 变体不签名」（实际回落到 debug 密钥）。
+
+### 怎么修的
+
+- `urlDecodeOnce` 改为 `runCatching { … }.getOrDefault(value)`，并把 KDoc 写成真实理由：
+  保留原串是把签名降级成「算错」而不是「说不清」，与参考实现一致。
+- 两处 `contentDescription = null`，各写清为什么（合并节点 + 相邻文本已有同名字）。
+- README 三处按实际行为改写。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `CryptoUrlDecodeTest` 5 条、`AccessibilityNamingTest` 3 条） |
+| 仪器测试 | ✅ **64 张截图与上一轮逐字节相同**（本轮只有语义与异常类型的改动） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `5355a00` 三个 job 全绿 |
+
+`CryptoUrlDecodeTest` 的断言值不是凭记忆写的：本机有 JDK，直接跑了 `URLDecoder.decode`
+确认这五个输入的真实行为——`%zz` / `100%` / `stream%2` 三者都抛
+`IllegalArgumentException`，异常原文就是
+`URLDecoder: Illegal hex characters in escape (%) pattern - not a hexadecimal digit: "z" = 122`，
+即那句话本来会出现在中文界面上。`a+b` 会被解成 `a b`（URLDecoder 的表单语义，不是 URI 语义），
+也一并钉住。
+
+`AccessibilityNamingTest` 的断言是「**没有任何**节点把这段文字当描述」，因为缺陷是**重复命名**：
+两种实现里都有一个名字正确的节点，只有数描述才看得出差别。另加一条反向守卫——关注星必须
+保留描述，它是那个控件唯一的名字来源。
+
+### 踩的坑
+
+- **我又照单全收了审计的一条结论**：审计说「release workflow 会拒绝发布 debug 签名的包」，
+  我照着写进 README，读 `release.yml` 才发现那句判断只在 `variant == release` 时生效，
+  而没有签名 secrets 时 workflow 走的是 `assembleDebug`（`.debug` 后缀、独立包名），
+  根本不进那个分支。已按实际行为改写。
+  第一百零九轮也踩过同一类（`loadSubCategories` 的「chip 行会闪」）。**教训固化下来**：
+  审计给出的「用户可见后果」必须自己走一遍代码路径再写进记录，否则文档里会留下不存在的缺陷。
+- 本轮有一次 CI 报 `Instrumented tests: cancelled`，那是我在前一次运行未结束时又推了一个
+  提交，`concurrency: cancel-in-progress` 的正常行为。判断依据仍是 `runs` 列表里同一 sha
+  是否被后续 push 取代——不是失败。
+
+### 留下的（下一轮候选，按价值排）
+
+1. **四平台错误语义收口**（本轮只做了最表层的 `urlDecodeOnce`）：`PlatformException.kind`
+   仍无人读取，`DouyuParser` 的两处 `IllegalArgumentException` 仍未被归类，`isRetryable`
+   还是 instanceof 链而不是按 `kind` 判定。
+2. **Android 17（targetSdk 37）的 `ACCESS_LOCAL_NETWORK`**：需要先用官方文档核实。
+3. **主线程阻塞**：`LiveHubApplication.onCreate` 的 `runBlocking`、`MainViewModel.unpair`
+   的三次阻塞往返、`refreshPeers`、二维码 512×512 渲染。
+4. **大屏/大字号盲区**：2.0× 下 `SpecialFollowRow` 的 86dp 槽位会裁掉名字、
+   `MatchingCodeDialog` 的 280dp 固定列会超出窗口且不滚；截图只到 1.5×。
+5. 死代码与未用依赖（`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`）。
+6. 发布工程质量：`mapping.txt` 从未归档（线上的 R8 崩溃无法还原）、`release.yml` 不跑
+   lint/test、tag 发布没有质量门。
+
