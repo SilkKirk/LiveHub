@@ -170,6 +170,24 @@ class ResilientPlatformRepositoryRetryTest {
   }
 
   /**
+   * A message the app wrote survives; a library's does not.
+   *
+   * The tell is the language, because everything this project says to a user is Chinese while a JDK
+   * or OkHttp exception is not. This is what keeps an adapter's specific wording ("网络断了") on
+   * screen while replacing `URLDecoder: Illegal hex characters …` with something a user can act on.
+   */
+  @Test
+  fun `a Chinese message from the app is kept`() {
+    val thrown = assertThrows(PlatformProtocolException::class.java) {
+      runBlocking {
+        repository().withRetry<Unit> { throw IllegalStateException("网络断了，请重试") }
+      }
+    }
+
+    assertEquals("网络断了，请重试", thrown.message)
+  }
+
+  /**
    * A 4xx is **not** reported as a network failure, even though it arrives as an `IOException`.
    *
    * `NetworkException` extends `IOException`, so a "wrap every IOException as 网络连接失败" rule would

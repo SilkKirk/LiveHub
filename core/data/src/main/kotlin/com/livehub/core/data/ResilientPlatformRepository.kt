@@ -130,8 +130,8 @@ class ResilientPlatformRepository(
    *  * **an HTTP status is not that.** `NetworkException` extends `IOException`, and calling a 403
    *    "网络连接失败" would send the user to check their Wi-Fi over an expired signature;
    *  * anything else becomes [PlatformProtocolException]: the platform answered something this build
-   *    cannot read. Its own message is deliberately *not* reused — a library's exception text is
-   *    English and describes the library, not the user's situation.
+   *    cannot read. An adapted message that is already Chinese is kept (see [userFacingText]) —
+   *    a library's is not, because English text describing a library tells the user nothing.
    */
   private fun classified(error: Throwable): Throwable = when {
     error is PlatformException -> error
@@ -143,11 +143,22 @@ class ResilientPlatformRepository(
       PlatformProtocolException("平台返回了 HTTP ${error.code}，请稍后重试", platform = null, cause = error)
     error is java.io.IOException -> PlatformNetworkException(cause = error)
     else -> PlatformProtocolException(
-      "平台返回了无法处理的数据，请稍后重试",
+      userFacingText(error) ?: "平台返回了无法处理的数据，请稍后重试",
       platform = null,
       cause = error,
     )
   }
+
+  /**
+   * The exception's own message when the app wrote it, or `null` when a library did.
+   *
+   * Chinese is the tell. Everything this project says to a user is Chinese; everything a JDK or
+   * OkHttp says is English (`not a JSON object`, `Failed to connect to /…`). Keeping the former
+   * preserves an adapter's specific wording; dropping the latter is the whole point, since the UI
+   * renders `error.message` verbatim.
+   */
+  private fun userFacingText(error: Throwable): String? =
+    error.message?.takeIf { text -> text.any { it in '\u4e00'..'\u9fff' } }
 
   /** Wrapper so a null result can be cached as well. */
   data class StreamerSnapshot(val value: Streamer?)
