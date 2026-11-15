@@ -24,8 +24,27 @@ class SyncEngine(
   private val clock: () -> Long = System::currentTimeMillis,
   private val idGenerator: () -> String = { UUID.randomUUID().toString() },
 ) {
-  /** Local physical/counter state, persisted implicitly through record timestamps. */
+  /**
+   * Local physical/counter state, persisted implicitly through record timestamps.
+   *
+   * Never read or written outside [stateLock]. `@Volatile` alone would make each access atomic and
+   * still leave the *pair* of them racing: [nextHlc] and [observeRemote] are both read-modify-write
+   * over this one field, and they are called from three kinds of thread — the UI (every follow,
+   * unfollow and reorder), `FollowRefreshWorker`'s worker thread, and the sync server's connection
+   * threads (`applyPayload` → [observeRemote]). Two concurrent calls could therefore hand out the
+   * same timestamp, and a merge computed from a stale base could move the clock **backwards**, after
+   * which a local edit carries an older clock than the record it is meant to replace and silently
+   * loses every merge. That is the "I changed it on the phone and the sync did nothing" report.
+   */
   @Volatile private var lastHlc: Hlc = Hlc.ZERO
+
+  /**
+   * Guards [lastHlc] and the [log].
+   *
+   * One lock for both, because they are only ever touched together (a mutation stamps the clock and
+   * appends a line) and because two locks would need a documented order for no benefit.
+   */
+  private val stateLock = Any()
 
   /**
    * Counter behind [SyncPayload.sequence], the peer's replay guard.
@@ -43,19 +62,33 @@ class SyncEngine(
 
   val deviceName: String get() = deviceNameProvider()
 
-  /** Records observed by this device, newest last. */
-  fun logEntries(): List<SyncLogEntry> = log.toList()
+  /**
+   * Records observed by this device, newest last.
+   *
+   * Copied under [stateLock]. Without it this iterated an `ArrayList` that a server thread was
+   * prepending to at the same time, which is not merely stale — `toList()` walks the backing array
+   * while `add(0, …)` shifts it, so the reader could throw `IndexOutOfBoundsException` out of the
+   * sync screen's render path.
+   */
+  fun logEntries(): List<SyncLogEntry> = synchronized(stateLock) { log.toList() }
 
   /** Advances the clock and returns the timestamp for a local mutation. */
-  fun nextHlc(): Hlc {
+  fun nextHlc(): Hlc = synchronized(stateLock) {
     val next = lastHlc.tick(clock())
     lastHlc = next
-    return next
+    next
   }
 
-  /** Converts a remote clock into the local one so causality is preserved. */
+  /**
+   * Converts a remote clock into the local one so causality is preserved.
+   *
+   * Under [stateLock] for the same reason as [nextHlc]: `merge` reads the current clock and writes
+   * a new one, so an unguarded pair of calls can move the local clock backwards — a remote clock
+   * observed on a server thread can be overwritten by a local tick that read the state before it
+   * landed, and every later local mutation then carries a stale timestamp.
+   */
   fun observeRemote(remote: Hlc) {
-    lastHlc = lastHlc.merge(remote, clock())
+    synchronized(stateLock) { lastHlc = lastHlc.merge(remote, clock()) }
   }
 
   /**
@@ -364,7 +397,7 @@ class SyncEngine(
   fun enabledScopes(): Set<SyncScope> = targets.enabledScopes()
 
   private fun record(entry: SyncLogEntry) {
-    synchronized(log) {
+    synchronized(stateLock) {
       log.add(0, entry)
       while (log.size > MAX_LOG_ENTRIES) log.removeAt(log.lastIndex)
     }
