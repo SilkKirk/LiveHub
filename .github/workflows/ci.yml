@@ -58,6 +58,14 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
+      # Runs before anything expensive, and before the compiler can hide the problem: the two
+      # assertion APIs in this repository take their message argument in opposite positions, and a
+      # misordered `assertEquals("msg", 1, count)` compiles in a Jupiter file and only fails at run
+      # time — as an assertion failure that reads like a real regression. Four separate pushes were
+      # spent learning that, so it is now a gate instead of a habit.
+      - name: Assertion argument order
+        run: python3 .github/scripts/check_assert_order.py
+
       - name: Static checks
         run: |
           set -o pipefail
