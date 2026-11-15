@@ -149,9 +149,9 @@ class ResilientPlatformRepositoryRetryTest {
     assertEquals(PlatformException.Kind.NETWORK, thrown.kind)
     assertEquals("网络连接失败，请检查网络后重试", thrown.message)
     assertEquals(
-      "the original failure has to stay reachable for debugging",
       "Failed to connect to /151.101.1.6:443",
       thrown.cause?.message,
+      "the original failure has to stay reachable for debugging",
     )
   }
 
