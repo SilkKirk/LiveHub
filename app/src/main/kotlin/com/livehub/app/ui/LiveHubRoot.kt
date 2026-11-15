@@ -406,7 +406,11 @@ private fun AppBottomBar(state: UiState, onAction: (UiAction) -> Unit) {
             icon = {
               Icon(
                 imageVector = if (selected) dock.icon else dock.restIcon,
-                contentDescription = dock.label,
+                // No description: `NavigationBarItem` merges the icon and the label into one node,
+                // so giving the icon the same string the `Text` below already carries made every
+                // tab announce itself twice ("首页，首页，已选择"). The label names the tab; the
+                // glyph is decoration, exactly as the leading icons on 设置 and 同步 are.
+                contentDescription = null,
                 modifier = Modifier.size(22.dp),
               )
             },

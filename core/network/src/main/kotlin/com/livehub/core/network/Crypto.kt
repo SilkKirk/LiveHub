@@ -39,8 +39,21 @@ object Crypto {
 
   fun base64Encode(bytes: ByteArray): String = java.util.Base64.getEncoder().encodeToString(bytes)
 
-  /** Percent-decodes once; invalid escapes are kept verbatim rather than throwing. */
-  fun urlDecodeOnce(value: String): String = java.net.URLDecoder.decode(value, "UTF-8")
+  /**
+   * Percent-decodes once, keeping an invalid escape verbatim instead of throwing.
+   *
+   * The previous shape was a bare `URLDecoder.decode`, which throws `IllegalArgumentException` for a
+   * `%` not followed by two hex digits — and the value comes from a query string a platform built,
+   * so a stray `%` in a stream name is not hypothetical. That exception is not a `PlatformException`,
+   * so nothing classified it: it travelled out of `HuyaSigner`, past the retry policy (which treats
+   * an unknown exception as final) and into `MainViewModel`, where `error.message` is rendered as-is
+   * — putting a JDK sentence like "Illegal hex characters in escape (%) pattern" on a Chinese
+   * screen. Keeping the segment unchanged degrades the signature to "wrong" instead of
+   * "unexplainable", and it is exactly what the reference implementation does
+   * (`HuyaStreamUrlResolverAndroid.urlDecodeOnce`).
+   */
+  fun urlDecodeOnce(value: String): String =
+    runCatching { java.net.URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
 
   /**
    * Encodes a query component the way the Bilibili WBI signature expects:

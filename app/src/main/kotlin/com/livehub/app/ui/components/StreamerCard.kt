@@ -423,7 +423,12 @@ private fun CoverImage(streamer: Streamer) {
   } else {
     AsyncImage(
       model = streamer.coverUrl,
-      contentDescription = streamer.title,
+      // Decorative, and deliberately so. It used to be `streamer.title`, which is the same string
+      // the title `Text` below already carries — and the card is one merged semantics node
+      // (`combinedClickable` merges descendants), so a screen reader announced every card's title
+      // twice before reaching the streamer's name. The same reasoning the settings and sync rows
+      // follow for their leading icons: a glyph that repeats the adjacent text says nothing.
+      contentDescription = null,
       contentScale = ContentScale.Crop,
       modifier = Modifier
         .fillMaxSize()
