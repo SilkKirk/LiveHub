@@ -3294,3 +3294,149 @@ README 去掉"按名字/标题过滤"。
 
 最终 CI：`f9e206e`（主体）与 `f01743b`（取消语义 + 测试）两次三个 job 全绿。
 
+
+---
+
+## 第一百零九轮迭代：并发写与共享可变状态（审计清单的前三条）
+
+第一百零八轮留下的清单里，前三条都属于同一类：状态被多条线程读写，但只有一半被保护。
+这一轮把三条都做掉，每条都配了能**区分新旧实现**的测试——这是本轮最花时间的部分。
+
+### 缺陷是什么
+
+1. **`UserPreferences.update` 的读-改-写不是原子的**。它只在单线程队列里落盘，也就是说
+   保证的是「写盘顺序」，从未保证「读-改-写是一步」。两个调用方读到同一份底稿、各自算出
+   整条记录、后发布的那份把前一份的字段冲掉，内存与磁盘一起丢。两条并发路径都在生产上
+   真实可达：UI 线程（星标、四个弹幕滑块）与同步服务端的连接线程
+   （`FollowRecordSet.persist`、`CredentialStore.persist` 都在 `SyncEngine.applyPayload`
+   里）。用户在交换进行中点一次关注，就可能被交换抹掉，没有任何报错。
+   `UserSettings` 是一条扁平记录，所以「丢一个字段」等于「丢一次操作」。
+2. **`selfSecret` 的 TOCTOU**。旧写法把候选值生成在「读空 → 发布」之间，并且
+   `return generated` 返回的是**本地候选**而不是落库值。两个调用方重叠时各自把自己的值
+   交给对端、只有一个落盘，对端此后每次请求都是 403「未配对」，除了重新配对无解。
+   调用点有四个：`/pair` 处理器（服务端连接线程）、transport 构造、`pairByCode`、扫网段。
+3. **`SyncEngine` 的 `lastHlc` 与日志表没有锁**。`sequence` 的注释特意写了「服务端线程与
+   客户端线程会同时访问它，所以用原子类型」——作者知道这里有跨线程访问，但另外两个字段
+   没跟上。后果：两个并发 `nextHlc` 会发出同一个时间戳；更糟的是 `observeRemote` 与
+   `nextHlc` 交错时，从旧底稿算出的结果会把时钟写**回退**，此后本机编辑带着比它要覆盖的
+   记录更旧的时钟、合并时永远输，用户看到「我在手机上改了，同步过去没生效」。
+   `logEntries()` 则在 `ArrayList` 一边 `add(0, …)` 一边 `toList()`，可能把
+   `IndexOutOfBoundsException` 抛进同步页的渲染路径。
+4. **拒收的 payload 被当成送达**。`SyncController.onPush` 丢弃
+   `applyPayload(...)` 的返回值，`handlePush` 只 catch `ScopeDisabledException` 后一律回
+   200。发送方因此记一条 success 并走到 `confirmPeer`，把对端水位抬到「本机最高 HLC」，
+   随后 `SyncMerge.prune` 按这个水位丢掉墓碑——而墓碑是「删除」唯一的存在形式，它被丢掉
+   之后，对端下一次 pull 回那些旧 live 记录，已取消的关注、已退出的登录就复活了。
+   触发点是**两端版本不同**：`applyPayload` 在 `payload.schema > SCHEMA` 时拒绝，而这正是
+   `SyncPayload.SCHEMA` 存在的理由。
+
+### 怎么修的
+
+- `UserPreferences.update` 把 transform + 发布 + 入队收进一把 `updateLock`；锁内入队保证
+  队列顺序等于 transform 的应用顺序。两把「锁」职责不同且都需要：这把保证一次更新的
+  原子性，`writeScope` 保证写盘顺序。
+- 新增 `UserPreferences.selfSecretOrGenerate`：transform 不覆盖已有值，并**回读落库值**
+  作为返回值。规则放在存储旁边而不是 `SyncController` 里，既好测也避免下一个人再写一遍。
+  顺带修正 `SyncController` 那句「由 device id 派生」的过时注释（实际是随机 UUID），以及
+  `UserPreferences` 类文档里「`saveTrustedPeers` 的调用方都在后台线程」的错误断言——
+  `MainViewModel.unpair` 就在主线程，改为如实记录为已知成本。
+- `SyncEngine` 用一把 `stateLock` 同时守 `lastHlc` 与 `log`（它们总是一起被动到），并把
+  `record()` 从 `synchronized(log)` 改成同一把锁——**不能出现两把锁守同一份数据**，这是我
+  改到一半自己引入又抓回来的问题。
+- 新增 `PayloadRejectedException`，与 `ScopeDisabledException` 并列但语义相反：后者是
+  「设置关着，什么都没发生，跳过」，前者是「我读懂了但存不下，算这次范围失败」。
+  `handlePush` 捕获它并回 **409 Conflict**（不是 403：403 是配对失效，两件事该有不同文案），
+  理由放进信封；客户端对非 2xx 原本只报「对方返回 HTTP 409」，改成优先采用信封里的理由，
+  用户才看得到「对端版本过新 (schema=3)」这种能行动的信息。
+
+### 测试怎么写才不是自欺
+
+三条都涉及线程，而「写一个并发测试」最容易变成写一个**永远为真**的测试。做法统一为：
+把注入点（`clock` 是构造参数，`transform`/`generate` 是 lambda）当作窗口撑开器，
+让 race 成为常态而不是运气。
+
+- `UserPreferencesConcurrencyTest`：8 个线程各写一个不同字段，transform 内 sleep 1ms。
+  Python 等价模型确认：旧形状 **0/30** 次全部存活，新形状 **30/30**。
+- `selfSecret` 那条更微妙。第一版模型把新旧都写成「读回落库值」，于是 0/200 vs 0/200——
+  **两边都没问题，说明模型没测到缺陷**。真实旧代码返回的是本地候选（`return generated`），
+  而候选是在「读空→发布」之间生成的。把 `generate` 里的窗口建模进去之后：旧
+  **100/100** 会出现「对端持有本机从未存储的密钥」，新 **0/100**。测试里因此把
+  `Thread.sleep(1)` 放进了 generator——它在旧形状里位于窗口中间，在新形状里位于锁内，
+  所以只会串行化而不会死锁。
+- `SyncEngineConcurrencyTest`：同一个思路，用「慢时钟」把 `nextHlc` 的读-改-写窗口撑开。
+  三条用例：时间戳全不相同、远端时钟不会被并发本地 tick 抹掉、日志在写入中保持有界可读。
+  第三条在 KDoc 里**如实标注为 smoke test**：未加锁的 `ArrayList` 复制通常是读到错位元素
+  而不是抛异常，所以它证明不了锁的必要性——宁可写清楚，也不要让它冒充回归守卫。
+- `SyncHttpServerTest` 两条：服务端对拒收回 409 且不落库；真实 transport 把拒收回成
+  `PROTOCOL` 失败并带上原始理由（这正是 `confirmPeer` 不被执行的前提）。
+  `SyncCoordinator` 那侧「失败的交换不确认任何水位」原本就有测试，未改。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `UserPreferencesConcurrencyTest` 3 条、`SyncEngineConcurrencyTest` 3 条、`SyncHttpServerTest` +2 条） |
+| 仪器测试 | ✅ 64 张截图未变（本轮无 UI 改动） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `6011315`、`b9f5582`、`1f980db` 三次三个 job 全绿 |
+
+### 补充：四处小的正确性修（同一批审计）
+
+同一次审计还捞出四条便宜且明确的，一并做掉：
+
+1. **`FollowRefreshWorker` 吞掉 `CancellationException`**（有真实后果）。`runCatching { liveStatus(…) }.getOrNull()`
+   把「这个 worker 被 WorkManager 取消了」变成「这个房间失败」，于是一次被取消的运行会**继续**
+   把关注列表逐个走完、每个都发一次网络请求，最后还返回 `Result.retry()`。改成重抛。
+2. **`syncNow` 没有单飞守卫**（结构事实）。`syncing` 是 UI 的真相并且它是在协程**内部**置位的，
+   所以它挡不住入口：按钮与前台自动同步是两个调用方，第二个在第一个置位之前就通过了检查。
+   两次交换会共享同一个 `SyncEngine` 与单连接的 HTTP 服务端，互相排队到 socket 超时；先结束
+   的那次会把 `syncing` 清掉，按钮在一次仍在进行的交换之上重新变亮。新增 `syncInFlight`
+   在调用方线程同步置位（所有调用方都在主线程），`syncing` 仍负责渲染。`finally` 里
+   **先释放守卫再清 `syncing`**——反过来会留下「界面说完成了、却仍然拒绝启动」的窗口。
+3. **同步页首帧把 `…:0` 当地址显示**。`SyncController.serverAddress` 自己的 KDoc 写明
+   「只有 bind 落地之后才有意义」，而 `enterSyncScreen` 是在发起异步 bind 的下一行就读它，
+   此时端口字段还是初值 0，于是页面先把「192.168.1.23:0」画出来，再被续体替换。新增
+   `addressIfListening()` 用 `isRunning` 守卫；`refreshPeers` 同一处读法一并改掉。
+   `SyncServerLifecycleTest` 新增一条：`onAction` 之后**不排空 looper**直接断言
+   `localAddress` 不以 `:0` 结尾——那正是页面会画的那一帧。
+4. **`loadSubCategories` 仍用 `runCatching{}.getOrDefault()`**，与其余十三处不一致。改掉，
+   但**要更正审计给出的理由**：它说「同名分类点两次会让三级 chip 行闪一下」，实际上
+   `selectCategory` 本来就会同步把 `subCategories` 清空，而 key 守卫又挡住跨分类写入，
+   所以吞掉取消在**当前行为下没有可见后果**——是两个机制在无意中掩盖了它。这条因此记为
+   一致性修，不是缺陷修，也没有配测试（无法构造出可区分的断言）。
+
+顺带更正同一处文档错误：`UserPreferences` 的类 KDoc 原本断言「`saveTrustedPeers` 与
+`savePeerAddresses` 的调用方都在后台 dispatcher」，而 `MainViewModel.unpair` 就在主线程
+（一次点击里三次阻塞往返）。已改为如实记录为已知成本，并写清修法方向。
+
+### 踩的坑
+
+- **推送通道**：这一轮 HTTPS 直连又断了两次（`curl 28` 超时、随后 `Recv failure: Connection
+  reset`），而同一条链路用 `Invoke-WebRequest` 是 200，代理端口 31181 也已经不在了。
+  按第六十一轮的记录直接走 SSH（`git push git@github.com:SilkKirk/LiveHub.git main`），
+  一次成功。**不要再在这上面反复换 `sslBackend`**——手册里那条结论仍然成立。
+- `Edit` 落完后 `SyncHttpServer.kt` 多了一个行尾空行（原文件是单换行结尾），已修掉。
+  这类「编辑工具引入的格式漂移」不会让编译失败，但会让 diff 噪声变大。
+- **我把审计的一条结论照单全收了**：`loadSubCategories` 那条「chip 行会闪一下」听起来合理，
+  读 `selectCategory` 才发现它本来就会同步清空。教训是审计报告里的「用户可见后果」也要
+  自己走一遍代码路径，否则记录里会留下一个不存在的缺陷。
+
+### 留下的（下一轮候选，按价值排）
+
+1. **四平台错误语义不统一**：`PlatformException.kind` 定义了但全仓零读取，UI 与重试只看
+   `error.message`；`DouyuParser` 还有 `IllegalArgumentException` 逃出适配器，界面上会出现
+   英文 Java 异常。一次把 `kind` 变成真契约、`isRetryable` 与 UI 都按它判定。
+2. **Android 17（targetSdk 37）的 `ACCESS_LOCAL_NETWORK`** 既没声明也没运行时请求。需要先
+   用官方文档核实（本机抓取失败），再决定是否加声明与运行时请求。
+3. **主线程上的阻塞磁盘操作**：`LiveHubApplication.onCreate` 的 `runBlocking` 设置读取、
+   `MainViewModel.unpair` 的三次阻塞往返、`refreshPeers` 的 `trustedPeers()`、
+   二维码渲染的 512×512 逐像素循环。
+4. 发提示更值一提的一条：**发现无设备时的文案**已在本轮改掉（原文让用户「手动填写对方
+   地址」，界面上没有这个入口）。
+5. 死代码与未用依赖清单（`DouyinCategories`、`BilibiliCategories.HOT_ID`、
+   `RecordCollections`、`parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili`
+   的 zxing、`:app` 的两个 `lifecycle-*-compose`）。
+6. README 三处与代码相反（功能表「离开同步页即停止服务」早在第 87 轮反转、签名说明、
+   workflow 列表缺 `release.yml`）。
+
