@@ -3710,3 +3710,87 @@ README 去掉"按名字/标题过滤"。
    `:app` 的两个 `lifecycle-*-compose`）。
 6. 发布工程质量：`mapping.txt` 从未归档、`release.yml` 不跑 lint/test、截图可静默丢失。
 
+
+---
+
+## 第一百一十三轮迭代：抖音的网络失败不再被报成「该直播间可能未开播」
+
+第一百一十二轮清单第 2 条。这是审计报告里唯一一条「用户会照着错误提示去查错东西」的缺陷。
+
+### 缺陷是什么
+
+`DouyinApi.enterRoom` 把 HTTP 调用包在 `runCatching { … }.getOrNull()` 里，而**空 body 正是
+这个接口表示「cookie 过期」的信号**。两个完全不同的原因塌成同一个值：
+
+- 网络断了 → `Result.failure` → `getOrNull()` = null → `.orEmpty()` = `""` → 走「cookie 过期」
+  的补救（再发一次，同样失败）→ body 仍是空 → 解析失败 → `root = null` → 最终 `return null`；
+- `roomInfo` 把 null 翻译成 `PlatformProtocolException("抖音直播间信息获取失败，该直播间可能
+  未开播")` → 播放页对着一台没有网络的手机说「主播没开播」。
+
+同一个 `runCatching` 还吞掉了另外两种形状，也一并变成「可能未开播」：
+
+- 根本不是 JSON 的答复（WAF 挑战页、强制门户）；
+- 任何不是「查无此房」的非零 `status_code`——登录墙、风控、参数错，全都被说成主播没开播。
+
+### 怎么修的
+
+1. **`request()` 改为抛，不再返回 `Result`**。重试那段只针对「空答复」，不针对「请求失败」
+   ——这个区别就是这次修改的全部要点，KDoc 里写清了。
+2. **body 解析不再包 `runCatching`**：读不懂的答复抛 `PlatformProtocolException`。房间不存在
+   的信号是结构良好的 JSON 里的 `status_code = 4001038`，不是「解析不出来」。
+3. **`status_code` 分两类**：新增具名常量 `STATUS_ROOM_NOT_FOUND = 4001038`，它仍返回 null
+   （搜索据此说「没有找到」）；其余非零抛
+   `PlatformProtocolException("抖音拒绝了这次房间请求 (status=2483)")`。
+
+### 一处会让上面全部失效的地方
+
+改完 `DouyinApi` 才发现：**四个适配器的 `roomDetail` 都把任何 `Exception`（含 `IOException`）
+包成 `PlatformProtocolException("X房间信息获取失败: ${error.message}")`**。两层后果：
+
+- 界面上是「抖音房间信息获取失败: Failed to connect to /1.2.3.4:443」——中文前缀 + 英文尾巴，
+  正是上一轮刚清掉的那类文本；
+- 而且它把网络故障标成 `Kind.PROTOCOL`，于是**从不重试**（`isRetryable` 只对 NETWORK 与
+  IO 放行）。
+
+四个平台各加一条 `IOException` 分支原样重抛，交给 `ResilientPlatformRepository` 归成可重试
+的 `PlatformNetworkException`。这是「四平台错误语义一致」的第一块实际落地。
+
+顺带记一笔：`roomDetail` 在生产代码里**没有调用方**（ViewModel 用的是 `playback`，后者自带
+房间信息）。所以这条修复今天是防御性的——但它正是审计里「同一件事四种表达」的典型样本，
+且一旦接上就会立刻生效。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `DouyinRoomErrorTest` 4 条） |
+| 仪器测试 | ✅ 64 张截图全部重新渲染成功 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `ebf06a3` 三个 job 全绿，**首次推送即绿** |
+
+新增的四条：
+- 传输失败不是「未开播」——断言抛 `IOException`，且消息里**没有**「未开播」字样；
+- 非 JSON 答复是 `PlatformProtocolException`（`Kind.PROTOCOL`）；
+- 非 4001038 的拒绝要**带上状态码**（`2483` 出现在消息里）；
+- 4001038 仍然是「没有找到」（通过 `search` 断言，因为 null 的契约在那里）。
+
+**首次即绿**值得一提：上一轮把断言参数顺序做成了 CI 守卫，这一轮我在推送前先跑
+`python .github/scripts/check_assert_order.py`，它在我手上拦下了一次（新测试文件同样是
+JUnit5）。前四轮我为这个错误花了四次 CI 周期，这一轮为零。
+
+### 留下的（下一轮候选，按价值排）
+
+1. **其余适配器的消息拼接**：`DouyuAdapter`/`HuyaAdapter`/`BilibiliAdapter` 的
+   `roomDetail` 之外的 catch 仍会把 `error.message` 拼进中文句子；`BilibiliAdapter` 的弹幕
+   失败分支同样是「中文前缀 + 英文尾巴」。逐个审一遍是一轮的量。
+2. **`DouyinApi.cookieHeader()` 的协商仍是 `runCatching`**：那一处是合理的（拿不到就回退到
+   `FALLBACK_COOKIE`，请求总要有 cookie），但它同样吞掉取消——与「取消不是失败」的规则不一致。
+3. **Android 17（targetSdk 37）的 `ACCESS_LOCAL_NETWORK`**：需要先用官方文档核实。
+4. **大屏/大字号盲区**：2.0× 下 `SpecialFollowRow` 的 86dp 槽位会裁掉名字、
+   `MatchingCodeDialog` 的 280dp 固定列会超出窗口且不滚；截图只到 1.5×。
+5. 死代码与未用依赖（`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`）。
+6. 发布工程质量：`mapping.txt` 从未归档、`release.yml` 不跑 lint/test、截图可静默丢失。
+
