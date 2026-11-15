@@ -91,7 +91,15 @@ sealed interface DanmakuEvent {
   data class Failed(val error: PlatformException) : DanmakuEvent
 }
 
-/** Typed failure raised by platform adapters. */
+/**
+ * Typed failure raised by platform adapters.
+ *
+ * [kind] exists so that policy — "may this be retried", "what should the screen say" — is decided
+ * by *what went wrong* rather than by matching the message text or by `is`-chains at each call site.
+ * It was declared and then never read anywhere, which is why three different platform failures were
+ * reported as four different things with no way to tell them apart. `ResilientPlatformRepository`
+ * and the UI now branch on it.
+ */
 open class PlatformException(
   message: String,
   val platform: Platform? = null,
@@ -103,11 +111,36 @@ open class PlatformException(
       is PlatformNotFoundException -> Kind.NOT_FOUND
       is PlatformAuthRequiredException -> Kind.AUTH_REQUIRED
       is PlatformProtocolException -> Kind.PROTOCOL
+      is PlatformNetworkException -> Kind.NETWORK
       else -> Kind.UNKNOWN
     }
 
-  enum class Kind { OFFLINE, NOT_FOUND, AUTH_REQUIRED, PROTOCOL, UNKNOWN }
+  enum class Kind {
+    /** The room exists but nobody is streaming. Not an error the user can fix by retrying now. */
+    OFFLINE,
+    NOT_FOUND,
+    AUTH_REQUIRED,
+
+    /**
+     * The request never produced a usable answer: connection refused, DNS, TLS, timeout.
+     *
+     * Apart from the others because it is the only one worth retrying immediately, and because the
+     * message has to be about the network rather than about the room.
+     */
+    NETWORK,
+
+    /** The platform answered something this app cannot read. Report it; retrying will not help. */
+    PROTOCOL,
+    UNKNOWN,
+  }
 }
+
+/** The request never reached a usable answer: connection, DNS, TLS or timeout. */
+class PlatformNetworkException(
+  message: String = "网络连接失败，请检查网络后重试",
+  platform: Platform? = null,
+  cause: Throwable? = null,
+) : PlatformException(message, platform, cause)
 
 /** The room exists but the broadcaster is not streaming. */
 class PlatformOfflineException(

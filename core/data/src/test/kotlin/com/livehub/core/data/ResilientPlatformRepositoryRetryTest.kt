@@ -2,8 +2,11 @@ package com.livehub.core.data
 
 import com.livehub.core.common.BackoffPolicy
 import com.livehub.core.network.NetworkException
+import com.livehub.platform.api.PlatformException
+import com.livehub.platform.api.PlatformNetworkException
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -113,7 +116,7 @@ class ResilientPlatformRepositoryRetryTest {
   fun `the last allowed attempt rethrows instead of looping`() {
     var calls = 0
 
-    val thrown = assertThrows(IOException::class.java) {
+    val thrown = assertThrows(PlatformNetworkException::class.java) {
       runBlocking {
         repository().withRetry<Unit> {
           calls++
@@ -123,6 +126,118 @@ class ResilientPlatformRepositoryRetryTest {
     }
 
     assertEquals(ResilientPlatformRepository.MAX_ATTEMPTS, calls)
-    assertEquals("always fails", thrown.message)
+    // The transport's own text is not reused: it names the library, not the user's situation.
+    assertEquals("网络连接失败，请检查网络后重试", thrown.message)
+    assertEquals("always fails", thrown.cause?.message)
+  }
+
+  /**
+   * A transport failure becomes a typed, Chinese failure — and keeps its cause.
+   *
+   * OkHttp's `IOException` message is `Failed to connect to /151.101.1.6:443`, and it used to be
+   * rendered verbatim: every catch site in `MainViewModel` ends with `error.message ?: "…"`, so the
+   * fallback never applied. The same was true of a stray `IllegalArgumentException` from a parser.
+   */
+  @Test
+  fun `an IOException surfaces as a network failure, not as raw library text`() {
+    val thrown = assertThrows(PlatformNetworkException::class.java) {
+      runBlocking {
+        repository().withRetry<Unit> { throw IOException("Failed to connect to /151.101.1.6:443") }
+      }
+    }
+
+    assertEquals(PlatformException.Kind.NETWORK, thrown.kind)
+    assertEquals("网络连接失败，请检查网络后重试", thrown.message)
+    assertEquals(
+      "the original failure has to stay reachable for debugging",
+      "Failed to connect to /151.101.1.6:443",
+      thrown.cause?.message,
+    )
+  }
+
+  /** Anything the adapters did not type becomes a protocol failure, with our own words. */
+  @Test
+  fun `an untyped exception surfaces as a protocol failure`() {
+    val thrown = assertThrows(PlatformProtocolException::class.java) {
+      runBlocking {
+        repository().withRetry<Unit> { throw IllegalArgumentException("not a JSON object") }
+      }
+    }
+
+    assertEquals(PlatformException.Kind.PROTOCOL, thrown.kind)
+    assertEquals("平台返回了无法处理的数据，请稍后重试", thrown.message)
+    assertEquals("not a JSON object", thrown.cause?.message)
+  }
+
+  /**
+   * A 4xx is **not** reported as a network failure, even though it arrives as an `IOException`.
+   *
+   * `NetworkException` extends `IOException`, so a "wrap every IOException as 网络连接失败" rule would
+   * tell the user to check their Wi-Fi over an expired signature. The status is what matters, so it
+   * is named in the message and classified as a protocol failure.
+   */
+  @Test
+  fun `an HTTP status is reported as a status, not as a connection problem`() {
+    val thrown = assertThrows(PlatformProtocolException::class.java) {
+      runBlocking {
+        repository().withRetry<Unit> { throw NetworkException(403, "HTTP 403 for https://x") }
+      }
+    }
+
+    assertEquals(PlatformException.Kind.PROTOCOL, thrown.kind)
+    assertEquals("平台返回了 HTTP 403，请稍后重试", thrown.message)
+  }
+
+  /** An untyped exception is not retried either: retrying cannot make a parser understand it. */
+  @Test
+  fun `an untyped exception is not retried`() {
+    assertEquals(1, attemptsBeforeFailure(IllegalStateException("boom")))
+  }
+
+  /** A `PlatformException` raised on purpose keeps its identity, message and kind. */
+  @Test
+  fun `a platform failure passes through untouched`() {
+    val original = PlatformOfflineException("主播未开播")
+
+    val thrown = assertThrows(PlatformOfflineException::class.java) {
+      runBlocking { repository().withRetry<Unit> { throw original } }
+    }
+
+    assertEquals("主播未开播", thrown.message)
+    assertEquals(PlatformException.Kind.OFFLINE, thrown.kind)
+  }
+
+  /** A typed network failure is retryable, which is the whole reason `Kind.NETWORK` exists. */
+  @Test
+  fun `a network failure is retried`() {
+    assertEquals(
+      ResilientPlatformRepository.MAX_ATTEMPTS,
+      attemptsBeforeFailure(PlatformNetworkException("网络连接失败")),
+    )
+  }
+
+  /**
+   * Cancellation is rethrown as itself, not classified.
+   *
+   * This is the trap in the classification step: `CancellationException` is neither a
+   * `PlatformException` nor an `IOException`, so a "wrap everything else" rule would have turned
+   * every superseded request into a reportable protocol error — exactly the defect round 108 fixed
+   * in `MainViewModel`, reintroduced one layer down.
+   */
+  @Test
+  fun `cancellation is not classified into an error`() {
+    var calls = 0
+
+    val thrown = assertThrows(CancellationException::class.java) {
+      runBlocking {
+        repository().withRetry<Unit> {
+          calls++
+          throw CancellationException("superseded")
+        }
+      }
+    }
+
+    assertEquals("superseded", thrown.message)
+    assertEquals("a cancelled request is not retried either", 1, calls)
   }
 }

@@ -4,6 +4,7 @@ import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import com.livehub.core.network.decodeHtmlEntities
+import com.livehub.platform.api.PlatformProtocolException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -231,8 +232,11 @@ object DouyuParser {
    *    fallback because some rooms only send that one.
    */
   fun betard(root: JsonObject): DouyuRoomInfo {
+    // A typed failure, not `IllegalArgumentException`: the retry policy and the UI branch on
+    // `PlatformException.kind`, and a raw runtime exception fell through both of them — it was
+    // classified as "unknown", never retried, and its message reached the screen unowned.
     val room = root["room"] as? JsonObject
-      ?: throw IllegalArgumentException("betard 响应缺少 room 字段")
+      ?: throw PlatformProtocolException("斗鱼房间信息缺少 room 字段", Platform.DOUYU)
     val roomId = room.string("room_id").orEmpty()
     val showStatus = room["show_status"]?.jsonPrimitive?.intOrNull ?: 0
     val videoLoop = room["videoLoop"]?.jsonPrimitive?.intOrNull ?: 0
@@ -259,10 +263,12 @@ object DouyuParser {
     val error = root["error"]?.jsonPrimitive?.intOrNull ?: 0
     if (error != 0) {
       val msg = root.string("msg").orEmpty()
-      throw IllegalArgumentException("斗鱼播放地址获取失败: $error $msg")
+      // Same reason as [betard]: a typed failure the retry policy and the UI can branch on. The
+      // platform's own message is kept — it is the actionable half of this ("未开播").
+      throw PlatformProtocolException("斗鱼播放地址获取失败: $error $msg", Platform.DOUYU)
     }
     val data = root["data"] as? JsonObject
-      ?: throw IllegalArgumentException("斗鱼播放数据为空")
+      ?: throw PlatformProtocolException("斗鱼播放数据为空", Platform.DOUYU)
     val rtmpUrl = data.string("rtmp_url").orEmpty()
     val rtmpLive = decodeHtmlEntities(data.string("rtmp_live").orEmpty())
     val cdns = (data["cdnsWithName"] as? JsonArray)

@@ -1,5 +1,7 @@
 package com.livehub.platform.douyu
 
+import com.livehub.platform.api.PlatformException
+import com.livehub.platform.api.PlatformProtocolException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -178,7 +180,10 @@ class DouyuParserTest {
 
   @Test
   fun `betard throws when the room payload is missing`() {
-    assertThrows<IllegalArgumentException> { DouyuParser.betard(obj("""{"foo":1}""")) }
+    // A typed failure, not `IllegalArgumentException`: the retry policy and the UI branch on
+    // `PlatformException.kind`, and a bare runtime exception fell through both.
+    val error = assertThrows<PlatformProtocolException> { DouyuParser.betard(obj("""{"foo":1}""")) }
+    assertEquals(PlatformException.Kind.PROTOCOL, error.kind)
   }
 
   @Test
@@ -202,9 +207,12 @@ class DouyuParserTest {
 
   @Test
   fun `play surfaces the platform error`() {
-    assertThrows<IllegalArgumentException> {
+    val error = assertThrows<PlatformProtocolException> {
       DouyuParser.play(obj("""{"error":-5,"msg":"未开播"}"""))
     }
+    // The platform's own words are the actionable half and must survive.
+    assertTrue(error.message!!.contains("未开播"))
+    assertEquals(PlatformException.Kind.PROTOCOL, error.kind)
   }
 
   @Test
