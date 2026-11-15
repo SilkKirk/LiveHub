@@ -3520,3 +3520,91 @@ README 去掉"按名字/标题过滤"。
 6. 发布工程质量：`mapping.txt` 从未归档（线上的 R8 崩溃无法还原）、`release.yml` 不跑
    lint/test、tag 发布没有质量门。
 
+
+---
+
+## 第一百一十一轮迭代：把主线程上的磁盘与 CPU 工作挪走
+
+第一百一十轮清单第 3 条。这一类缺陷没有崩溃、没有错误文案，症状只是「点一下要等一下」，
+所以它活了很久：`trustedPeers()` 从第 60 轮修 `deviceId` 时就被点名过，但当时只修了
+`deviceId`。
+
+### 缺陷是什么
+
+1. **`trustedPeers()` 与 `peerAddresses()` 每次调用都做一次阻塞 DataStore 读**。它们在
+   热路径上：
+   - `SyncEngine` 一次交换里问好几次；
+   - `SyncHttpServer.peerById` 在**每个**已认证请求上问一次（服务端线程，所以不是卡顿，
+     而是每请求一次磁盘往返）；
+   - `PeerAddressBook` 通过 `onChange` 回调重读地址簿；
+   - `MainViewModel.refreshPeers` 在**主线程**上问——每次进同步页、每次配对后、每次解除
+     配对后。主线程这一处是唯一用户可见的。
+2. **`unpair` 在一次点击里做三次阻塞往返**：写 peer 表、写地址簿、再读回来。
+3. **哔哩哔哩二维码在主线程渲染**：`requestQrCode()` 是挂起的，但渲染不是——ZXing 编码之后
+   逐格填 512×512 = 262,144 个 int 并分配 1MB bitmap，全部落在响应点击的那一帧，而卡片此时
+   正显示「正在获取二维码…」。
+
+### 怎么修的
+
+- 两个 peer 读取改成「首次读盘、之后走缓存」，与第 60 轮的 `deviceId` 同一套写法：写入方
+  （`saveTrustedPeers` / `savePeerAddresses`）负责把缓存重新发布，存的是 `toList()` 副本——
+  `SyncEngine` 有 `existing + peer` 这类拼表的习惯，不复制的话调用方一个 `clear()` 就能悄悄
+  改写所有人的视图。
+- `unpair` 整体放进 `Dispatchers.IO`。`_state` 是 `StateFlow`，从后台线程发布是安全的。
+- 二维码渲染改成 `withContext(Dispatchers.Default)`。已核对 `QrCodeRenderer` 只用
+  `Bitmap.createBitmap` / `setPixels` / `asImageBitmap`，没有 Canvas 或 View，可以离开主线程。
+
+### 故意没做的一处（重要）
+
+`LiveHubApplication.onCreate` 里那次 `runBlocking` 读取看起来是同一个问题，但**单独改它是
+错的**：`MainViewModel.init` 里有 `val settings = preferences.settings`，同样是主线程同步读，
+而 Application 那次读正是给它预热缓存的。把 Application 挪到 IO，只会让 ViewModel 变成第一个
+读者、自己在主线程上阻塞，还可能和 IO 线程同时读一次。
+
+所以「启动时读一次盘」是现有设计的显式前提（`UiState` 同步由 `preferences.settings` 构建，
+整个 app 都依赖这一点，KDoc 里写着），要动它得先决定「首帧是否允许依赖设置」。这一条从
+「待修缺陷」改记为「设计问题，需要先做取舍」，写进清单。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `PeerListCacheTest` 5 条；`MainViewModelTest` 的解除配对用例改写） |
+| 仪器测试 | ✅ **64 张截图与上一轮逐字节相同**（只动线程与缓存） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `2c3735c` 三个 job 全绿 |
+
+**顺手修掉一条假测试**：`MainViewModelTest` 里原本唯一一条解除配对的断言叫
+`unpairing an unknown device is harmless`，它从**空的** peer 列表出发，所以无论 `unpair`
+做什么都会通过——包括什么都不做。改成先真的配一台设备、再解除、并断言状态与存储都清空。
+`setUp` 也补了 peer 列表归零：它有自己的 DataStore key，漏掉的话上一个用例留下的设备会让
+下一个用例里 `autoSyncWanted` 意外为真、启动 LAN 服务端。
+
+### 踩的坑
+
+- **这台机器的网络这一轮很不稳**：`ci.py wait` 报了一次 `WinError 10061`（连接被拒），
+  `ci.py shots` 报了一次 `WinError 10054`（连接被重置），`git push` 之前也断过两次。
+  三次都是**工具侧的传输失败，不是 CI 失败**，重试即成功。判断依据是错误出现在
+  `urlopen`/`ConnectionReset` 这一层，而不是 check-run 的结论。
+- `git push` 现在稳定走 SSH（`git push git@github.com:SilkKirk/LiveHub.git main`）。
+  HTTPS 直连在这台机器上时好时坏，而 SSH 一次没失败过。
+
+### 留下的（下一轮候选，按价值排）
+
+1. **四平台错误语义收口**：`PlatformException.kind` 仍无人读取；`DouyuParser` 的两处
+   `IllegalArgumentException` 未归类；`isRetryable` 还是 instanceof 链而不是按 `kind`。
+   这是审计里最系统的一条，也是唯一还需要动 4 个 platform 模块的。
+2. **Android 17（targetSdk 37）的 `ACCESS_LOCAL_NETWORK`**：需要先用官方文档核实，再决定
+   是否加声明与运行时请求。
+3. **启动期设置读取**（见上）：需要先做「首帧是否允许依赖设置」的取舍，不是单点修改。
+4. **大屏/大字号盲区**：2.0× 下 `SpecialFollowRow` 的 86dp 槽位会裁掉名字、
+   `MatchingCodeDialog` 的 280dp 固定列会超出窗口且不滚；截图只到 1.5×。
+5. 死代码与未用依赖（`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`）。
+6. 发布工程质量：`mapping.txt` 从未归档（线上 R8 崩溃无法还原）、`release.yml` 不跑
+   lint/test、tag 发布没有质量门。
+7. 截图可静默丢失：`ScreenshotTest` 写盘包在 `runCatching` 里、`adb pull ... || true`、
+   上传步骤对空目录只给 warning——三层都不设卡，整轮仍可绿。
+
