@@ -3608,3 +3608,105 @@ README 去掉"按名字/标题过滤"。
 7. 截图可静默丢失：`ScreenshotTest` 写盘包在 `runCatching` 里、`adb pull ... || true`、
    上传步骤对空目录只给 warning——三层都不设卡，整轮仍可绿。
 
+
+---
+
+## 第一百一十二轮迭代：错误语义收口（kind 变成真契约）
+
+第一百一十一轮清单第 1 条，也是审计里最系统的一条。`PlatformException.kind` 从加进来那天
+起就**没有任何一处读取**（全仓 grep 为 0），于是「该不该重试」「该显示什么」全靠
+`isRetryable` 里的 instanceof 链和各个调用点自己认 `error.message`——四个平台对同一件事
+给出四种表达。
+
+### 缺陷是什么
+
+1. **原始异常直接穿透到界面**。非 `PlatformException` 的异常不匹配任何一类，被当成「未知、
+   不可重试」，而 `MainViewModel` 各处 `error.message ?: "兜底"` 的写法让兜底永远用不上——
+   界面显示的是原文。本机实测确证过两句：`Failed to connect to /151.101.1.6:443`（OkHttp）
+   与 `URLDecoder: Illegal hex characters in escape (%) pattern…`（JDK，上一轮已修源头）。
+2. **HTTP 状态码与「连不上」被混为一谈**。`NetworkException` 继承 `IOException`，所以
+   「IO 一律算网络故障」的规则会让一个 403（签名过期）提示用户去检查 Wi-Fi。
+3. **`isRetryable` 是 instanceof 链**，与 `kind` 是两套并行的事实来源，任何一边改动都会漂移。
+4. **`DouyuParser` 有三处抛 `IllegalArgumentException`**（`betard` 一处、`play` 两处），
+   它们本来就属于「平台给了读不懂的东西」，却不在任何分类里。
+
+### 怎么修的
+
+- `Kind` 新增 `NETWORK`，配套新增 `PlatformNetworkException`（默认文案「网络连接失败，
+  请检查网络后重试」）。它和 `OFFLINE` 是两件事：一个是「房间没开播」，一个是「根本连不上」。
+- `withRetry` 决定重试时改为**按 kind** 判定；`NetworkException`（HTTP 状态码）与裸
+  `IOException` 保留为两条显式规则，因为它们属于重试策略自己的词汇。
+- 新增 `classified()`，凡最终抛出的异常都进这套词汇。四条边界各有理由：
+  1. `PlatformException` 原样透传（适配器是有意抛的，中文、kind 正确）；
+  2. `CancellationException` 原样透传。**这是分类步骤里最容易踩的坑**：它既不是
+     PlatformException 也不是 IOException，「其余一律包装」会把每个被取代的请求变成一个
+     可上报的错误——正是第一百零八轮在 ViewModel 修掉的缺陷往下一层重演；
+  3. `Error` 原样透传。OOM / 断言失败不是请求结果，包成 Exception 会让致命错误看起来可重试；
+  4. `NetworkException` →「平台返回了 HTTP 403，请稍后重试」（**不是**网络故障，见上）。
+- 未分类异常 → `PlatformProtocolException`，文案「平台返回了无法处理的数据」，
+  **但中文原文保留**（见下）。
+- `DouyuParser` 三处改为 `PlatformProtocolException`，平台自己的话（`play` 的 `未开播`）
+  仍然留在消息里。
+
+### 一次被 CI 纠正的设计
+
+第一版 `classified()` 对未分类异常一律用通用文案，CI 立刻抓到代价：`CancelledRequestStateTest`
+的假适配器抛 `RuntimeException("网络断了")`，那句本该出现在界面上的中文被换成了
+「平台返回了无法处理的数据」。
+
+判据改成**语言**：这个项目对用户说的话都是中文，而 JDK / OkHttp 的异常消息都是英文。所以
+消息里含中文就保留（App 写的、具体的、可行动的），不含就换成通用文案并把原文放进 `cause`。
+这样 `not a JSON object` 与 `URLDecoder: …` 仍被替换，而适配器的措辞留下来。新增一条测试
+钉住这条判据的两侧。
+
+### 顺手把「断言参数顺序」做成了 CI 守卫
+
+这一轮我为同一个错误花了**四次** CI 周期（每次 14 分钟）：两套断言 API 的 message 位置相反，
+而 `assertEquals("msg", 1, count)` 在 Jupiter 文件里**能编译**，只在运行时炸，报的
+`expected: <msg> but was: <…>` 读起来像真的断言失败而不是笔误。
+
+`.github/scripts/check_assert_order.py` 接进 `verify` job（放在 lint 之前）。规则刻意窄
+以避免误报：
+
+- `assertTrue/assertFalse/assertNull/assertNotNull` 两参、首参是**裸字符串字面量** → 必错；
+- `assertEquals` 三参以上、首参是裸字面量且末参不是 → 只能是 `(message, expected, actual)`。
+
+「裸字面量」是严格匹配整串 `"…"`，不是「以引号开头」——第一版后者把
+`assertTrue("S15" in names, "expected …")` 这种完全正确的写法误报了。第二版又被**尾随逗号**
+骗了（Kotlin 允许尾逗号，切分留下的空片段被当成第三个参数），一次性误报 10 处既有测试。
+多行断言因此必须按**括号配平**切参数，不能按行匹配——我第四次踩的就是多行写法。
+
+本地双向验证过：当前树 0 误报；造一个含三种错误写法的临时文件，三条全部被抓到，而同文件里
+三种正确写法没有被误报。CI 日志里能看到它跑了：`assertion argument order: ok`。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（`ResilientPlatformRepositoryRetryTest` 9 → 16 条，`DouyuParserTest` 两条改为断言类型与 kind） |
+| 仪器测试 | ✅ 64 张截图全部重新渲染成功 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `eb887a2` 三个 job 全绿（此前 `2333342` / `12867e4` 红灯，原因都是断言顺序，已修） |
+| 新增 CI 守卫 | ✅ `assertion argument order: ok`（日志可查） |
+
+本轮没有改动任何 Compose 代码，也没有改截图 fixture 里的任何字符串，所以没有重下截图做
+逐字节比对——像素不可能变化，仪器测试的 64 张仍然全部渲染成功即是证据。
+
+### 留下的（下一轮候选，按价值排）
+
+1. **适配器内部还在拼 `error.message`**：`DouyuAdapter.roomDetail` 那句
+   `"斗鱼房间信息获取失败: ${error.message}"` 会把英文尾巴带进中文句子。现在它已经是
+   PlatformException，不再走 `classified`，所以那句话原样到界面。要做干净得逐个适配器审
+   一遍消息拼接，是独立一轮的量。
+2. **抖音把网络失败报成「该直播间可能未开播」**：`DouyinApi.request()` 用 `runCatching`
+   把 `IOException` 与「空 body」当成同一件事。修法是在 `request()` 里把 IO 抛出去，
+   只让 HTTP 200 + 空 body 触发 cookie 重协商。风险集中在抖音的 cookie 重协商路径。
+3. **Android 17（targetSdk 37）的 `ACCESS_LOCAL_NETWORK`**：需要先用官方文档核实。
+4. **大屏/大字号盲区**：2.0× 下 `SpecialFollowRow` 的 86dp 槽位会裁掉名字、
+   `MatchingCodeDialog` 的 280dp 固定列会超出窗口且不滚；截图只到 1.5×。
+5. 死代码与未用依赖（`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`）。
+6. 发布工程质量：`mapping.txt` 从未归档、`release.yml` 不跑 lint/test、截图可静默丢失。
+
