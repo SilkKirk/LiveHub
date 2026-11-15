@@ -117,6 +117,12 @@ class DouyinAdapter(
     api.roomInfo(roomId).toStreamer(roomId)
   } catch (error: PlatformException) {
     throw error
+  } catch (error: java.io.IOException) {
+    // See `DouyuAdapter.roomDetail`: rethrown so the repository can classify it as a retryable
+    // network failure instead of a protocol error carrying OkHttp's English text. This is also the
+    // half of the fix that keeps `DouyinApi.enterRoom`'s new IOException honest — without it the
+    // wrapper here would re-label the network failure as 抖音房间信息获取失败 anyway.
+    throw error
   } catch (error: Exception) {
     throw PlatformProtocolException("抖音房间信息获取失败: ${error.message}", platform, error)
   }

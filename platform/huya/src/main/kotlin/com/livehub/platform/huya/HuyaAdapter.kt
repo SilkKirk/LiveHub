@@ -86,6 +86,10 @@ class HuyaAdapter(
     api.roomInfo(roomId).toStreamer()
   } catch (error: PlatformException) {
     throw error
+  } catch (error: java.io.IOException) {
+    // See `DouyuAdapter.roomDetail`: rethrown so the repository can classify it as a retryable
+    // network failure instead of a protocol error carrying OkHttp's English text.
+    throw error
   } catch (error: Exception) {
     throw PlatformProtocolException("虎牙房间信息获取失败: ${error.message}", platform, error)
   }

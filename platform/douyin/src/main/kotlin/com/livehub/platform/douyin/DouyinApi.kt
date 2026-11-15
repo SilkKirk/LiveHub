@@ -5,6 +5,7 @@ import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import com.livehub.core.network.HttpClient
+import com.livehub.core.network.HttpResponse
 import com.livehub.core.network.Texts
 import com.livehub.platform.api.PlatformAuthRequiredException
 import com.livehub.platform.api.PlatformOfflineException
@@ -624,47 +625,55 @@ class DouyinApi(
     val url = "$URL_ENTER?${DouyinSigner.signQuery(params)}"
     // The Referer has to be the room page, not the site root: Douyin checks it against
     // `web_rid`, and a mismatched Referer is another way to get the empty 200.
-    // A `suspend` local: `http.get` suspends, and a plain lambda cannot call it. Declared here
-    // rather than at class level because it closes over `url` and `roomId`.
-    suspend fun request(cookie: String) = runCatching {
-      http.get(
-        url,
-        headers = mapOf(
-          "User-Agent" to DouyinSigner.USER_AGENT,
-          "Referer" to "https://live.douyin.com/$roomId",
-          // Without this the body may be gzip'd, and the hand-rolled reader below would see
-          // bytes it cannot parse.
-          "Accept-Encoding" to "identity",
-          "Accept" to "application/json, text/plain, */*",
-          "Accept-Language" to "zh-CN,zh;q=0.9",
-          "Cookie" to cookie,
-        ),
-      )
-    }
+    //
+    // **Throws on a transport failure; it does not return a `Result`.** That distinction is the
+    // whole point of this method's shape. `runCatching { … }.getOrNull()` used to collapse "the
+    // network is down" into "the body is empty", and an empty body is this endpoint's signal for a
+    // stale cookie — so a phone in a tunnel was told 该直播间可能未开播. The retry below is for an
+    // empty *answer*, never for a failed *request*.
+    suspend fun request(cookie: String): HttpResponse = http.get(
+      url,
+      headers = mapOf(
+        "User-Agent" to DouyinSigner.USER_AGENT,
+        "Referer" to "https://live.douyin.com/$roomId",
+        // Without this the body may be gzip'd, and the hand-rolled reader below would see
+        // bytes it cannot parse.
+        "Accept-Encoding" to "identity",
+        "Accept" to "application/json, text/plain, */*",
+        "Accept-Language" to "zh-CN,zh;q=0.9",
+        "Cookie" to cookie,
+      ),
+    )
 
-    var body = request(cookieHeader()).map { it.body }.getOrNull().orEmpty()
+    var body = request(cookieHeader()).body
     if (body.isBlank()) {
       // An **empty body** is the single observable symptom of a cookie Douyin no longer
       // accepts (measured 2026-11-07: a stale/absent `ttwid` yields 200 with zero bytes,
       // while an unknown-but-well-formed room yields `status_code = 4001038`). A user who has
       // had the app installed for a while keeps sending the `ttwid` negotiated back then,
       // because [cookieHeader] only re-negotiates when the value is missing. So: throw the
-      // cookie away once and try again before concluding the room does not exist.
-      body = request(renegotiateCookie() ?: DouyinSigner.FALLBACK_COOKIE)
-        .map { it.body }
-        .getOrNull()
-        .orEmpty()
+      // cookie away once and try again before concluding anything about the room.
+      body = request(renegotiateCookie() ?: DouyinSigner.FALLBACK_COOKIE).body
     }
 
-    val root = runCatching { parseObject(body, "enter") }.getOrNull()
-    // An explicit refusal is not "the room does not exist" in general, but for search it is:
-    // 4001038 is what a well-formed-but-unknown `web_rid` returns, and treating it as null is
-    // what lets the UI say 没有找到 instead of the room page's "可能未开播".
-    val status = root?.get("status_code")?.jsonPrimitive?.intOrNull
-    if (status != null && status != 0) return null
+    // A body that cannot be parsed at all is not "the room does not exist": the room-missing
+    // signal is `status_code = 4001038` in a well-formed JSON answer, and an HTML page (a WAF
+    // challenge, a captive portal) is something else entirely. Reporting it as 可能未开播 sent the
+    // user to look at the broadcaster instead of at the failure.
+    val root = parseObject(body, "enter")
+    // 4001038 is what a well-formed-but-unknown `web_rid` returns, and treating *that* as null is
+    // what lets the UI say 没有找到 instead of the room page's 可能未开播.
+    val status = root["status_code"]?.jsonPrimitive?.intOrNull
+    if (status == STATUS_ROOM_NOT_FOUND) return null
+    // Every other non-zero status is the platform refusing the request — a login wall, a risk
+    // check, a bad parameter — and none of them is "the broadcaster is not streaming". Reporting
+    // them as such sent the user to look at the wrong thing entirely.
+    if (status != null && status != 0) {
+      throw PlatformProtocolException("抖音拒绝了这次房间请求 (status=$status)", Platform.DOUYIN)
+    }
     // The live shape is `data.data[0]`, not `data.room` — reading `data.room` always yielded
     // null, so the feed fallback ran even on a successful response.
-    val data = root?.get("data")?.let { it as? JsonObject }
+    val data = root["data"]?.let { it as? JsonObject }
     val entered = (data?.get("data") as? JsonArray)?.firstOrNull()?.let { it as? JsonObject }
       ?: data?.get("room")?.let { it as? JsonObject }
     // `data.user` carries the anchor identity; the room object does not repeat it.
@@ -931,6 +940,15 @@ class DouyinApi(
     const val URL_PARTITION_V2 =
       "https://live.douyin.com/webcast/web/partition/detail/room/v2/"
     const val URL_ENTER = "https://live.douyin.com/webcast/room/web/enter/"
+
+    /**
+     * `status_code` for "no room with that `web_rid`".
+     *
+     * Measured against a well-formed but unknown id, and the *only* non-zero status that means
+     * "nothing there" rather than "the platform refused this request". Named because the two used
+     * to share one branch, which is how a login wall or a risk check came out as 该直播间可能未开播.
+     */
+    const val STATUS_ROOM_NOT_FOUND = 4001038
     /**
      * Keyword search, on the **www** host — the live host has no search path at all
      * (`/webcast/search/partition/room/` answers 404 on every Douyin host).

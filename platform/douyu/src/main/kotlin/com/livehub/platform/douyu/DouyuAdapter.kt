@@ -112,6 +112,12 @@ class DouyuAdapter(
     api.betard(roomId).toStreamer()
   } catch (error: PlatformException) {
     throw error
+  } catch (error: java.io.IOException) {
+    // Transport failures stay transport failures. `ResilientPlatformRepository` turns them into a
+    // retryable `PlatformNetworkException` with a Chinese message; wrapping one here labelled a dead
+    // network as a protocol problem (so it was never retried) and put OkHttp's own
+    // "Failed to connect to …" on screen behind a Chinese prefix.
+    throw error
   } catch (error: Exception) {
     throw PlatformProtocolException("斗鱼房间信息获取失败: ${error.message}", platform, error)
   }
