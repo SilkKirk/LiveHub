@@ -45,6 +45,9 @@ class MainViewModelTest {
     container.preferences.update { com.livehub.app.di.UserSettings() }
     // Start from a clean library so tests do not depend on ordering or leftover groups.
     container.followStore.replaceAll(emptyList())
+    // And a clean peer list: it lives in its own DataStore key, and `autoSyncWanted` reads it — a
+    // device left behind by another test would let this one start the LAN server.
+    container.preferences.saveTrustedPeers(emptyList())
     viewModel = MainViewModel(container)
     idle()
   }
@@ -817,6 +820,30 @@ class MainViewModelTest {
     idle()
 
     assertTrue(state.peers.isEmpty())
+  }
+
+  /**
+   * Removing a paired device actually removes it — from the state and from the store.
+   *
+   * The work runs on `Dispatchers.IO` (it is one blocking write plus one blocking read), so the
+   * assertion has to wait for that hop rather than for the main looper. Before this test existed the
+   * only unpair assertion started from an *empty* peer list, which passed whatever the method did.
+   */
+  @Test
+  fun `unpairing a device removes it from the state and the store`() {
+    container.preferences.saveTrustedPeers(
+      listOf(com.livehub.core.sync.TrustedPeer(2, "平板", "secret", 1_000)),
+    )
+    viewModel.onAction(UiAction.RefreshPeers)
+    idle()
+    assertEquals("the premise: one device is paired", 1, state.peers.size)
+
+    viewModel.onAction(UiAction.UnpairPeer(2L))
+    awaitCondition { state.peers.isEmpty() }
+
+    assertTrue("the state must drop the device", state.peers.isEmpty())
+    assertTrue("and the store must too", container.preferences.trustedPeers().isEmpty())
+    assertEquals("已解除配对", state.message)
   }
 
   /**

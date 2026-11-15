@@ -1816,7 +1816,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
       }
       try {
         val qr = container.bilibiliAuth.requestQrCode()
-        val bitmap = com.livehub.app.ui.qr.QrCodeRenderer.render(qr.url, sizePx = 512)
+        // Off the main thread. `requestQrCode` suspends, but the render does not: ZXing encodes the
+        // payload, then the loop below fills 512×512 = 262,144 ints one at a time and allocates a
+        // 1 MB bitmap — all inside the frame that answers the tap, on the dispatcher this coroutine
+        // runs on. The card shows "正在获取二维码…" until it finishes, so the pause lands exactly
+        // when the user is waiting for feedback.
+        val bitmap = withContext(Dispatchers.Default) {
+          com.livehub.app.ui.qr.QrCodeRenderer.render(qr.url, sizePx = 512)
+        }
         _state.update {
           it.copy(
             bilibiliLogin = it.bilibiliLogin.copy(
@@ -1970,13 +1977,23 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
   }
 
+  /**
+   * Forgets one paired device.
+   *
+   * Off the main thread, because the three calls below each touch disk: `SyncEngine.unpair` writes
+   * the whole peer table, `forgetPeer` writes the address book, and `refreshPeers` re-reads both.
+   * That is three blocking round trips from one click. `_state` is a `StateFlow`, so publishing the
+   * result from a background dispatcher is safe — the screens collect it on the main thread.
+   */
   private fun unpair(deviceId: Long) {
-    container.syncEngine.unpair(deviceId)
-    // Drop the address too: it belongs to a pairing that no longer exists, and leaving it in
-    // the persisted table would keep it in play for the next sweep.
-    container.syncController.forgetPeer(deviceId)
-    refreshPeers()
-    _state.update { it.copy(message = "已解除配对") }
+    viewModelScope.launch(Dispatchers.IO) {
+      container.syncEngine.unpair(deviceId)
+      // Drop the address too: it belongs to a pairing that no longer exists, and leaving it in
+      // the persisted table would keep it in play for the next sweep.
+      container.syncController.forgetPeer(deviceId)
+      refreshPeers()
+      _state.update { it.copy(message = "已解除配对") }
+    }
   }
 
   /**

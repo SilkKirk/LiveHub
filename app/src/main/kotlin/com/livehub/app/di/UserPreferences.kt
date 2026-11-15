@@ -481,17 +481,40 @@ class UserPreferences(private val context: Context) {
 
   // --------------------------------------------------------------------- peers
 
-  fun trustedPeers(): List<TrustedPeer> = runBlocking {
-    val raw = context.dataStore.data.first()[keyPeers]
-    if (raw.isNullOrBlank()) {
-      emptyList()
-    } else {
-      runCatching { json.decodeFromString<List<TrustedPeer>>(raw) }.getOrDefault(emptyList())
+  /**
+   * The paired devices, cached after the first read.
+   *
+   * The same treatment [deviceId] got, and for the same reason: this was a blocking DataStore read
+   * on **every** call. `SyncEngine` asks for the list several times per exchange, `peerById` asks on
+   * every authenticated request (a server thread, so that was a disk hop per request rather than
+   * jank), and `MainViewModel.refreshPeers` asks from the **main** thread on every visit to the sync
+   * page and after every pair and unpair — which is where it was user-visible.
+   *
+   * [saveTrustedPeers] republishes the cache, so within one installation the value is never stale.
+   * Two instances over the same file only happen in tests, and each of those reads once on first
+   * use, which is what makes "a restarted app still sees its peers" testable.
+   */
+  @Volatile private var cachedPeers: List<TrustedPeer>? = null
+
+  fun trustedPeers(): List<TrustedPeer> {
+    cachedPeers?.let { return it }
+    val loaded = runBlocking {
+      val raw = context.dataStore.data.first()[keyPeers]
+      if (raw.isNullOrBlank()) {
+        emptyList()
+      } else {
+        runCatching { json.decodeFromString<List<TrustedPeer>>(raw) }.getOrDefault(emptyList())
+      }
     }
+    cachedPeers = loaded
+    return loaded
   }
 
   fun saveTrustedPeers(peers: List<TrustedPeer>) {
-    val encoded = json.encodeToString(peers)
+    // Copied so a caller that keeps mutating its list cannot reach back into the cache.
+    val snapshot = peers.toList()
+    cachedPeers = snapshot
+    val encoded = json.encodeToString(snapshot)
     runBlocking { context.dataStore.edit { it[keyPeers] = encoded } }
   }
 
@@ -504,18 +527,31 @@ class UserPreferences(private val context: Context) {
    * goes stale: the secret identifies the device, the address only says where it was
    * yesterday. Keeping it in memory alone is what left a restarted app with no way to reach a
    * peer except mDNS — and a router that blocks multicast made that "不在线" forever.
+   *
+   * Cached like [trustedPeers]: `PeerAddressBook` reads this through its `onChange` callback and
+   * `SyncController` asks for it on every probe and sweep, so the uncached version paid a disk read
+   * per call.
    */
-  fun peerAddresses(): List<DiscoveredPeer> = runBlocking {
-    val raw = context.dataStore.data.first()[keyAddresses]
-    if (raw.isNullOrBlank()) {
-      emptyList()
-    } else {
-      runCatching { json.decodeFromString<List<DiscoveredPeer>>(raw) }.getOrDefault(emptyList())
+  @Volatile private var cachedAddresses: List<DiscoveredPeer>? = null
+
+  fun peerAddresses(): List<DiscoveredPeer> {
+    cachedAddresses?.let { return it }
+    val loaded = runBlocking {
+      val raw = context.dataStore.data.first()[keyAddresses]
+      if (raw.isNullOrBlank()) {
+        emptyList()
+      } else {
+        runCatching { json.decodeFromString<List<DiscoveredPeer>>(raw) }.getOrDefault(emptyList())
+      }
     }
+    cachedAddresses = loaded
+    return loaded
   }
 
   fun savePeerAddresses(addresses: List<DiscoveredPeer>) {
-    val encoded = json.encodeToString(addresses)
+    val snapshot = addresses.toList()
+    cachedAddresses = snapshot
+    val encoded = json.encodeToString(snapshot)
     runBlocking { context.dataStore.edit { it[keyAddresses] = encoded } }
   }
 
