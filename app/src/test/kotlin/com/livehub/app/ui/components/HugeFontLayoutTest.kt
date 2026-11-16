@@ -2,7 +2,6 @@ package com.livehub.app.ui.components
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -54,8 +53,13 @@ class HugeFontLayoutTest {
     isLive = true,
   )
 
-  /** The same `Density(density, fontScale)` trick `ScreenshotTest` uses, applied to one test. */
-  private fun render(fontScale: Float, content: @Composable () -> Unit) {
+  /**
+   * Renders the strip at [fontScale] in a 320dp-wide box — the narrowest screen the app targets.
+   *
+   * `Density(density, fontScale)` is the same trick `ScreenshotTest` uses: it rescales `sp` without
+   * touching `dp`, which is exactly what the system's font-size setting does.
+   */
+  private fun render(fontScale: Float) {
     composeRule.setContent {
       val density = LocalDensity.current
       LiveHubTheme {
