@@ -124,7 +124,7 @@ class DouyinAdapter(
     // wrapper here would re-label the network failure as 抖音房间信息获取失败 anyway.
     throw error
   } catch (error: Exception) {
-    throw PlatformProtocolException("抖音房间信息获取失败: ${error.message}", platform, error)
+    throw PlatformProtocolException("抖音房间信息获取失败", platform, error)
   }
 
   override suspend fun liveStatus(roomId: String): LiveStatus? {

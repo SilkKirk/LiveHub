@@ -119,7 +119,11 @@ class DouyuAdapter(
     // "Failed to connect to …" on screen behind a Chinese prefix.
     throw error
   } catch (error: Exception) {
-    throw PlatformProtocolException("斗鱼房间信息获取失败: ${error.message}", platform, error)
+    // The cause is kept for logs; its *message* is not reused. What reaches this branch is an
+    // exception no adapter anticipated, so its text is the class's own — `IndexOutOfBoundsException:
+    // Index 3 out of bounds for length 3`, in English, naming the code rather than the situation.
+    // Interpolating it produced "斗鱼房间信息获取失败: …" on a Chinese screen.
+    throw PlatformProtocolException("斗鱼房间信息获取失败", platform, error)
   }
 
   override suspend fun liveStatus(roomId: String): LiveStatus? {

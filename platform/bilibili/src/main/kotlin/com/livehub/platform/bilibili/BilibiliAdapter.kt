@@ -97,7 +97,7 @@ class BilibiliAdapter(
     // network failure instead of a protocol error carrying OkHttp's English text.
     throw error
   } catch (error: Exception) {
-    throw PlatformProtocolException("B站房间信息获取失败: ${error.message}", platform, error)
+    throw PlatformProtocolException("B站房间信息获取失败", platform, error)
   }
 
   override suspend fun liveStatus(roomId: String): LiveStatus? {
@@ -146,7 +146,10 @@ class BilibiliAdapter(
     } catch (error: Exception) {
       trySend(
         DanmakuEvent.Failed(
-          PlatformProtocolException("B站弹幕连接失败: ${error.message}", platform, error),
+          // Same rule as `roomDetail`: the cause carries the detail for logs, the message stays
+          // Chinese. The danmaku panel prints this string verbatim, and it used to end in a
+          // library's own English text.
+          PlatformProtocolException("B站弹幕连接失败", platform, error),
         ),
       )
       awaitClose { }

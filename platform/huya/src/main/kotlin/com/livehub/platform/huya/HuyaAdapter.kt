@@ -91,7 +91,7 @@ class HuyaAdapter(
     // network failure instead of a protocol error carrying OkHttp's English text.
     throw error
   } catch (error: Exception) {
-    throw PlatformProtocolException("虎牙房间信息获取失败: ${error.message}", platform, error)
+    throw PlatformProtocolException("虎牙房间信息获取失败", platform, error)
   }
 
   override suspend fun liveStatus(roomId: String): LiveStatus? {
