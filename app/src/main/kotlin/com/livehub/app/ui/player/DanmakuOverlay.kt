@@ -247,6 +247,29 @@ fun DanmakuOverlay(
      */
     val laneAvailableAt = remember(laneCount) { LongArray(laneCount) { 0L } }
 
+    /**
+     * A room switch replaces the whole stream, and the overlay has to forget the old one.
+     *
+     * The buffer is cleared before the next room's first message lands, so this key is `null` in
+     * that gap and the new room's key afterwards — both are a change. What was left behind was
+     * visible and worse than cosmetic:
+     *
+     *  * labels from the previous room kept flying across the new one for their full duration
+     *    (up to ~8s), which is the report "切换直播间但弹幕没有切换";
+     *  * `laneAvailableAt` kept every lane booked by those labels, so `chooseLane` returned null
+     *    for the new room's first messages — and because `animatedSoFar` is advanced for the whole
+     *    batch afterwards, those messages were marked animated *without ever being shown*, i.e.
+     *    lost outright.
+     *
+     * Keyed on the stream, not on `messages`: the effect that animates already re-runs for every
+     * message, and clearing there would wipe the lane schedule on every arrival.
+     */
+    val streamKey = messages.lastOrNull()?.roomKey
+    LaunchedEffect(streamKey) {
+      flying.clear()
+      laneAvailableAt.fill(0L)
+    }
+
     LaunchedEffect(messages, laneCount, screenWidthPx) {
       val pending = newDanmakuSince(animatedSoFar, messages)
       if (pending.isEmpty()) {
