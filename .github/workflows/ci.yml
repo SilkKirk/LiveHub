@@ -66,6 +66,12 @@ jobs:
       - name: Assertion argument order
         run: python3 .github/scripts/check_assert_order.py
 
+      # The screenshot comparator decides whether a render changed, so its judgement is verified
+      # here rather than trusted. `--self-test` needs no image library on purpose: the thresholds
+      # are a pure function, and this step runs before anything expensive.
+      - name: Screenshot comparator self-test
+        run: python3 .github/scripts/compare_screenshots.py --self-test
+
       - name: Static checks
         run: |
           set -o pipefail
