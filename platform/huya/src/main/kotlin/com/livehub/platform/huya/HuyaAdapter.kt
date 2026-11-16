@@ -13,6 +13,7 @@ import com.livehub.platform.api.DanmakuEvent
 import com.livehub.platform.api.LivePlatformAdapter
 import com.livehub.platform.api.PlatformException
 import com.livehub.platform.api.PlatformProtocolException
+import com.livehub.core.network.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -140,7 +141,7 @@ class HuyaAdapter(
     var closedByUs = false
     var lastFrameAt = 0L
 
-    val ayyuid = runCatching { resolveAyyuid(roomId) }.getOrDefault(roomId)
+    val ayyuid = runCatchingCancellable { resolveAyyuid(roomId) }.getOrDefault(roomId)
 
     fun connect() {
       val request = Request.Builder()
@@ -230,7 +231,7 @@ class HuyaAdapter(
    * works for most rooms, only some gifts are filtered out.
    */
   private suspend fun resolveAyyuid(roomId: String): String {
-    val html = runCatching {
+    val html = runCatchingCancellable {
       http.get(
         "$roomUrl/$roomId",
         headers = mapOf(
@@ -246,7 +247,7 @@ class HuyaAdapter(
       }
     }
 
-    val cache = runCatching {
+    val cache = runCatchingCancellable {
       http.get(
         "https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid=$roomId",
         headers = mapOf("User-Agent" to HuyaDanmakuProtocol.WS_UA),

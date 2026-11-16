@@ -9,6 +9,7 @@ import com.livehub.core.network.HttpClients
 import com.livehub.core.network.Texts
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
+import com.livehub.core.network.runCatchingCancellable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -233,7 +234,7 @@ class HuyaApi(private val http: HttpClient) {
   }
 
   private suspend fun fetchRoomHtml(roomId: String): String {
-    val desktop = runCatching {
+    val desktop = runCatchingCancellable {
       http.get(
         "$URL_ROOM/$roomId",
         headers = mapOf(
@@ -247,7 +248,7 @@ class HuyaApi(private val http: HttpClient) {
     }.getOrNull()
     if (desktop != null && desktop.contains("gameStreamInfoList")) return desktop
 
-    val mobile = runCatching {
+    val mobile = runCatchingCancellable {
       http.get(
         "$URL_ROOM/$roomId",
         headers = mapOf(

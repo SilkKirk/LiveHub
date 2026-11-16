@@ -275,9 +275,9 @@ class DouyuApi(
   ): String {
     val signer = scriptSigner
     if (signer != null) {
-      val script = runCatching { homeH5EncScript(realRoomId) }.getOrNull()
+      val script = runCatchingCancellable { homeH5EncScript(realRoomId) }.getOrNull()
       if (!script.isNullOrBlank()) {
-        val signed = runCatching {
+        val signed = runCatchingCancellable {
           signer.sign(
             script = script,
             roomId = realRoomId,
