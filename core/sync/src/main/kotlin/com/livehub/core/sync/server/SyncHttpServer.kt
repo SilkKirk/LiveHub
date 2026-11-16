@@ -80,6 +80,18 @@ class SyncHttpServer(
       while (running.get() && !socket.isClosed) {
         try {
           val client = socket.accept()
+          // `stop()` cannot interrupt a thread that is already blocked in `accept()`. Closing the
+          // listening socket either wakes it with a `SocketException` — the common case — or hands
+          // it the connection that raced the close. The second case served one more request after
+          // shutdown had been asked for, which is a real defect and not only a test artefact: it is
+          // what made `stopping the server makes it unreachable` fail intermittently, and it means
+          // an `unpair` or a foreground change could be answered by a peer request that arrived a
+          // moment too late. Dropping the client here keeps "stop means nothing is served from now
+          // on" true under that race.
+          if (!running.get()) {
+            runCatching { client.close() }
+            break
+          }
           thread(name = "livehub-sync-conn", isDaemon = true) { serve(client) }
         } catch (error: SocketException) {
           // Socket closed during shutdown.
