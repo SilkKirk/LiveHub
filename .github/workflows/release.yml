@@ -89,6 +89,23 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
+      # Nothing reaches a release without passing what a branch has to pass.
+      #
+      # This workflow is the only one that publishes, and it used to publish whatever the tree
+      # happened to be: a tag can be pushed on a commit whose CI is red, and nothing here looked.
+      # It runs *after* the SDK step because that is what exports `ANDROID_SDK_ROOT` and installs
+      # `platforms;android-37.2`; lint resolves the platform as soon as it starts.
+      #
+      # The task names are copied from `ci.yml` rather than invented, including
+      # `:app:copyRobolectricRuntime`, which stages the `android-all` jar the Robolectric tests load
+      # — without it each of those tests downloads it at run time and can fail on a slow runner for
+      # reasons that have nothing to do with the code.
+      - name: Quality gate
+        run: |
+          set -euo pipefail
+          ./gradlew :app:lintDebug :app:copyRobolectricRuntime --stacktrace
+          ./gradlew test --stacktrace
+
       # A release keystore is optional. Without one the debug APK is published instead:
       # it is still installable, just signed with the throwaway debug key.
       - name: Configure release signing
@@ -169,6 +186,38 @@ jobs:
           ls -la dist
           cat "dist/$NAME.sha256.txt"
 
+      # The R8 mapping is the only way to read a stack trace from the minified build, and it is
+      # version-specific: one mapping only deobfuscates the APK it was built with. Without it a
+      # crash that only R8 can produce cannot be attributed at all — this project has had exactly
+      # one of those, which is why the release build falls back to the debug key when no keystore
+      # is configured (so the minified build is at least launchable). It is published next to the
+      # APK because the person who needs it is the one holding that APK's crash report.
+      - name: Collect the R8 mapping
+        id: mapping
+        run: |
+          set -euo pipefail
+          VARIANT="${{ steps.build.outputs.variant }}"
+          NAME="LiveHub-${{ steps.meta.outputs.tag }}-r8-mapping.txt"
+          SRC="app/build/outputs/mapping/release/mapping.txt"
+          if [ "${VARIANT}" = "release" ]; then
+            if [ ! -s "$SRC" ]; then
+              echo "::error::the release variant is minified but produced no mapping.txt at $SRC"
+              exit 1
+            fi
+            cp "$SRC" "dist/$NAME"
+          else
+            # The debug variant is not minified, so nothing needs deobfuscating. The asset is still
+            # published, so the asset list has the same shape for every tag and nobody has to work
+            # out whether a missing mapping means "not needed" or "lost".
+            {
+              echo "variant: ${VARIANT}"
+              echo
+              echo "This build is not minified, so no R8 mapping exists and stack traces are readable as-is."
+            } > "dist/$NAME"
+          fi
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+          ls -l "dist/$NAME"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -181,6 +230,7 @@ jobs:
           files: |
             ${{ steps.apk.outputs.path }}
             ${{ steps.apk.outputs.path }}.sha256.txt
+            ${{ steps.mapping.outputs.path }}
           body: |
             LiveHub 聚合直播客户端 ${{ steps.meta.outputs.tag }}
 
@@ -188,5 +238,6 @@ jobs:
 
             **安装**：下载下方 APK，在手机上允许「安装未知应用」后安装。
             构建产物的 SHA-256 校验值见 `*.sha256.txt`。
+            R8 混淆映射见 `*.r8-mapping.txt`——只有 release 变体的崩溃栈需要它才能还原。
 
             > 本项目仅供学习与技术交流，直播内容与数据版权归各平台所有。
