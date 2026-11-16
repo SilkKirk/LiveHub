@@ -1264,6 +1264,22 @@ class ScreenshotTest {
   @Test
   fun homeHugeFont() = capture("33-home-huge-font", baseState(), fontScale = 2.0f)
 
+  /**
+   * The 特别关注 strip at 2.0×: the one row that draws a name inside a slot with a fixed height.
+   *
+   * `29-follow-special-large-font` covers 1.5×, where the name already shrinks to about three
+   * characters and is still legible. At 2.0× it was not a legibility problem but a clipping one: the
+   * slot was 86dp, the ring and gap take 62 of them, and one `labelSmall` line is 32dp at this
+   * scale — so the name was cut in half. The slot now derives its height from the theme with 86dp as
+   * a floor, which is why every render below 2.0× still looks exactly as it did.
+   */
+  @Test
+  fun followSpecialHugeFont() = capture(
+    "34-follow-special-huge-font",
+    followTagsState().copy(specialFollowKeys = listOf(followRooms[0].key, followRooms[1].key)),
+    fontScale = 2.0f,
+  )
+
   // -------------------------------------------------------------------- helpers ---
 
   /**

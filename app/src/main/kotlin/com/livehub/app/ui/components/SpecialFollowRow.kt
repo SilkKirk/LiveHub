@@ -42,7 +42,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import com.livehub.core.designsystem.LiveBadgeColor
@@ -162,7 +165,7 @@ private fun SpecialAvatar(
     horizontalAlignment = Alignment.CenterHorizontally,
     modifier = modifier
       .then(if (dragging) Modifier.zIndex(1f) else Modifier)
-      .size(width = AVATAR_SIZE_DP.dp, height = AVATAR_SLOT_HEIGHT_DP.dp)
+      .size(width = AVATAR_SIZE_DP.dp, height = avatarSlotHeight())
       // No `clip` here: it would cut the name line into a circle along with the avatar. The
       // semantics label carries the same information for TalkBack, which is what the clip was
       // standing in for.
@@ -204,7 +207,7 @@ private fun SpecialAvatar(
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.Center,
-      modifier = Modifier.padding(top = 6.dp),
+      modifier = Modifier.padding(top = AVATAR_NAME_GAP_DP.dp),
     )
   }
 }
@@ -254,7 +257,7 @@ private fun AvatarImage(streamer: Streamer, sizeDp: Int) {
 private fun AddSlot(onClick: () -> Unit) {
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
-    modifier = Modifier.size(width = AVATAR_SIZE_DP.dp, height = AVATAR_SLOT_HEIGHT_DP.dp),
+    modifier = Modifier.size(width = AVATAR_SIZE_DP.dp, height = avatarSlotHeight()),
   ) {
     IconButton(onClick = onClick, modifier = Modifier.size(AVATAR_SIZE_DP.dp)) {
       Icon(
@@ -270,7 +273,7 @@ private fun AddSlot(onClick: () -> Unit) {
       color = MaterialTheme.colorScheme.onSurfaceVariant,
       maxLines = 1,
       textAlign = TextAlign.Center,
-      modifier = Modifier.padding(top = 6.dp),
+      modifier = Modifier.padding(top = AVATAR_NAME_GAP_DP.dp),
     )
   }
 }
@@ -317,3 +320,28 @@ private const val AVATAR_GAP_DP = 14
 
 /** Ring plus the name line, so every column in the row is the same height. */
 private const val AVATAR_SLOT_HEIGHT_DP = 86
+
+/** Space between the ring and the name under it. */
+private const val AVATAR_NAME_GAP_DP = 6
+
+/**
+ * Height of one slot: the ring, the gap and the name line — never less than [AVATAR_SLOT_HEIGHT_DP].
+ *
+ * It used to be the constant alone. That worked by luck: `labelSmall` is 16dp tall at 1.0× and 24dp
+ * at 1.5×, so 56 + 6 + line came to 78 and 86; at **2.0×** the line is 32dp, the sum is 94, and the
+ * fixed 86dp left the name squeezed into the 24dp that was left — clipped in half rather than
+ * ellipsized, on the one row whose whole job is showing who is streaming.
+ *
+ * Deriving it from the theme fixes that, and keeping the constant as a **floor** is what makes the
+ * fix free for every other render: below 2.0× the derived value is 78 or 86, so the slot keeps the
+ * height (and the breathing room under the name) it has always had, and `07-*`/`29-*` stay
+ * byte-identical.
+ */
+@Composable
+private fun avatarSlotHeight(): Dp {
+  val label = MaterialTheme.typography.labelSmall
+  val lineHeight = if (label.lineHeight.isSpecified) label.lineHeight else label.fontSize
+  val needed = AVATAR_SIZE_DP.dp + AVATAR_NAME_GAP_DP.dp +
+    with(LocalDensity.current) { lineHeight.toDp() }
+  return maxOf(AVATAR_SLOT_HEIGHT_DP.dp, needed)
+}
