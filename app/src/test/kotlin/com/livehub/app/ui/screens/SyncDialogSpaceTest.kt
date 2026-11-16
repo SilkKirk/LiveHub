@@ -1,3 +1,5 @@
+package com.livehub.app.ui.screens
+
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
@@ -21,32 +23,26 @@ import org.junit.Test
 import org.robolectric.annotation.Config
 import org.robolectric.RobolectricTestRunner
 
-
-package com.livehub.app.ui.screens
-
-
 /**
  * Measures the 关联设备 dialog instead of guessing at it.
  *
- * The pending question (round 21) is whether the dialog's body overflows the window on a short
- * screen: it is a plain `Column` in the `text` slot, and the note that has been carried since
- * then says "被窗口高度截断且自己不滚". Attempting to fix it by adding `verticalScroll` made
- * Robolectric spin for 60 seconds without idling, so the change was reverted and the question
- * left open.
+ * The question carried since round 21 was whether the dialog's body overflows the window on a short
+ * screen, with the note "被窗口高度截断且自己不滚". It does not, at 1.0× — the first two tests below
+ * measured that — but it did at **2.0×**, where the content is taller than the window and a
+ * `Surface` sized to its content put 取消 and 关联 below the dialog's own bottom edge. Round 121
+ * capped the dialog at 90% of the window height and let the content scroll, so the invariant this
+ * file guards is now:
  *
- * This test answers the question with numbers, on the smallest screen the app targets
- * (320×470dp, the qualifier below) and without touching production code:
+ *  * the dialog window is never taller than the screen, at 1.0×, in landscape, and at 2.0×;
+ *  * every control in it can be reached — which after the change means "after scrolling to it",
+ *    because the body scrolls by design.
  *
- *  * the dialog window is never taller than the screen;
- *  * the last row of its body sits inside the dialog window.
+ * The distinction matters for the last test: a node can be *composed* and still be unreachable, and
+ * `assertExists` cannot tell those apart.
  *
- * If either fails, the truncation is real and has a measured shape to fix. If both pass, the
- * report above was a guess and the item can be closed as "not a defect".
- *
- * Composed inside [LiveHubTheme] because the height this file measures *is* a type-scale fact: the
- * dialog's note is `bodySmall` (13sp/18sp in the app, 12sp/16sp under Material's defaults) inside a
- * `Column` that does not scroll, so the two scales disagree about precisely the dimension the
- * assertions below put a cap on.
+ * Composed inside [LiveHubTheme] because the height measured here *is* a type-scale fact: the note
+ * is `bodySmall` (13sp/18sp in the app, 12sp/16sp under Material's defaults), and the 2.0× case is
+ * the whole reason the dialog had to change.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h470dp")
