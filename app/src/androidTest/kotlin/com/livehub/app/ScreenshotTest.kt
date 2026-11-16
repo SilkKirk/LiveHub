@@ -761,6 +761,20 @@ class ScreenshotTest {
   fun syncPaired() = capture("13-sync", syncState())
 
   /**
+   * The page after the user refused the local-network permission (Android 17+).
+   *
+   * Without the grant nothing here can work — the socket calls time out rather than fail — so the
+   * copy has to stop describing a prompt that is not going to appear and say what to change. This
+   * render exists so that wording is reviewable, and so a future edit cannot quietly drop it back to
+   * the pre-permission sentence.
+   */
+  @Test
+  fun syncWithoutLocalNetwork() = capture(
+    "13d-sync-no-local-network",
+    syncState().copy(localNetworkBlocked = true),
+  )
+
+  /**
    * The exchange log, which no render had ever reached.
    *
    * `13-sync` is taken at the top of the list, where the log is entirely below the fold — the
