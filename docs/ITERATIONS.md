@@ -4137,3 +4137,70 @@ SyncController.kt:545 Suspension functions can only be called within coroutine b
 5. **2.0× 覆盖面**：只有首页、关注页有 2.0× 渲染；同步页、搜索页、播放页停在 1.5×。
 6. **`ci.yml` 的 release-assembly 产物也没归档 mapping**（价值低，备查）。
 
+
+---
+
+## 第一百一十八轮迭代：撤回一条误判，把它的两半钉成测试
+
+上一轮我在记录里留下了一条「真问题」：地址探测在非挂起的回调里做阻塞 socket 往返，取消
+打断不了它。这一轮去修它，读完代码发现**两半都错了**，于是本轮改为撤回 + 补上两条本该存在的
+测试。
+
+### 错在哪
+
+1. **`PeerLocator` 本来就是按阻塞设计的，而且跑在 IO 上。** 类 KDoc 原文写着「[probe] is
+   blocking and is called on [dispatcher]」，`dispatcher` 默认 `Dispatchers.IO`，探测是在
+   `locate` 自己 `launch` 的子协程里执行的。上一轮我只看了 `probe` 参数的类型
+   （`(DiscoveredPeer) -> Long?`，非挂起）就断定它「在调用者线程上阻塞」——类型不带
+   `suspend` 恰恰是这个设计的一部分：阻塞的 connect 无法被取消，把它写成 suspend 只会暗示
+   它可取消。
+2. **`LanSyncHttpTransport.call` 标着 `suspend` 而函数体阻塞，这一点是对的，但调用方已经在
+   IO 上。** `SyncController.syncNow` 整体包在 `withContext(Dispatchers.IO)` 里，KDoc 写明了
+   理由正是「阻塞 socket 调用在主线程会抛 `NetworkOnMainThreadException`」；而
+   `SyncOffMainThreadTest` 已经证实了从 UI 线程调用不越界。
+
+所以这不是缺陷。**这是本会话第四次「先下结论再读代码」翻车，也是第一次翻的是我自己的结论**，
+不是审计的。
+
+### 本轮做了什么
+
+把那条误判转成两条没有被钉住的不变量（`PeerLocatorTest` 从 4 条到 6 条）：
+
+1. **探测永不在调用者线程上运行。** 按线程对象身份断言，不按线程名——名字是约定，身份才是
+   要紧的事。这一条值得钉，因为把默认 dispatcher 改掉、或把 probe 改成内联调用，都能编译、
+   能通过该文件其余所有用例，**只在真的有对端可找的设备上坏掉**。
+2. **探测永远等不到答复时按预算放弃。** `overallBudgetMillis` 是为「连接既不成功也不失败」的
+   网络存在的（过滤型路由、半开 NAT 表项）。阻塞的探测无法取消，所以预算是 `locate` 的承诺、
+   不是探测的承诺。值得钉的理由：**「预算到点返回」和「探测都跑完了」在观测上是同一件事**，
+   只有把 10 秒的探测塞进 300ms 的预算里才区分得开。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（`PeerLocatorTest` 4 → 6 条；300ms 预算那条**没有**出现时序抖动） |
+| 仪器测试 | ✅ 66 张截图，`screenshots_pulled` 检查通过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `54c935c`、`a4d3121` 全绿（中间一次 `ci.py wait` 撞上 `WinError 10061`，重试即成功，属于传输层） |
+
+### 教训
+
+上一轮我写「这次绕路捞出一条真问题」，语气是确定的，而它只是**从签名推断出来的**。签名的
+权威性远低于实现：`probe` 不带 `suspend` 不等于它在主线程上跑，`suspend` 修饰符也不保证
+函数不阻塞——这两条都是我自己在别的轮次里写进注释的结论，却在这一轮忘了先读注释。
+
+规矩补一条：**凡是「某处在错误的线程上做阻塞 I/O」这一类的判断，先去读那个函数/类的实现与
+KDoc，再去读调用方的 dispatcher；三者缺一不许下结论**。
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **死代码与未用依赖**：`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`。
+2. **`MatchingCodeDialog` 的 2.0× 溢出**：需要先解决 `SyncDialogSpaceTest` 的被测命题
+   （立论是「body 不滚」）与历史上那次 Robolectric 空转。
+3. **截图比较器**：换成「允许 N 个像素、通道差 ≤1」的判定（噪声已在第一百一十四轮量化）。
+4. **2.0× 覆盖面**：只有首页、关注页有 2.0× 渲染；同步页、搜索页、播放页停在 1.5×。
+5. **`ci.yml` 的 release-assembly 产物也没归档 mapping**（价值低，备查）。
+
