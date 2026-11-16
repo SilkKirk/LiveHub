@@ -7,6 +7,18 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+      Local network access, required (and enforced) from Android 17 / API 37 for apps that target
+      37 or higher. Everything LAN sync does is gated by it: the HTTP server's bind, the raw
+      sockets the transport opens, the subnet sweep, and `NsdManager` discovery. Without the grant
+      those calls do not fail loudly — they time out, which the app would have reported as
+      "对方拒绝连接" or "不在线" on a perfectly healthy network.
+
+      `maxSdkVersion` is deliberately absent: the permission exists only from 37, older platforms
+      ignore an unknown permission name, and the runtime request is guarded by an SDK check.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+
     <application
         android:name=".LiveHubApplication"
         android:allowBackup="true"

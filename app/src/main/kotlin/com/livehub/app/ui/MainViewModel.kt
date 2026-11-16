@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.livehub.app.di.AppContainer
 import com.livehub.app.sync.FollowRefreshWorker
+import com.livehub.app.sync.LocalNetworkAccess
 import com.livehub.app.sync.SyncController
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
@@ -33,7 +34,19 @@ import kotlinx.coroutines.withContext
  * [viewModelScope]; a new request cancels the previous one for the same slot so rapid
  * tab switches cannot interleave stale results.
  */
-class MainViewModel(private val container: AppContainer) : ViewModel() {
+class MainViewModel(
+  private val container: AppContainer,
+  /**
+   * The platform's API level, and whether the local-network permission is granted.
+   *
+   * Injected rather than read from `Build` inside the class so the interesting half — "what happens
+   * on API 37 when the user has not granted it" — is unit-testable. The Robolectric configuration
+   * here is API 34, where the permission does not exist at all, so a hard-coded `SDK_INT` check
+   * would leave that branch untested and unexercised until it broke a real device.
+   */
+  private val localNetworkSdk: () -> Int = { android.os.Build.VERSION.SDK_INT },
+  private val localNetworkGranted: () -> Boolean = { true },
+) : ViewModel() {
 
   private val _state = MutableStateFlow(UiState())
   val state: StateFlow<UiState> = _state.asStateFlow()
@@ -357,6 +370,60 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
   }
 
   /**
+   * Whether the platform is holding LAN traffic back, or `false` when it may proceed.
+   *
+   * Publishing `localNetworkBlocked` is the *only* useful thing to do here: on API 37+ without the
+   * grant the socket calls do not fail with a permission error, they time out, so the app would
+   * otherwise report "对方拒绝连接" on a healthy network. The flag is what makes the sync page able
+   * to say why, and what makes `MainActivity` ask for the permission.
+   */
+  private fun localNetworkBlocked(): Boolean {
+    val blocked = LocalNetworkAccess.blocked(
+      sdk = localNetworkSdk(),
+      granted = localNetworkGranted(),
+    )
+    if (blocked != _state.value.localNetworkBlocked) {
+      _state.update { it.copy(localNetworkBlocked = blocked) }
+    }
+    return blocked
+  }
+
+  /**
+   * Records what the user answered to the permission prompt and, if it was a yes, starts whatever
+   * the answer unblocked.
+   *
+   * Called from the activity rather than from a coroutine here because only an activity can show the
+   * dialog. It is also the only place that may clear [UiState.localNetworkBlocked] on a yes: the flag
+   * is re-derived from the live grant by [localNetworkBlocked] on every attempt, so clearing it is
+   * just "stop reporting a condition that no longer holds". A refusal leaves it set on purpose — the
+   * sync page has to keep saying why it cannot work, and not re-asking in this process is the
+   * activity's job, not this flag's.
+   */
+  fun onLocalNetworkPermissionResult(granted: Boolean) {
+    if (!granted) {
+      // `localNetworkBlocked` is deliberately left set: the sync page keeps saying why it cannot
+      // work, and the activity will not put the prompt up again in this process.
+      _state.update {
+        it.copy(
+          message = if (LocalNetworkAccess.enforced(localNetworkSdk())) {
+            "没有本地网络权限，同步无法使用。可以在系统设置里为 LiveHub 打开「附近的设备」。"
+          } else {
+            null
+          },
+        )
+      }
+      return
+    }
+    _state.update { it.copy(localNetworkBlocked = false) }
+    // The user granted it while something was already waiting on it: try again now rather than at
+    // the next foreground entry.
+    if (appForeground || _state.value.screen == Screen.Sync) {
+      startSyncServer()
+      if (_state.value.screen == Screen.Sync) startDiscovery()
+    }
+  }
+
+  /**
    * Where peers can reach this device, or `""` while nothing is listening yet.
    *
    * `SyncController.serverAddress` documents that it is only meaningful after a bind has landed,
@@ -382,6 +449,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    * `isRunning`.
    */
   private fun startSyncServer() {
+    // Nothing may touch the LAN without the permission: on API 37+ the failure is a timeout, not an
+    // error, so the socket would appear to bind and then never answer. The flag it sets is what the
+    // sync page and the activity act on.
+    if (localNetworkBlocked()) return
     if (syncServerJob?.isActive == true) return
     syncServerJob = viewModelScope.launch {
       val address = try {
@@ -1766,6 +1837,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
    */
   private fun startDiscovery() {
     discoveryJob?.cancel()
+    // Polling without the permission would sit through the whole discovery window and then report
+    // "没有发现其他设备" — a wrong answer about the network rather than about the permission.
+    if (localNetworkBlocked()) return
     // The collector this polls lives inside the running server, so make sure one is coming up.
     // Not awaited: the sightings arrive through the polling loop below either way, and the mDNS
     // browse only starts once the bind has landed.

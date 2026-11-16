@@ -186,6 +186,15 @@ data class UiState(
   val syncLog: List<SyncLogEntry> = emptyList(),
   val deviceName: String = "",
   val localAddress: String = "",
+  /**
+   * True when the platform is holding LAN traffic back, i.e. the sync surface cannot run.
+   *
+   * Set from API 37 onwards when the local-network permission has not been granted. The sync page
+   * says so instead of showing a dead 立即同步 button, and `MainActivity` uses it as the signal to
+   * put the system prompt in front of the user — without the grant every socket call here fails by
+   * *timing out*, so the app would otherwise report "对方拒绝连接" on a working network.
+   */
+  val localNetworkBlocked: Boolean = false,
   /** The matching code this device is showing, empty when none. */
   val pairingCode: String = "",
   /** Seconds until [pairingCode] stops working; drives the countdown in the UI. */

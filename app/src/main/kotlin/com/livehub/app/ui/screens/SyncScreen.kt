@@ -302,11 +302,23 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
       // the first time anything here touches the LAN — not by this screen — so the page has to say
       // what it is *before* the sheet appears over it. Android 16+ only; on older versions nothing
       // prompts and the line is simply a sentence about what the feature needs.
+      //
+      // Once the flag is set the prompt has already been answered (denied, or dismissed): saying
+      // "the system will ask you" at that point would be describing something that is not going to
+      // happen, while the sync that the rest of the page promises cannot run.
       Text(
-        text = "首次进入本页时，系统会询问是否允许 LiveHub 访问本地网络（标题类似「选择要连接的设备」）" +
-          "——那是局域网同步需要的权限。选「不连接」后本页无法配对。",
+        text = if (state.localNetworkBlocked) {
+          "没有本地网络权限，同步无法使用。请在系统设置里为 LiveHub 打开「附近的设备」后回到本页。"
+        } else {
+          "首次进入本页时，系统会询问是否允许 LiveHub 访问本地网络（标题类似「选择要连接的设备」）" +
+            "——那是局域网同步需要的权限。选「不连接」后本页无法配对。"
+        },
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (state.localNetworkBlocked) {
+          MaterialTheme.colorScheme.error
+        } else {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        },
       )
     }
   }

@@ -1,16 +1,21 @@
 package com.livehub.app
 
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.livehub.app.di.AppContainer
+import com.livehub.app.sync.LocalNetworkAccess
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.MainViewModel
 import com.livehub.app.ui.UiAction
@@ -44,17 +49,58 @@ class MainActivity : ComponentActivity() {
    */
   private val inPictureInPicture = MutableStateFlow(false)
 
+  /**
+   * Set once the system prompt has been shown in this process.
+   *
+   * The user's answer is remembered by the system, so asking again on every visit to the sync page
+   * would be nagging; if they denied, the sync page tells them where to change it.
+   */
+  private var askedLocalNetwork = false
+
+  /**
+   * The local-network permission dialog (Android 17+).
+   *
+   * Registered as a field, before `onCreate` returns, because `registerForActivityResult` requires
+   * it. The result is handed to the ViewModel, which is what decides whether the sync surface may
+   * start — see [LocalNetworkAccess].
+   */
+  private val localNetworkLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestPermission(),
+  ) { granted ->
+    viewModel.onLocalNetworkPermissionResult(granted)
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     val container = (application as LiveHubApplication).container
-    viewModel = ViewModelProvider(this, ContainerViewModelFactory(container))
+    viewModel = ViewModelProvider(this, ContainerViewModelFactory(container) { hasLocalNetwork() })
       .get(MainViewModel::class.java)
     setContent {
       // The `MutableStateFlow` *is* the `StateFlow` the shell reads; wrapping it in `asStateFlow()`
       // here would call a flow operator from inside composition, which lint (rightly) rejects.
-      LiveHubApp(viewModel, inPictureInPicture)
+      LiveHubApp(viewModel, inPictureInPicture, onRequestLocalNetwork = ::requestLocalNetwork)
     }
+  }
+
+  /** Whether LAN traffic may proceed: always true below API 37, where the permission does not exist. */
+  private fun hasLocalNetwork(): Boolean =
+    !LocalNetworkAccess.enforced(Build.VERSION.SDK_INT) ||
+      checkSelfPermission(LocalNetworkAccess.PERMISSION) == PackageManager.PERMISSION_GRANTED
+
+  /**
+   * Puts the system prompt in front of the user, at most once per process.
+   *
+   * `runCatching` because launching a permission request throws when the activity is finishing or
+   * the platform has no such permission to ask for — neither is worth crashing the app over, and a
+   * refusal is reported back to the ViewModel so the sync page can explain itself either way.
+   */
+  private fun requestLocalNetwork() {
+    if (askedLocalNetwork) return
+    if (!LocalNetworkAccess.enforced(Build.VERSION.SDK_INT)) return
+    askedLocalNetwork = true
+    runCatching { localNetworkLauncher.launch(LocalNetworkAccess.PERMISSION) }
+      .onFailure { viewModel.onLocalNetworkPermissionResult(false) }
   }
 
   /**
@@ -132,10 +178,20 @@ class MainActivity : ComponentActivity() {
 /** Hands [MainViewModel] its container; the ViewModel has no no-arg constructor. */
 private class ContainerViewModelFactory(
   private val container: AppContainer,
+  /**
+   * Whether the local-network permission is granted, read from the activity.
+   *
+   * A lambda rather than a stored value: the answer changes while the app runs (the user can grant
+   * or revoke it in settings), and the ViewModel asks every time it is about to touch the LAN.
+   */
+  private val localNetworkGranted: () -> Boolean,
 ) : ViewModelProvider.Factory {
   @Suppress("UNCHECKED_CAST")
   override fun <T : ViewModel> create(modelClass: Class<T>): T = when {
-    modelClass.isAssignableFrom(MainViewModel::class.java) -> MainViewModel(container) as T
+    modelClass.isAssignableFrom(MainViewModel::class.java) -> MainViewModel(
+      container = container,
+      localNetworkGranted = localNetworkGranted,
+    ) as T
     // Loud rather than a silent ClassCastException somewhere else: a second ViewModel added to
     // this activity without a branch here would otherwise fail with an unhelpful message.
     else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
@@ -143,9 +199,17 @@ private class ContainerViewModelFactory(
 }
 
 @Composable
-private fun LiveHubApp(viewModel: MainViewModel, inPictureInPicture: StateFlow<Boolean>) {
+private fun LiveHubApp(
+  viewModel: MainViewModel,
+  inPictureInPicture: StateFlow<Boolean>,
+  onRequestLocalNetwork: () -> Unit,
+) {
   val state by viewModel.state.collectAsState()
   val pip by inPictureInPicture.collectAsState()
+  // The ViewModel raised the flag; only an activity can show the system dialog.
+  LaunchedEffect(state.localNetworkBlocked) {
+    if (state.localNetworkBlocked) onRequestLocalNetwork()
+  }
   LiveHubRoot(
     state = state,
     onAction = viewModel::onAction,
