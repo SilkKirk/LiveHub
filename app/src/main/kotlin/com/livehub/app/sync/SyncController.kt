@@ -2,7 +2,6 @@ package com.livehub.app.sync
 
 import com.livehub.app.di.FollowStore
 import com.livehub.app.di.UserPreferences
-import com.livehub.core.network.runCatchingCancellable
 import com.livehub.core.sync.CodePairing
 import com.livehub.core.sync.CodePairingResult
 import com.livehub.core.sync.DiscoveredPeer
@@ -542,7 +541,7 @@ class SyncController(
       SubnetScanner.candidates(port)
 
     val found = locator.locate(peer.deviceId, candidates) { candidate ->
-      runCatchingCancellable {
+      runCatching {
         current.call(
           peer = peer,
           host = candidate.host,
