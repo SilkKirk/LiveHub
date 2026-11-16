@@ -3794,3 +3794,93 @@ JUnit5）。前四轮我为这个错误花了四次 CI 周期，这一轮为零�
    `:app` 的两个 `lifecycle-*-compose`）。
 6. 发布工程质量：`mapping.txt` 从未归档、`release.yml` 不跑 lint/test、截图可静默丢失。
 
+
+---
+
+## 第一百一十四轮迭代：接入 Android 17 的本地网络权限
+
+第一百一十三轮清单第 3 条，也是这一轮审计里唯一一处「头条功能在新系统上整体失效」的缺陷。
+前两轮我一直把它押后，理由是「需要先用官方文档核实」——这一轮核实了，所以做了。
+
+### 核实到的事实
+
+[Android Developers 的本地网络权限文档](https://developer.android.com/privacy-and-security/local-network-permission)
+（`developer.android.google.cn` 镜像可读，`developer.android.com` 在本机抓取失败）与
+[Android 17 行为变更](https://developer.android.google.cn/about/versions/17/behavior-changes-17)：
+
+- 从 **Android 17（API 37）** 起，对 `targetSdk ≥ 37` 的应用**强制**「本地网络保护」；
+- 受影响的调用面包括：出站 TCP、入站连接、UDP 单播/组播/广播、`.local` 解析，以及
+  `NsdManager` 这类框架类；
+- 必须先声明并**运行时请求** `ACCESS_LOCAL_NETWORK`；
+- 未授权时这些流量不是「被拒绝」，而是**被丢弃**——表现为超时。
+
+这个应用的整套同步正好全部落在这个面上：`ServerSocket` 的 bind、传输层的裸 socket、网段
+扫描、mDNS 发现。而这份 manifest 之前连声明都没有。所以今天的行为会是：在一台网络完全正常
+的 Android 17 手机上，同步页说「对方拒绝连接」「不在线」，用户无从得知真正原因。
+
+### 改动
+
+1. **`AndroidManifest.xml`** 声明 `ACCESS_LOCAL_NETWORK`，注释写清为什么没有 `maxSdkVersion`
+   （37 以下不存在该权限、未知权限名会被忽略、运行时请求由 SDK 判断把关）。
+2. **新增 `LocalNetworkAccess`**：`enforced(sdk)` / `blocked(sdk, granted)` 两条纯规则。权限名
+   用字面量而不是 `Manifest.permission.…`——那个常量只在 API 37 的 stub 里存在。
+3. **`MainViewModel` 在 `startSyncServer()` 与 `startDiscovery()` 入口过闸**。被挡时置起
+   `UiState.localNetworkBlocked`，**不 bind、不跑发现轮询**——否则会空等一整个发现窗口然后报
+   「没有发现其他设备」，又是一条关于网络的错误结论。
+4. **`MainActivity`** 注册 `RequestPermission` 契约，观察到标志就弹一次系统对话框（每个进程
+   一次，避免反复打扰）；结果交给 `onLocalNetworkPermissionResult`——授权后立即拉起刚被挡下的
+   服务与发现；拒绝则保留标志、给出可读说明。
+5. **`SyncScreen`** 在被挡时改说「没有本地网络权限，同步无法使用……」，并把「立即同步」与
+   「关联设备」**置灰**（刷新图标保持可用：重读已存设备列表不碰网络）。
+6. **新增截图 `13d-sync-no-local-network`**，让这段措辞和置灰状态可被评审。
+
+### 一个刻意的设计取舍：把 sdk 与授权状态注入进来
+
+Robolectric 在这里跑的是 API 34，该权限根本不存在。如果写成硬编码的
+`Build.VERSION.SDK_INT >= 37`，那么「API 37 且未授权」这条分支**既测不到、也永远不会有人真的
+跑过**——正是这个项目最怕的那种盲区。所以 `MainViewModel` 的构造参数里加了两个默认值分别为
+`Build.VERSION.SDK_INT` 与 `true` 的 lambda：生产行为不变，测试可以把 37 那条分支驱动起来。
+
+### 顺带发现：截图并不是逐字节稳定的
+
+加了截图之后做常规的逐字节比对，8 张关注页截图报了变化——但这一轮没有碰过任何关注页代码。
+用 Pillow 算差异包围盒：
+
+| 截图 | 包围盒 | 差异像素 | 最大通道差 |
+| --- | --- | --- | --- |
+| `07-follow-list` | 26,254 → 30,258 | 4 | 1 |
+| `07d-follow-tags` | 26,306 → 30,310 | 4 | 1 |
+| `32-follow-tag-editor-large-font` | 5,166 → 313,169 | 2 | 1 |
+
+也就是说：几个像素、单个通道差 **1/255**，是抗锯齿边缘的栅格化舍入噪声，不是语义变化。
+`13d` 才是本轮真正的变化（按钮置灰），已逐像素看过确认。
+
+**这条要记下来**：前几轮「64 张逐字节相同」是**概率性证据**，不是不变量。之前认为只有同步页
+（活动倒计时）不稳定，现在知道关注页的抗锯齿边缘同样可能在两次运行之间差 1。往后判断视觉回归
+应当看包围盒与通道差，哈希相同只能当作「强提示」。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `LocalNetworkAccessTest` 3 条 + `LocalNetworkGateTest` 4 条 + `SyncRowsTest` 2 条） |
+| 仪器测试 | ✅ 65 张截图（新增 `13d`），`13d` 已逐像素确认：红字说明 + 两个按钮置灰 + 刷新可用 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `16cecb8`、`2c4fe1e`、`09cdc03` 三次全绿，均**首次推送即通过** |
+
+### 留下的（下一轮候选，按价值排）
+
+1. **其余适配器的消息拼接**：`BilibiliAdapter` 的弹幕失败分支仍是「中文前缀 + 英文尾巴」，
+   `DouyuAdapter`/`HuyaAdapter` 的其余 catch 也还在拼 `error.message`。
+2. **`DouyinApi.cookieHeader()` 的协商仍吞掉取消**：回退到 `FALLBACK_COOKIE` 是合理的，但它
+   也是 `runCatching`，与「取消不是失败」的规则不一致。
+3. **大屏/大字号盲区**：2.0× 下 `SpecialFollowRow` 的 86dp 槽位会裁掉名字、
+   `MatchingCodeDialog` 的 280dp 固定列会超出窗口且不滚；截图只到 1.5×。
+4. **死代码与未用依赖**：`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`。
+5. **发布工程质量**：`mapping.txt` 从未归档、`release.yml` 不跑 lint/test、截图可静默丢失。
+6. **截图稳定性**（本轮新增的一条）：可以给 `capture()` 加一个「允许 N 个像素、通道差 ≤1」
+   的比较器，把「逐字节」换成「像素级」，否则每次比对都要人工解释噪声。
+
