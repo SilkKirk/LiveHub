@@ -3,7 +3,6 @@ package com.livehub.core.sync.transport
 import com.livehub.core.sync.DiscoveredPeer
 import com.livehub.core.sync.TrustedPeer
 import java.net.Inet4Address
-import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -75,18 +74,4 @@ class PeerAddressBook(
         ?: candidates.firstOrNull()
     }.getOrNull()
   }
-}
-
-/** Parses `host:port` typed by the user, tolerating a missing port. */
-fun parseManualAddress(input: String, defaultPort: Int = 47653): Pair<String, Int>? {
-  val trimmed = input.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
-  if (trimmed.isEmpty()) return null
-  val colon = trimmed.lastIndexOf(':')
-  if (colon > 0 && trimmed.count { it == ':' } == 1) {
-    val host = trimmed.substring(0, colon)
-    val port = trimmed.substring(colon + 1).toIntOrNull() ?: return null
-    if (host.isBlank() || port !in 1..65535) return null
-    return host to port
-  }
-  return if (InetAddress.getByName(trimmed) != null) trimmed to defaultPort else trimmed to defaultPort
 }

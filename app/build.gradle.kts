@@ -136,8 +136,6 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.datastore.preferences)
     // Douyu signs playback requests by running the site's own JS; the signature
     // algorithm changes without notice, so the script is evaluated rather than
