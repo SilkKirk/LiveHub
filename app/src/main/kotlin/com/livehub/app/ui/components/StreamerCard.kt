@@ -364,14 +364,19 @@ fun StreamerSearchCard(
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
-      // A `FlowRow`, not a `Row`: the name and the viewer count share one line at 1.0× and have to
-      // be allowed to take a line each when the font scale is large. In a `Row` the count kept its
-      // intrinsic width and the name — the only part of this row that says *who* is streaming — was
-      // squeezed to an ellipsis with nothing before it. `36-search-huge-font` measured exactly that
-      // at 2.0×: `…` and `旭…` where the names should be.
+      // A `FlowRow`, not a `Row`: when the two do not fit on one line, the count moves to a second
+      // line instead of squeezing the name. In a `Row` the count kept its intrinsic width and the
+      // name — the only part of this row that says *who* is streaming — absorbed the loss: at 2.0×
+      // `36-search-huge-font` measured `…` and `旭…`, and at 1.5× `25-search-large-font` measured
+      // `嘉然…`, two characters of seven.
       //
-      // `itemVerticalAlignment` is spelled out so that nothing moves at 1.0×: the two are on one
-      // line there, and `Row` used to centre them.
+      // This is not a large-font-only branch: a long enough name wraps the count at 1.0× as well,
+      // which is what `11c-search-bilibili` showed after the change — 「嘉然今天吃什么」 now reads in
+      // full with 32万 on the next line, and that row is 16dp taller. Accepted: the name identifies
+      // the streamer and the count does not.
+      //
+      // `itemVerticalAlignment` is spelled out so that nothing moves on the rows that still fit on
+      // one line: `Row` used to centre them, `FlowRow` defaults to top.
       FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
