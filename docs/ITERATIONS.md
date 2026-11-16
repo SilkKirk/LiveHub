@@ -4204,3 +4204,75 @@ KDoc，再去读调用方的 dispatcher；三者缺一不许下结论**。
 4. **2.0× 覆盖面**：只有首页、关注页有 2.0× 渲染；同步页、搜索页、播放页停在 1.5×。
 5. **`ci.yml` 的 release-assembly 产物也没归档 mapping**（价值低，备查）。
 
+
+---
+
+## 第一百一十九轮迭代：删死代码与依赖，并修掉它暴露的一处关停竞态
+
+第一百一十六轮清单第 3 条。删除本身没有可断言的运行时行为，靠 CI 编译全部模块验证；
+中途一次红灯反而暴露了一处真的生产缺陷。
+
+### 一、删掉三处死代码与两个未用依赖
+
+每一条都先 grep 过全仓（含测试源码集），确认没有读取者：
+
+| 删掉的东西 | 证据 |
+| --- | --- |
+| `platform/douyin/DouyinCategories.kt`（54 行） | 真实分区表是 assets JSON，由 `DouyinCategoryCatalog` 解析；该 object 只有自己的声明 |
+| `core/sync/RecordCollections.kt`（78 行） | 同上，只有自己的声明 |
+| `PeerAddressBook.parseManualAddress` | 界面从来没有「手动填写地址」入口（第一百一十轮改提示文案时确认过）；连 `InetAddress` 的 import 一起删 |
+| `platform:bilibili` 的 `libs.zxing.core` | 该模块里出现的 `qrcode` 全是 B 站 passport API 路径与一个本地 `QrCode` 数据类；`com.google.zxing` 引用为 0，二维码是 `:app` 的 `QrCodeRenderer` 画的 |
+| `:app` 的 `lifecycle-runtime-compose` + `lifecycle-viewmodel-compose` | `collectAsStateWithLifecycle`、`LocalLifecycleOwner`、`androidx.lifecycle.*compose` 引用全部为 0；ViewModel 走 `ViewModelProvider(this, factory)` |
+
+顺手记一笔 `parseManualAddress` 内部的痕迹：它最后一行是
+`if (InetAddress.getByName(trimmed) != null) A else A`——两个分支完全相同，而 `getByName`
+要么返回非 null 要么抛异常，条件永远为真。这函数从来没被认真跑过。
+
+**清单里两项经核实不能按「死代码」处理，需要更正**：
+
+- `BilibiliCategories.HOT_ID`：生产代码无读取者，但 `BilibiliCategoriesTest` 有两处用
+  它——一处断言常量等于 `"0:0"`（没价值），一处拿它跑 `idsOf` 解析（有价值）。删它要连带
+  改测试，那是「改测试」而不是「删死代码」。
+- `UiAction.ToggleTheme`：`MainViewModel` 有处理分支、`MainViewModelTest` 有三条用例。
+  它可能只是**界面上没有发出者**，那是「UI 缺一个入口」，同样是另一件事。
+
+### 二、CI 红了：`stop()` 之后还服务了一个请求
+
+删死代码那一提交红灯，失败的是 `core:sync` 的
+`stopping the server makes it unreachable`（断言 `stop()` 之后的请求必须失败，偶尔成功）。
+**根因在生产代码，不在测试**：
+
+`stop()` 把 `running` 置 false 并 `close()` 监听 socket。但关闭一个「另一线程正阻塞在
+`accept()`」的 socket 时，内核要么让 `accept` 抛 `SocketException`（常见），要么**把刚好撞
+上来的连接交给它**。后一种情况下 `accept` 返回了一个客户端，循环随后照旧
+`serve(client)`——于是在已经请求关停之后又服务了一个请求。
+
+这与 `SyncOffMainThreadTest` 里记录的现象同源（`close()` 之后 connect 探针仍能落地），但那次
+记录把它归为「不是 `stop()` 的 bug」。**它不是：关停的语义是「从此刻起不再服务」，而当时的
+实现是「再多服务一个」。**
+
+修法：`accept()` 之后先检查 `running`，为 false 就直接关掉这个客户端并退出循环。
+
+对这样一个「前台一变就停服务」的应用来说，这条竞态的真实后果是：解除配对之后，一个晚到一瞬
+的对端请求仍然会得到回应。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（`3e4043a` 红，`060b54d` 修复后全绿，含那条曾经偶发的用例） |
+| 仪器测试 | ✅ 66 张截图，`screenshots_pulled` 检查通过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `3e4043a` 红（见上）；`060b54d` 修复后三个 job 全绿 |
+| 删除依据 | ✅ 五项逐个 grep 过全仓（含测试源码集），无读取者 |
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **`MatchingCodeDialog` 的 2.0× 溢出**：需要先解决 `SyncDialogSpaceTest` 的被测命题
+   （立论是「body 不滚」）与历史上那次 Robolectric 空转。
+2. **截图比较器**：换成「允许 N 个像素、通道差 ≤1」的判定（噪声已在第一百一十四轮量化）。
+3. **2.0× 覆盖面**：只有首页、关注页有 2.0× 渲染；同步页、搜索页、播放页停在 1.5×。
+4. **`UiAction.ToggleTheme` 是否需要 UI 入口**（本轮核实出的事实，需要产品判断）。
+5. **`ci.yml` 的 release-assembly 产物也没归档 mapping**（价值低，备查）。
+
