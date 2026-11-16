@@ -1265,13 +1265,23 @@ class ScreenshotTest {
   fun homeHugeFont() = capture("33-home-huge-font", baseState(), fontScale = 2.0f)
 
   /**
-   * The 特别关注 strip at 2.0×: the one row that draws a name inside a slot with a fixed height.
+   * The 特别关注 strip at 2.0×, and what it actually does — which is not what the review predicted.
    *
-   * `29-follow-special-large-font` covers 1.5×, where the name already shrinks to about three
-   * characters and is still legible. At 2.0× it was not a legibility problem but a clipping one: the
-   * slot was 86dp, the ring and gap take 62 of them, and one `labelSmall` line is 32dp at this
-   * scale — so the name was cut in half. The slot now derives its height from the theme with 86dp as
-   * a floor, which is why every render below 2.0× still looks exactly as it did.
+   * A static review said this row's fixed 86dp slot would *clip* the name at 2.0× (56dp ring + 6dp
+   * gap + a 16sp line = 32dp, i.e. 94 > 86). Measured twice, it does not:
+   *
+   *  * a unit test rendering the row under `fontScale = 2f` reported the name node as **28dp** tall —
+   *    one full line, the slot with room to spare;
+   *  * this render shows `一…` — an **ellipsis**, which the text only draws when it has a whole line
+   *    to lay out and is short of *width*. A vertically clipped name has no ellipsis.
+   *
+   * The limitation here is horizontal, not vertical, and it is the one `29-follow-special-large-font`
+   * already records at 1.5× (the slot is 56dp wide, so the name gets about three characters there and
+   * one here). It is accepted: the portraits are how this row is read, the name is the redundant
+   * label, and the slot's `contentDescription` carries the full name for a screen reader.
+   *
+   * Kept as a render precisely because the prediction was wrong: the next reviewer should be able to
+   * see the difference between "ellipsized" and "clipped" instead of re-deriving it from arithmetic.
    */
   @Test
   fun followSpecialHugeFont() = capture(
