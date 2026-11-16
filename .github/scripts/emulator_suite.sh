@@ -62,9 +62,24 @@ bash .github/scripts/release_smoke.sh \
 SMOKE_EXIT=$?
 
 echo "instrumented=$TEST_EXIT smoke=$SMOKE_EXIT"
+PULLED=$(find "$WORKSPACE/ui-screenshots" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+echo "screenshots_pulled=${PULLED:-0}"
 
 # Report the test failure first when both fail: it is the more actionable of the two.
 if [ "$TEST_EXIT" != "0" ]; then
   exit "$TEST_EXIT"
 fi
+
+# A green suite that brought no renders back is not a pass.
+#
+# Three layers each tolerated an empty result — `capture()` wrapped its write in `runCatching`,
+# the `adb pull` above ends in `|| true`, and the upload step only warns when it finds nothing — so
+# a reviewer could be handed an empty artifact folder with a green check and no way to tell that
+# from "the UI did not change". Only asserted when everything else passed, because after a genuine
+# failure the missing screenshots are a symptom and the failing exit code is the actionable one.
+if [ "$SMOKE_EXIT" = "0" ] && [ "${PULLED:-0}" -eq 0 ]; then
+  echo "::error::the instrumented suite passed but no screenshots were pulled from the device"
+  exit 1
+fi
+
 exit "$SMOKE_EXIT"

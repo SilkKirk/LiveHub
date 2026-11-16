@@ -1526,13 +1526,24 @@ class ScreenshotTest {
     }
 
     val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
-    outputDirs.forEach { dir ->
+    // One successful write is enough — the CI copy is pulled from the shared Download folder, while
+    // a local run may only be able to reach the app's own directory. *No* successful write is a
+    // failure, and it used to be swallowed by a bare `runCatching`: a render that never reached
+    // disk looks exactly like a render that had no changes, and every layer downstream tolerates an
+    // empty result (this pull's `|| true`, the upload step's `if-no-files-found: warn`).
+    val writeFailures = outputDirs.mapNotNull { dir ->
+      val file = File(dir, "$name.png")
       runCatching {
-        FileOutputStream(File(dir, "$name.png")).use { out ->
+        FileOutputStream(file).use { out ->
           bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
         }
-      }
+        check(file.length() > 0L) { "compressed to an empty file" }
+      }.exceptionOrNull()?.let { "${file.absolutePath}: ${it.message ?: it::class.java.simpleName}" }
     }
+    assertTrue(
+      "$name was not written to any screenshot directory (${writeFailures.joinToString("; ")})",
+      writeFailures.size < outputDirs.size,
+    )
 
     // A render that is a single flat colour means the screen composed nothing visible.
     // `17-player` shipped as an all-black 703-byte PNG for exactly that reason: a variant
