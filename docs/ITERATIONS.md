@@ -4046,3 +4046,94 @@ Robolectric 在这里跑的是 API 34，该权限根本不存在。如果写成�
 6. **`mapping.txt` 的另一半**：`ci.yml` 的 release-assembly job 也产出混淆包，但没有归档
    mapping。价值低于发布路径（没人会安装那个产物），记在这里备查。
 
+
+---
+
+## 第一百一十七轮迭代：请求层的 lenient 兜底不再吞掉取消
+
+第一百一十六轮清单第 2 条，做的时候发现它不是一处而是一类——四平台共 **26 处**。本轮还有
+一次「我改错了、CI 抓住、回退」，以及它带出来的一条真问题。
+
+### 缺陷是什么
+
+`runCatching` 捕获 `Throwable`，而 `CancellationException` 正是其中一个。四个平台模块里几乎
+每个网络调用都套在 lenient 形状里（`runCatching { … }.getOrNull()`、`?: 兜底`、
+`getOrDefault(…)`），所以吞掉取消不只是丢掉一个错误——它会**替一个已经不存在的调用者去跑
+兜底**。三条真实后果：
+
+- `DouyinAdapter.rooms`：分区请求被取消 → `answered = null` → 继续请求推荐 feed（一次多余的
+  往返，代表的还是用户早已离开的界面）；
+- `DouyinApi.cookieHeader`：被取消的协商被当成「没有 cookie」→ 返回出厂字面量 → 调用方拿着
+  一个不可能工作的 cookie 继续发请求；
+- 抖音弹幕重连循环：取消后继续重连。
+
+### 怎么修的
+
+新增 `core/network/RunCatchingCancellable.kt`：与 `runCatching` 行为完全一致，只把
+`CancellationException` 重抛。放在 `core:network` 是因为四个平台模块都已依赖它，而这条规则的
+每一处用例都是请求。这样每个站点是**一词改动**，而不是重写一个 `try`——正因为如此才能把
+26 处一次改完，而不是挑三处、留一堆不一致。
+
+**判据（写进了 KDoc）**：只改「lambda 里可能有挂起调用」的站点。纯解析/解码的 `runCatching`
+（`parseObject`、`parseToJsonElement`、protobuf 解码、`String(bytes, GBK)`、`socket.close`）
+保持原样——那里没有东西可取消。改完后仓里还剩 23 处裸 `runCatching`，全部属于这一类。
+
+### 测试
+
+- `RunCatchingCancellableTest` 四条：成功、普通失败被捕获、**取消被重抛**、`Error` 仍被捕获。
+  断言成对是必要的——「把一切都重抛」也能通过取消那条，却会悄悄破坏四个模块的全部兜底。
+- `DouyinCancellationTest` 三条：取消 `rooms()` 时**只发一个请求**且抛取消、被取消的 cookie
+  协商不被当成「没有 cookie」、**普通失败仍然兜底**。第一条特意同时断言异常与请求数：旧行为是
+  **发两个请求并返回一个空页**，只断言异常不足以区分两种实现。
+
+### 两次自我纠错
+
+**一、提交信息说「四个模块」，实际只改了三个。** `a1e5e98` 写着「四个模块里 14 处」，做完全仓
+复核才发现**虎牙整个模块没动**、斗鱼还漏了两处签名脚本请求，而实际数字是 19 不是 14。
+`059e293` 补齐 7 处，最终 26 处。教训与第一百一十五轮同源：**提交信息里的数字与范围也是断言，
+要么数过，要么别写**——这次复核只是一条 grep。
+
+**二、我把判据用反了方向，CI 抓住，已回退。** `b2ba6c8` 把 `SyncController` 里包住
+`current.call(...)` 的 `runCatching` 也换了，编译失败：
+
+```
+SyncController.kt:545 Suspension functions can only be called within coroutine body
+```
+
+我按「请求型 ⇒ 挂起」推断，读完签名才发现反了：`PeerLocator.locate` 是 `suspend`，但它的
+`probe` 参数是**非挂起**的 `(DiscoveredPeer) -> Long?`；而 `LanSyncTransport.call` 是**阻塞**
+函数（裸 `Socket` + `connect` + `soTimeout`）。`LanSyncHttpTransport.call` 虽然标了 `suspend`，
+函数体只是转调这个阻塞版本。原来那句 `runCatching` 能编译，正因为这里根本没有挂起点。
+`0c72643` 已回退。
+
+**这次绕路捞出一条真问题**：地址探测在非挂起的 `probe` 里做阻塞 socket 往返，每个候选最多
+阻塞 connect+soTimeout，而且协程取消打断不了它。修法是 `probe` 改成
+`suspend (DiscoveredPeer) -> Long?` 并把阻塞调用放进 `withContext(Dispatchers.IO)`——独立一轮
+的量，已记入待办。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `RunCatchingCancellableTest` 4 条 + `DouyinCancellationTest` 3 条） |
+| 仪器测试 | ✅ 66 张截图，`screenshots_pulled` 检查通过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `a1e5e98`、`059e293` 全绿；`b2ba6c8` 红（编译错误，见上）；`0c72643` 回退后全绿 |
+| 全仓复核 | ✅ platform 侧 26 处已转换，剩余 23 处逐条核对为非挂起；`app/src/main` 侧 23 处同样核对过，无挂起站点 |
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **地址探测在非挂起回调里做阻塞 socket 往返**（本轮绕路发现，见上）：需要把
+   `PeerLocator.locate` 的 `probe` 改成挂起，并把 `LanSyncTransport.call` 的阻塞调用搬进
+   `Dispatchers.IO`。`LanSyncHttpTransport.call` 标着 `suspend` 却在做阻塞 I/O，是同一处病的
+   另一半。
+2. **`MatchingCodeDialog` 的 2.0× 溢出**：需要先解决 `SyncDialogSpaceTest` 的被测命题
+   （立论是「body 不滚」）与历史上那次 Robolectric 空转。
+3. **死代码与未用依赖**：`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`。
+4. **截图比较器**：换成「允许 N 个像素、通道差 ≤1」的判定（噪声已在第一百一十四轮量化）。
+5. **2.0× 覆盖面**：只有首页、关注页有 2.0× 渲染；同步页、搜索页、播放页停在 1.5×。
+6. **`ci.yml` 的 release-assembly 产物也没归档 mapping**（价值低，备查）。
+
