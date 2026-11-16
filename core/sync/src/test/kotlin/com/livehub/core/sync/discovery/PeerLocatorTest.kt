@@ -68,6 +68,32 @@ class PeerLocatorTest {
   }
 
   /**
+   * A hanging address cannot hang the sync button.
+   *
+   * `overallBudgetMillis` exists for networks where a connect neither succeeds nor fails — a
+   * filtering router, a half-open NAT entry. A blocking probe cannot be cancelled, so the budget is
+   * a promise about `locate`, not about the probe: the sweep returns null and the abandoned socket
+   * dies on its own timeout. Worth pinning because "the budget returned" and "the probes finished"
+   * are otherwise the same observation; the budget here is 300ms against a probe that sleeps 10s.
+   */
+  @Test
+  fun `a probe that never answers is abandoned at the budget`() = runBlocking {
+    val started = System.currentTimeMillis()
+
+    val found = PeerLocator(overallBudgetMillis = 300).locate(
+      deviceId = 7L,
+      candidates = listOf(candidate("192.168.1.2"), candidate("192.168.1.3")),
+    ) {
+      Thread.sleep(10_000)
+      null
+    }
+
+    val elapsed = System.currentTimeMillis() - started
+    assertNull(found)
+    assertTrue(elapsed < 3_000, "the sweep waited ${elapsed}ms past a 300ms budget")
+  }
+
+  /**
    * The probe is a *blocking* lambda on purpose, and this is the property that makes that safe.
    *
    * `PeerLocator`'s own documentation says "[probe] is blocking and is called on [dispatcher]", and
