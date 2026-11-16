@@ -8,13 +8,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -366,13 +369,32 @@ private fun MatchingCodeDialog(
   // With an explicitly sized dialog there is no intrinsic measurement at all, and the field no
   // longer needs (or may have) `fillMaxWidth`.
   Dialog(onDismissRequest = onDismiss) {
+    // The width is fixed for the reason above; the **height** must not be. At 2.0× the title, the
+    // note, the field, the code line and the two buttons come to more than the window, and a
+    // `Surface` taller than the window pushed 取消 and 关联 off the bottom — a dialog whose only
+    // remaining exit is the back gesture. Capping the height and letting the content scroll keeps
+    // every control reachable instead.
+    //
+    // The *whole* content scrolls rather than a weighted body with the buttons pinned under it.
+    // Pinning is nicer, but a weighted child that is also scrollable is the shape that made an
+    // earlier attempt at this hang Robolectric (`AppNotIdleException`, 60s), and a button that needs
+    // one swipe is far better than a button that cannot be reached at all.
+    val screenHeight = LocalConfiguration.current.screenHeightDp
     Surface(
-      modifier = Modifier.width(280.dp),
+      modifier = Modifier
+        .width(280.dp)
+        // A fraction of the window rather than a dp constant: the budget *is* the window, and a
+        // fixed number is what breaks on a shorter screen.
+        .heightIn(max = (screenHeight * 0.9f).dp),
       shape = RoundedCornerShape(28.dp),
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 6.dp,
     ) {
-      Column(modifier = Modifier.padding(24.dp)) {
+      Column(
+        modifier = Modifier
+          .padding(24.dp)
+          .verticalScroll(rememberScrollState()),
+      ) {
         Text("关联设备", style = MaterialTheme.typography.titleLarge)
         Spacer(modifier = Modifier.height(12.dp))
 

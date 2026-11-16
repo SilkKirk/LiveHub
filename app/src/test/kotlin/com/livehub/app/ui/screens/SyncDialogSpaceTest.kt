@@ -1,22 +1,29 @@
-package com.livehub.app.ui.screens
-
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.unit.Density
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
 import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.sync.TrustedPeer
 import org.junit.Assert.assertTrue
 import org.junit.Rule
-import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
+import org.junit.Test
 import org.robolectric.annotation.Config
+import org.robolectric.RobolectricTestRunner
+
+
+package com.livehub.app.ui.screens
+
 
 /**
  * Measures the 关联设备 dialog instead of guessing at it.
@@ -66,9 +73,14 @@ class SyncDialogSpaceTest {
     ),
   )
 
-  private fun openDialog() {
+  private fun openDialog(fontScale: Float = 1f) {
     composeRule.setContent {
-      LiveHubTheme { SyncScreen(state = state(), onAction = {}) }
+      val density = LocalDensity.current
+      LiveHubTheme {
+        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+          SyncScreen(state = state(), onAction = {})
+        }
+      }
     }
     composeRule.waitForIdle()
     // Scrolled to first, because the action moved below the 本机 card when the primary button became
@@ -101,7 +113,13 @@ class SyncDialogSpaceTest {
     openDialog()
 
     val dialog = composeRule.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
-    val lastRow = composeRule.onNodeWithText("重新生成本机匹配码").fetchSemanticsNode().boundsInRoot
+    // Scrolled to first: the body scrolls now (that is what keeps the actions reachable at 2.0×),
+    // so "inside the dialog" is a statement about the scrolled position, not about the first frame.
+    val lastRow = composeRule
+      .onNodeWithText("重新生成本机匹配码")
+      .performScrollTo()
+      .fetchSemanticsNode()
+      .boundsInRoot
 
     assertTrue(
       "the last row ends at ${lastRow.bottom} but the dialog stops at ${dialog.bottom}",
@@ -130,13 +148,40 @@ class SyncDialogSpaceTest {
 
     val dialog = composeRule.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
     val heightDp = with(composeRule.density) { dialog.height.toDp().value }
-    val lastRow = composeRule.onNodeWithText("重新生成本机匹配码").fetchSemanticsNode().boundsInRoot
+    val lastRow = composeRule
+      .onNodeWithText("重新生成本机匹配码")
+      .performScrollTo()
+      .fetchSemanticsNode()
+      .boundsInRoot
 
     assertTrue("the dialog is ${heightDp}dp tall, the screen only has 360dp", heightDp <= 360f)
     assertTrue(
       "the last row ends at ${lastRow.bottom} but the dialog stops at ${dialog.bottom}",
       lastRow.bottom <= dialog.bottom,
     )
+  }
+
+  /**
+   * The same geometry at the top of the system font slider, where it used to fall apart.
+   *
+   * At 2.0× the title, the note, the field, the code line and the buttons come to more than the
+   * 470dp window. The dialog used to size itself to its content, so the two buttons were laid out
+   * *below* the dialog's bottom edge: still in the tree (`assertExists` would pass, and the render
+   * would even show them clipped) but outside every window — the only way out was the back gesture.
+   *
+   * So the assertion is **reachable**, not "present": `performScrollTo` needs a scrollable ancestor
+   * and `assertIsDisplayed` needs the node inside the window. Both would fail on the old shape.
+   */
+  @Test
+  fun `the dialog keeps its actions reachable at 2x`() {
+    openDialog(fontScale = 2f)
+
+    val dialog = composeRule.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
+    val heightDp = with(composeRule.density) { dialog.height.toDp().value }
+    assertTrue("the dialog is ${heightDp}dp tall, the screen only has 470dp", heightDp <= 470f)
+
+    composeRule.onNodeWithText("取消").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithText("关联").performScrollTo().assertIsDisplayed()
   }
 
   // The finding above is recorded in docs/ITERATIONS.md 第三十七轮: the loop needs a dialog and
