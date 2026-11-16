@@ -256,16 +256,6 @@ class MainViewModel(
         _state.update { it.copy(autoSyncEnabled = action.enabled) }
         applyAutoSyncPolicy()
       }
-      UiAction.ToggleTheme -> {
-        // Cycles like the reference client: system → dark → light → system, so all three
-        // states stay reachable. A two-state boolean made Light mode impossible to select.
-        val next = when (_state.value.themeMode) {
-          com.livehub.core.designsystem.ThemeMode.System -> com.livehub.core.designsystem.ThemeMode.Dark
-          com.livehub.core.designsystem.ThemeMode.Dark -> com.livehub.core.designsystem.ThemeMode.Light
-          com.livehub.core.designsystem.ThemeMode.Light -> com.livehub.core.designsystem.ThemeMode.System
-        }
-        setThemeMode(next)
-      }
       is UiAction.SetThemeMode -> setThemeMode(action.mode)
       is UiAction.SetDynamicColor -> setDynamicColor(action.enabled)
       UiAction.StartBilibiliLogin -> startBilibiliLogin()

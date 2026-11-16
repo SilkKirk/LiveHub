@@ -721,29 +721,29 @@ class MainViewModelTest {
   }
 
   /**
-   * The toggle cycles system → dark → light → system.
+   * Every theme choice reaches the store under its own name.
    *
-   * A two-state boolean could not express "follow the system", and it also made 浅色
-   * unreachable and lost the choice on restart.
+   * This replaces a test of `UiAction.ToggleTheme`, a cycle action (system → dark → light → system)
+   * that no screen ever dispatched: the settings screen draws a three-way selector and sends
+   * `SetThemeMode`. What that test asserted and still matters is that all three positions are
+   * persisted separately, so the selector's choice survives a restart — a two-state boolean could
+   * not express 跟随系统 and made 浅色 unreachable back when this was a toggle.
    */
   @Test
-  fun `theme toggle cycles through all three modes and persists`() {
-    assertEquals(com.livehub.core.designsystem.ThemeMode.System, state.themeMode)
+  fun `every theme choice is persisted under its own name`() {
+    val modes = listOf(
+      com.livehub.core.designsystem.ThemeMode.System to "system",
+      com.livehub.core.designsystem.ThemeMode.Dark to "dark",
+      com.livehub.core.designsystem.ThemeMode.Light to "light",
+    )
 
-    viewModel.onAction(UiAction.ToggleTheme)
-    idle()
-    assertEquals(com.livehub.core.designsystem.ThemeMode.Dark, state.themeMode)
-    assertEquals("dark", container.preferences.settings.themeMode)
+    modes.forEach { (mode, stored) ->
+      viewModel.onAction(UiAction.SetThemeMode(mode))
+      idle()
 
-    viewModel.onAction(UiAction.ToggleTheme)
-    idle()
-    assertEquals(com.livehub.core.designsystem.ThemeMode.Light, state.themeMode)
-    assertEquals("light", container.preferences.settings.themeMode)
-
-    viewModel.onAction(UiAction.ToggleTheme)
-    idle()
-    assertEquals(com.livehub.core.designsystem.ThemeMode.System, state.themeMode)
-    assertEquals("system", container.preferences.settings.themeMode)
+      assertEquals("$mode has to reach the theme", mode, state.themeMode)
+      assertEquals("$mode has to survive a restart", stored, container.preferences.settings.themeMode)
+    }
   }
 
   @Test

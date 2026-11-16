@@ -471,9 +471,7 @@ sealed interface UiAction {
 
   data object SyncNow : UiAction
 
-  data object ToggleTheme : UiAction
-
-  /** Sets the theme cycle position explicitly (system → dark → light). */
+  /** Sets the theme explicitly (system / dark / light), as the settings screen's selector does. */
   data class SetThemeMode(val mode: com.livehub.core.designsystem.ThemeMode) : UiAction
 
   /**
