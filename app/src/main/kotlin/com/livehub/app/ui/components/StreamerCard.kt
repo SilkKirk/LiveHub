@@ -6,6 +6,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -363,9 +364,18 @@ fun StreamerSearchCard(
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
+      // A `FlowRow`, not a `Row`: the name and the viewer count share one line at 1.0× and have to
+      // be allowed to take a line each when the font scale is large. In a `Row` the count kept its
+      // intrinsic width and the name — the only part of this row that says *who* is streaming — was
+      // squeezed to an ellipsis with nothing before it. `36-search-huge-font` measured exactly that
+      // at 2.0×: `…` and `旭…` where the names should be.
+      //
+      // `itemVerticalAlignment` is spelled out so that nothing moves at 1.0×: the two are on one
+      // line there, and `Row` used to centre them.
+      FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
           text = streamer.streamerName.ifBlank { "未知主播" },
@@ -373,7 +383,6 @@ fun StreamerSearchCard(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.weight(1f, fill = false),
         )
         if (streamer.viewerCount > 0) {
           Row(
