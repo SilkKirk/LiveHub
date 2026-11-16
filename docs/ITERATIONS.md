@@ -3971,3 +3971,78 @@ Robolectric 在这里跑的是 API 34，该权限根本不存在。如果写成�
    机械判定（第一百一十四轮已量化过噪声：4 个像素、单通道差 1）。
 6. **2.0× 的其余页面**：目前只有首页与关注页有 2.0× 渲染，同步页、搜索页、播放页都停在 1.5×。
 
+
+---
+
+## 第一百一十六轮迭代：发布流程与截图链路的两处「静默」
+
+第一百一十五轮清单第 4 条，外加同一族里的另一条。共同点：**流程对「什么也没发生」不设卡**。
+
+### 一、发布 workflow：归档 R8 mapping，加一道质量门
+
+`release.yml` 是仓库里唯一会发布产物的流程，之前做两件不该做的事：
+
+1. **不归档 `mapping.txt`**。它是唯一能把混淆后的崩溃栈还原的东西，而且**版本相关**——一份
+   mapping 只对应它构建出来的那个 APK。没有它，只有 R8 才会触发的那个崩溃（`proguard-rules.pro`
+   里记着的那次，也是 `app/build.gradle.kts` 在无 keystore 时回落到 debug 密钥的原因）在线上
+   无法定位。
+   现在它与 APK 一起发布在同一个 Release 页面——需要它的人正是拿着那个 APK 崩溃报告的人。
+   `release` 变体若没产出 mapping 就直接报错失败（`isMinifyEnabled = true`，没有 mapping 说明
+   配置坏了）；`debug` 变体不混淆，但同样生成一个说明文件，让每个 tag 的产物列表形状一致，
+   省得有人去分辨「没有 mapping」是「不需要」还是「丢了」。
+2. **发布前不跑任何检查**。tag 可以打在一个 CI 红灯的提交上，这边什么都没看。新增
+   `Quality gate`：`lintDebug` + `copyRobolectricRuntime` + `test`。任务名照抄 `ci.yml` 而不是
+   自己编；`copyRobolectricRuntime` 会把 Robolectric 需要的 `android-all` jar 预置好，少了它
+   每个用例都要在运行期下载，慢机器上会因为与代码无关的原因失败。它放在
+   「Ensure Android SDK 37.2」**之后**——那一步才导出 `ANDROID_SDK_ROOT` 并安装
+   `platforms;android-37.2`，而 lint 一启动就要解析平台。
+
+**必须如实记下：这条改动无法用 CI 验证。** `release.yml` 只由 tag 或 `workflow_dispatch`
+触发，两者都会真的产生一个 GitHub Release。本轮能做的只有三项——YAML 能解析（用 PyYAML 验过）、
+步骤顺序对（checkout → 标签解析 → JDK → Gradle → SDK → **质量门** → 签名 → 构建 → 校验 →
+收集 APK → **收集 mapping** → 发布）、gradle 任务名与 `ci.yml` 逐字一致。第一次真正执行要等
+下一个 tag。
+
+### 二、截图链路：三层都容忍「什么也没有」
+
+审计指出：`capture()` 的写盘包在 `runCatching` 里、`adb pull` 以 `|| true` 收尾、上传步骤对空
+目录只给 warning。合起来是**一份空的产物目录 + 一个绿色的勾**，而评审者无法把它和「界面没有
+变化」区分开。
+
+堵住其中两层：
+
+1. **`capture()` 的写盘（根因）**。两个输出目录仍然各写一次（CI 从共享 Download 目录取，本地
+   跑可能只到得了应用自己的目录），但只要**一个都没写成**就断言失败，并把每个目录的失败原因
+   拼进消息。顺带检查 `compress` 之后的文件长度——`compress` 返回 false 不会抛异常，空文件
+   也是一次丢失。
+2. **拉取的计数**。`emulator_suite.sh` 打印 `screenshots_pulled=N`，并且在**其它一切都通过、
+   而 N 为 0 时**以 1 退出。只在别处都通过时才断言：真失败时截图缺失是症状，该报的是那个
+   失败码。
+3. **上传步骤保持 `warn`**，本轮不改并写明理由：那一步是 `if: always()`，用例真的失败时本来
+   就可能没有截图；改成 `error` 会让一次失败变成两条错误，把根因埋掉。根因已由第 1 层堵住。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `release.yml` 解析 | ✅ PyYAML 解析通过，12 个 step，顺序已逐项核对 |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿 |
+| 仪器测试 | ✅ 66 张截图；**新脚本真的跑了**——日志里 `instrumented=0 smoke=0` 之后是 `screenshots_pulled=66`，检查通过 |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `99a07a6` 三个 job 全绿（`da27271` 只含 workflow 改动，无法被 CI 覆盖，见上） |
+| 本地 shell 语法检查 | ❌ **做不到**：这台机器没有可用的 bash/WSL。改由 CI 实际执行来验证（已完成） |
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **`MatchingCodeDialog` 的 2.0× 溢出**（前两轮记录的前提条件仍然成立）。
+2. **`DouyinApi.cookieHeader()` 的协商仍吞掉取消**：回退到 `FALLBACK_COOKIE` 是合理的，但它
+   也是 `runCatching`，与「取消不是失败」的规则不一致。
+3. **死代码与未用依赖**：`DouyinCategories`、`BilibiliCategories.HOT_ID`、`RecordCollections`、
+   `parseManualAddress`、`UiAction.ToggleTheme`、`platform:bilibili` 的 zxing、
+   `:app` 的两个 `lifecycle-*-compose`。
+4. **截图比较器**：换成「允许 N 个像素、通道差 ≤1」的判定（噪声已在第一百一十四轮量化）。
+5. **2.0× 覆盖面**：只有首页、关注页有 2.0× 渲染；同步页、搜索页、播放页停在 1.5×。
+6. **`mapping.txt` 的另一半**：`ci.yml` 的 release-assembly job 也产出混淆包，但没有归档
+   mapping。价值低于发布路径（没人会安装那个产物），记在这里备查。
+
