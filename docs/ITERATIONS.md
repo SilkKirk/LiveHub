@@ -4550,3 +4550,58 @@ CHANGED  36-search-huge-font.png:  41025px (2.0×)
 4. **`UiAction.ToggleTheme` 是否需要 UI 入口**（仍需产品判断）。
 5. `ci.yml` 的 release-assembly 产物没归档 mapping（价值低）。
 
+
+---
+
+## 第一百二十四轮迭代：删掉没有任何界面发出的 `ToggleTheme`
+
+用户问「这个有啥用吗，没用就删掉」。查清之后确认：**没用**。
+
+### 它是什么，为什么没用
+
+`UiAction.ToggleTheme` 是「点一下循环 跟随系统 → 深色 → 浅色 → 跟随系统」的单按钮动作，
+注释里写着这是照参考客户端的做法。但设置页早就是**三选一的选择器**，发的是
+`SetThemeMode(mode)`（`SettingsScreen.kt:134`）。全仓 grep 的结果：`ToggleTheme` 只有两处
+引用——`MainViewModel` 的处理分支，和 `MainViewModelTest` 里的一条用例，**没有任何界面发出
+它**。它属于旧设计（单按钮切换）的遗留物，而它当年促成的三态设计现在已经由选择器表达。
+
+### 删了什么
+
+1. `UiAction.ToggleTheme` 的声明；
+2. `MainViewModel` 里那段 `when` 分支（含它那句「像参考客户端那样循环」的注释）；
+3. 循环测试 `theme toggle cycles through all three modes and persists`。
+
+**覆盖不减**：删除前确认 `an explicit theme choice is persisted` 已经覆盖 `SetThemeMode` 的
+持久化；循环测试里仍有价值的部分——三种模式各自以独立名字（`system`/`dark`/`light`）落盘，
+所以选择器的位置能熬过重启——改写成针对 `SetThemeMode` 的 `every theme choice is persisted
+under its own name`（循环三种模式，断言 state 与 store 两半）。
+
+顺带把 `SetThemeMode` 的文档从「设置主题**循环**位置」改成「显式设置主题」：循环已经没有
+实体了，留着这句就是又一处文档与代码相反。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| 全仓 grep | ✅ 除新写的那句说明性注释外，`ToggleTheme` 已无引用 |
+| `:app:lintDebug` | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（删除一条、改写一条，净覆盖不减） |
+| 仪器测试 | ✅ 69 张渲染，无变化（主题由状态驱动，删除一个未发出的动作不动渲染） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `1d28629` 三个 job 全绿 |
+
+### 一条被撤回的下轮计划
+
+上一轮我把「`DanmakuPanel` 切换房间后滚动位置的同类检查」列为下一项。这一轮先核实了：房间切换
+时缓冲区被清空，列表只剩一条消息，`LazyColumn` 会把越界的旧位置夹紧到 0，而 `atBottom` 是从
+布局推导的（`lastVisible >= totalItems - 2`），夹紧之后自然为真——**没有可达的缺陷**。写一条
+无法失败的测试只是摆设，所以撤回该计划并记在这里，免得下一轮又去翻同一块地。
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **harness 支持「按文本点击」**：这样「关联设备对话框在 2.0×」才拍得出有意义的渲染（第
+   一百二十一轮的修复目前只有测试证据）。本轮试到一半撤回了，因为与删除动作混在一起不聚焦。
+2. **底栏在 2.0× 下的实测数据**换成断言（第一百二十二轮靠放大截图确认过标签完整）。
+3. **`ci.yml` 的 release-assembly 产物也没归档 mapping**（价值低，备查）。
+4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
+
