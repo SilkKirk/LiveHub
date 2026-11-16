@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
@@ -231,6 +233,31 @@ class SyncRowsTest {
 
     composeRule.onNodeWithText(DISCOVERED_NAME).assertIsDisplayed()
     composeRule.onNodeWithText(DISCOVERED_ADDRESS).assertIsDisplayed()
+  }
+
+  /**
+   * Without the Android 17 local-network grant the page must not offer what it cannot complete.
+   *
+   * Everything behind these two buttons is a LAN round trip, and the platform does not refuse those
+   * with an error — it lets them time out. So an enabled 立即同步 would turn into a "connection
+   * failed" message about a network that is fine, and an enabled 关联设备 would open a dialog whose
+   * code can never be delivered. Asserted on the semantics `Disabled` flag so it holds whatever the
+   * button ends up looking like.
+   */
+  @Test
+  fun `the actions are disabled while the local network permission is missing`() {
+    render(state().copy(localNetworkBlocked = true))
+
+    composeRule.onNodeWithText("立即同步").assertIsNotEnabled()
+    composeRule.onNodeWithText("关联设备").assertIsNotEnabled()
+  }
+
+  /** The refresh icon stays usable: re-reading the stored peer list touches no network. */
+  @Test
+  fun `the peer refresh stays enabled while the permission is missing`() {
+    render(state().copy(localNetworkBlocked = true))
+
+    composeRule.onNodeWithContentDescription("刷新").assertIsEnabled()
   }
 
   private companion object {

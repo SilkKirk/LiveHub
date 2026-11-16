@@ -202,7 +202,11 @@ private fun SyncActionsRow(
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Button(
       onClick = { onAction(UiAction.SyncNow) },
-      enabled = state.peers.isNotEmpty() && !state.syncing,
+      // `localNetworkBlocked` joins the other two reasons an exchange cannot run. Without the
+      // Android 17 grant every socket call times out, so the button would sit there looking
+      // pressable and then report a connection failure that is not one — this page is supposed to
+      // never offer an action it knows cannot work.
+      enabled = state.peers.isNotEmpty() && !state.syncing && !state.localNetworkBlocked,
       modifier = Modifier.fillMaxWidth(),
     ) {
       Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
@@ -215,7 +219,8 @@ private fun SyncActionsRow(
     ) {
       OutlinedButton(
         onClick = onOpenMatchingCode,
-        enabled = !state.pairing,
+        // Pairing is the other half of the same wall: the code exchange is a LAN round trip.
+        enabled = !state.pairing && !state.localNetworkBlocked,
         modifier = Modifier.weight(1f),
       ) {
         Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
@@ -224,7 +229,8 @@ private fun SyncActionsRow(
       // The peer list's own refresh sits at the end of the row rather than in a line by itself: it
       // is the smallest action here, and an orphaned 48dp icon under two buttons reads as a
       // leftover. A `Row` is safe now — the two items above it are weighted and full-width, so
-      // nothing can be squeezed to zero the way three fixed-size buttons were.
+      // nothing can be squeezed to zero the way three fixed-size buttons were. It stays enabled
+      // when the permission is missing: reading the stored peer list touches no network.
       IconButton(onClick = { onAction(UiAction.RefreshPeers) }) {
         Icon(Icons.Filled.Refresh, contentDescription = "刷新")
       }
