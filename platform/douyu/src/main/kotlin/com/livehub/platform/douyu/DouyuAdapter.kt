@@ -13,6 +13,7 @@ import com.livehub.platform.api.DanmakuEvent
 import com.livehub.platform.api.LivePlatformAdapter
 import com.livehub.platform.api.PlatformException
 import com.livehub.platform.api.PlatformProtocolException
+import com.livehub.core.network.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -99,7 +100,7 @@ class DouyuAdapter(
     if (categoryId.startsWith(DouyuApi.SUB_CATEGORY_PREFIX)) return emptyList()
     // The aggregate feed spans every 大区, so it has no meaningful third level.
     if (categoryId == DouyuApi.ALL_CATEGORY_ID) return emptyList()
-    return runCatching { api.subCategories(categoryId) }.getOrDefault(emptyList())
+    return runCatchingCancellable { api.subCategories(categoryId) }.getOrDefault(emptyList())
   }
 
   override suspend fun search(keyword: String, cursor: String?): RoomPage {

@@ -8,6 +8,7 @@ import com.livehub.core.network.HttpClients
 import com.livehub.core.network.HttpResponse
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
+import com.livehub.core.network.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -224,7 +225,7 @@ class DouyuApi(
           if (rate == selection.rate && selection.cdn == cdn) {
             DouyuQuality.variants(probe, selection)
           } else {
-            runCatching {
+            runCatchingCancellable {
               val response = requestPlay(
                 realRoomId = realRoomId,
                 roomId = roomId,

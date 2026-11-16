@@ -9,6 +9,7 @@ import com.livehub.core.model.PlaybackSource
 import com.livehub.core.model.RoomPage
 import com.livehub.core.model.Streamer
 import com.livehub.core.network.HttpClient
+import com.livehub.core.network.runCatchingCancellable
 import com.livehub.platform.api.DanmakuEvent
 import com.livehub.platform.api.LivePlatformAdapter
 import com.livehub.platform.api.PlatformException
@@ -82,7 +83,7 @@ class DouyinAdapter(
     val partitionType = ids?.first ?: "1"
     val partition = ids?.second ?: categoryId
 
-    val partitioned = runCatching {
+    val partitioned = runCatchingCancellable {
       api.rooms(partition = partition, partitionType = partitionType, page = page)
     }
     val answered = partitioned.getOrNull()
@@ -101,7 +102,7 @@ class DouyinAdapter(
     // The signature was rejected (an expired `msToken`, or Douyin tightening the check again).
     // This is a genuine degradation, not the normal path: the feed ignores the partition, so the
     // tab shows 推荐 content under a partition label.
-    val feed = runCatching { api.feed(offset = (page - 1) * DouyinApi.PAGE_SIZE, count = DouyinApi.PAGE_SIZE) }
+    val feed = runCatchingCancellable { api.feed(offset = (page - 1) * DouyinApi.PAGE_SIZE, count = DouyinApi.PAGE_SIZE) }
       .getOrDefault(emptyList<Streamer>() to false)
     return RoomPage(rooms = feed.first, nextCursor = null)
   }
@@ -188,11 +189,11 @@ class DouyinAdapter(
     var baseIndex = 0
 
     suspend fun resolveInit(): DouyinDanmakuHandshake.RoomInit? {
-      val html = runCatching { api.roomPageHtml(roomId) }.getOrNull().orEmpty()
+      val html = runCatchingCancellable { api.roomPageHtml(roomId) }.getOrNull().orEmpty()
       val userUniqueId = DouyinDanmakuHandshake.extractUserUniqueId(html)
         .ifBlank { DouyinDanmakuHandshake.randomUserUniqueId() }
       val numericRoomId = DouyinDanmakuHandshake.extractRoomId(html)
-        .ifBlank { runCatching { api.roomInfo(roomId).roomId }.getOrNull().orEmpty() }
+        .ifBlank { runCatchingCancellable { api.roomInfo(roomId).roomId }.getOrNull().orEmpty() }
         .ifBlank { roomId }
       if (numericRoomId.isBlank()) return null
       return DouyinDanmakuHandshake.RoomInit(
@@ -307,8 +308,9 @@ class DouyinAdapter(
       )
 
       // Wait for the handshake so a rejected signature is reported here rather than being
-      // mistaken for a healthy connection that never delivers a message.
-      runCatching {
+      // mistaken for a healthy connection that never delivers a message. A timeout here is a
+      // *result* (the connection did not open), so it is swallowed; a cancellation is not.
+      runCatchingCancellable {
         opened.await(OPEN_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
       }
       return openedOk.get()
@@ -317,7 +319,7 @@ class DouyinAdapter(
     val connectJob = launch {
       while (!closedByUs) {
         val sessionEnded = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val opened = runCatching { connectOnce(sessionEnded) }.getOrDefault(false)
+        val opened = runCatchingCancellable { connectOnce(sessionEnded) }.getOrDefault(false)
         if (!opened) {
           trySend(
             DanmakuEvent.Disconnected(

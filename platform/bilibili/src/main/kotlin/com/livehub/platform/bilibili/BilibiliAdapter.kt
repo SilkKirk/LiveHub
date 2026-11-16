@@ -12,6 +12,7 @@ import com.livehub.platform.api.DanmakuEvent
 import com.livehub.platform.api.LivePlatformAdapter
 import com.livehub.platform.api.PlatformException
 import com.livehub.platform.api.PlatformProtocolException
+import com.livehub.core.network.runCatchingCancellable
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -119,7 +120,7 @@ class BilibiliAdapter(
     preferredLine: String?,
   ): PlaybackSource {
     val source = api.playback(roomId, preferredQuality, preferredLine)
-    val detail = runCatching { roomDetail(roomId) }.getOrNull()
+    val detail = runCatchingCancellable { roomDetail(roomId) }.getOrNull()
     return if (detail != null) source.copy(room = detail) else source
   }
 

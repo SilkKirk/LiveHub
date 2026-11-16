@@ -10,6 +10,7 @@ import com.livehub.core.network.HttpClients
 import com.livehub.core.network.Texts
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
+import com.livehub.core.network.runCatchingCancellable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -68,7 +69,7 @@ class BilibiliApi(
    * `web-interface/v1/index/getAreaList`, which 404s.
    */
   suspend fun categories(): List<Category> {
-    val response = runCatching {
+    val response = runCatchingCancellable {
       http.get(
         URL_AREA_LIST,
         headers = mapOf(
@@ -248,11 +249,11 @@ class BilibiliApi(
   suspend fun search(keyword: String, page: Int): Pair<List<Streamer>, Boolean> {
     val trimmed = keyword.trim()
     if (trimmed.isEmpty()) return emptyList<Streamer>() to false
-    val cookie = runCatching { ensureBuvidCookie() }.getOrDefault("")
+    val cookie = runCatchingCancellable { ensureBuvidCookie() }.getOrDefault("")
     val url = "$URL_SEARCH?context=&search_type=live&cover_type=user_cover&order=" +
       "&keyword=${encode(trimmed)}&category_id=&__refresh__=&_extra=&highlight=0" +
       "&single_column=0&page=$page"
-    val response = runCatching {
+    val response = runCatchingCancellable {
       http.get(
         url,
         headers = buildMap {
@@ -610,7 +611,7 @@ class BilibiliApi(
     if (cached != null && System.currentTimeMillis() - accessIdFetchedAt < ACCESS_ID_TTL_MILLIS) {
       return cached
     }
-    val html = runCatching {
+    val html = runCatchingCancellable {
       http.get(
         "https://live.bilibili.com/lol",
         headers = mapOf(
@@ -638,7 +639,7 @@ class BilibiliApi(
   suspend fun ensureBuvidCookie(): String {
     val current = cookieStore.header()
     if (current.contains("buvid3=") && current.contains("buvid4=")) return current
-    val response = runCatching {
+    val response = runCatchingCancellable {
       http.get(
         "$URL_FINGER_SPI",
         headers = buildMap {

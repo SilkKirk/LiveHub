@@ -7,6 +7,7 @@ import com.livehub.core.model.Streamer
 import com.livehub.core.network.HttpClient
 import com.livehub.core.network.HttpResponse
 import com.livehub.core.network.Texts
+import com.livehub.core.network.runCatchingCancellable
 import com.livehub.platform.api.PlatformAuthRequiredException
 import com.livehub.platform.api.PlatformOfflineException
 import com.livehub.platform.api.PlatformProtocolException
@@ -138,7 +139,7 @@ class DouyinApi(
   }
 
   private suspend fun negotiateAndStore(): String? {
-    val fresh = runCatching { negotiateTtwid() }.getOrNull()
+    val fresh = runCatchingCancellable { negotiateTtwid() }.getOrNull()
     if (fresh.isNullOrBlank()) return null
     cookieStore.save(fresh)
     return cookieStore.header().ifBlank { fresh }
@@ -151,7 +152,7 @@ class DouyinApi(
    * plain 200 for every `live.douyin.com` URL.
    */
   private suspend fun negotiateTtwid(): String? {
-    val response = runCatching {
+    val response = runCatchingCancellable {
       http.get(
         "https://live.douyin.com/",
         headers = mapOf(
@@ -290,7 +291,7 @@ class DouyinApi(
       "count" to count.toString(),
       "offset" to offset.toString(),
     )
-    val response = runCatching {
+    val response = runCatchingCancellable {
       http.get("$URL_FEED?${DouyinSigner.signQuery(params)}", headers = headers()).requireSuccess()
     }.getOrNull() ?: return emptyList<Streamer>() to false
     val root = runCatching { parseObject(response.body, "feed") }.getOrNull()
@@ -570,7 +571,7 @@ class DouyinApi(
    * so the page is the only source. A failure here is not fatal — the caller falls back to
    * the API for the room id and to a random id for the visitor — hence an empty string.
    */
-  suspend fun roomPageHtml(webRid: String): String = runCatching {
+  suspend fun roomPageHtml(webRid: String): String = runCatchingCancellable {
     http.get(
       "https://live.douyin.com/$webRid",
       headers = mapOf(
@@ -870,7 +871,7 @@ class DouyinApi(
       "offset" to "0",
     )
     val signedQuery = DouyinSigner.signQuery(params)
-    val response = runCatching {
+    val response = runCatchingCancellable {
       http.get("$URL_FEED?$signedQuery", headers = headers()).requireSuccess()
     }.getOrNull() ?: return null
     val root = runCatching { parseObject(response.body, "feed") }.getOrNull() ?: return null
