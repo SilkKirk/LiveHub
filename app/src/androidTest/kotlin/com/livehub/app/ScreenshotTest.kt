@@ -1290,6 +1290,49 @@ class ScreenshotTest {
     fontScale = 2.0f,
   )
 
+  /**
+   * The sync page at 2.0×: the six-digit code, the full-width primary action and the secondary row.
+   *
+   * `31-sync-large-font` covers 1.5×, which is where the action row collapsed once (round 93: the
+   * 关联设备 label stacked one character per line and the refresh icon disappeared entirely, fixed by
+   * the hierarchy in round 94). 2.0× is one drag further on the same slider and nothing had rendered
+   * it. What has to survive: the code itself (it is the thing the user reads out loud), the two
+   * buttons' labels on one line each, and the log rows' two-column text.
+   */
+  @Test
+  fun syncHugeFont() = capture("35-sync-huge-font", syncState(), fontScale = 2.0f)
+
+  /**
+   * Search results at 2.0×: the platform chip row, the section headers and the two-line card titles.
+   *
+   * The chip row is a `LazyRow` on purpose (round 88 replaced a `FlowRow` that folded 哔哩哔哩 onto a
+   * second line), so a chip running past the window edge is expected — the question is whether the
+   * *selected* one is still recognisable and the titles still ellipsize instead of clipping.
+   */
+  @Test
+  fun searchHugeFont() = capture(
+    "36-search-huge-font",
+    baseState().copy(
+      screen = Screen.Search,
+      searchQuery = "英雄联盟",
+      lastSearchQuery = "英雄联盟",
+      searchResults = douyuRooms.take(4),
+      searchHistory = listOf("英雄联盟", "户外"),
+    ),
+    fontScale = 2.0f,
+  )
+
+  /**
+   * The player at 2.0×: the chrome over the video, which is the one screen whose layout is a stack of
+   * overlays rather than a list.
+   *
+   * `28-player-large-font` covers 1.5×. The bottom bar here is a fixed-height strip of icon+label
+   * controls, and the top row mixes a title with chips — the two shapes that have failed elsewhere on
+   * this slider.
+   */
+  @Test
+  fun playerHugeFont() = capture("37-player-huge-font", playerState(), fontScale = 2.0f)
+
   // -------------------------------------------------------------------- helpers ---
 
   /**
