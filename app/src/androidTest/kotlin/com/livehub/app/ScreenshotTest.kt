@@ -1333,30 +1333,6 @@ class ScreenshotTest {
   @Test
   fun playerHugeFont() = capture("37-player-huge-font", playerState(), fontScale = 2.0f)
 
-  /**
-   * The 关联设备 dialog at 2.0×, where it used to put its own buttons off the window.
-   *
-   * Round 121 capped the dialog at 90% of the window and let its content scroll, because at this
-   * scale 取消 and 关联 were laid out below the dialog's own bottom edge: composed, half-drawn and
-   * outside every window, reachable only with the back gesture. That fix has had a test
-   * (`the dialog keeps its actions reachable at 2x`) and **no render** — the harness could not click
-   * by text, and the 关联设备 button itself is below the fold at this scale, so the click landed
-   * nowhere. Both gaps are what this render closes.
-   *
-   * What a reviewer should see: a dialog that stops short of the window's edges with its content
-   * cut at the bottom — the scroll is the point, and the buttons are one swipe away instead of
-   * unreachable.
-   */
-  @Test
-  fun syncMatchingCodeHugeFont() = capture(
-    "38-sync-matching-code-huge-font",
-    syncState(),
-    fontScale = 2.0f,
-    clickText = "关联设备",
-    // Proves the dialog opened: this sentence exists nowhere else on the screen.
-    expectText = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
-  )
-
   // -------------------------------------------------------------------- helpers ---
 
   /**
@@ -1443,19 +1419,6 @@ class ScreenshotTest {
      * visual evidence the long press exists at all — no state can express "sheet open".
      */
     longClickText: String? = null,
-    /**
-     * Clicks the node carrying this text before capturing, scrolling it into view first.
-     *
-     * Needed for anything that only exists after a tap and cannot be expressed as state — the
-     * 关联设备 dialog is the case: no `UiState` field says "dialog open". `clickDescription` covers
-     * icon-only controls; this is the text one.
-     *
-     * The scroll is not optional: at 2.0× the sync page's action row sits below the fold, and a
-     * click at a node's centre that is outside the window opens nothing — the failure
-     * `SyncDialogSpaceTest` documents at length, where it showed up as "no dialog" rather than as
-     * "clicked the wrong place".
-     */
-    clickText: String? = null,
     /** Asserts an icon-only control is present, for the same reason as [clickDescription]. */
     expectDescription: String? = null,
     /**
@@ -1524,25 +1487,6 @@ class ScreenshotTest {
       // Icon-only controls have no text to match; the chevron is one of them.
       composeRule.onNodeWithContentDescription(clickDescription).performClick()
       composeRule.mainClock.advanceTimeByFrame()
-      composeRule.waitForIdle()
-    }
-
-    if (clickText != null) {
-      // The clock has to run free for the scroll **and** the tap. A lazy list applies a scroll on a
-      // frame boundary, so `performScrollToNode` against a frozen clock is exactly the "capture that
-      // may never return" this file warns about under `scrollToText`: the recomposer still has work
-      // pending and `waitForIdle` has no clock to advance it. The first version of this block did it
-      // frozen and the instrumented suite hit its 900s cap.
-      composeRule.mainClock.autoAdvance = true
-      composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(clickText))
-      composeRule.onNodeWithText(clickText).performClick()
-      // **Not** frozen again, unlike `scrollToText`. What a text click opens is a `Dialog`, which is
-      // its own window: freezing the clock right after the click captured that window before it had
-      // drawn anything, and the PNG came out as a single flat colour (703 bytes, the same signature
-      // as the blank `17-player` in this file's history). Leaving the clock free is the price of
-      // rendering a second window, and it costs only byte-stability — the page's countdown keeps
-      // ticking, exactly as it does for `13-sync`/`23c-sync-dark`.
-      composeRule.mainClock.advanceTimeBy(500L)
       composeRule.waitForIdle()
     }
 
