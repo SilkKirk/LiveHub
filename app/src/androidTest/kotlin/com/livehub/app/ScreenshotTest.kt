@@ -1333,6 +1333,30 @@ class ScreenshotTest {
   @Test
   fun playerHugeFont() = capture("37-player-huge-font", playerState(), fontScale = 2.0f)
 
+  /**
+   * The 关联设备 dialog at 2.0×, where it used to put its own buttons off the window.
+   *
+   * Round 121 capped the dialog at 90% of the window and let its content scroll, because at this
+   * scale 取消 and 关联 were laid out below the dialog's own bottom edge: composed, half-drawn and
+   * outside every window, reachable only with the back gesture. That fix has had a test
+   * (`the dialog keeps its actions reachable at 2x`) and **no render** — the harness could not click
+   * by text, and the 关联设备 button itself is below the fold at this scale, so the click landed
+   * nowhere. Both gaps are what this render closes.
+   *
+   * What a reviewer should see: a dialog that stops short of the window's edges with its content
+   * cut at the bottom — the scroll is the point, and the buttons are one swipe away instead of
+   * unreachable.
+   */
+  @Test
+  fun syncMatchingCodeHugeFont() = capture(
+    "38-sync-matching-code-huge-font",
+    syncState(),
+    fontScale = 2.0f,
+    clickText = "关联设备",
+    // Proves the dialog opened: this sentence exists nowhere else on the screen.
+    expectText = "请输入另一台手机或电脑的匹配码。在对方设备打开本页，即可看到六位匹配码。",
+  )
+
   // -------------------------------------------------------------------- helpers ---
 
   /**
@@ -1419,6 +1443,19 @@ class ScreenshotTest {
      * visual evidence the long press exists at all — no state can express "sheet open".
      */
     longClickText: String? = null,
+    /**
+     * Clicks the node carrying this text before capturing, scrolling it into view first.
+     *
+     * Needed for anything that only exists after a tap and cannot be expressed as state — the
+     * 关联设备 dialog is the case: no `UiState` field says "dialog open". `clickDescription` covers
+     * icon-only controls; this is the text one.
+     *
+     * The scroll is not optional: at 2.0× the sync page's action row sits below the fold, and a
+     * click at a node's centre that is outside the window opens nothing — the failure
+     * `SyncDialogSpaceTest` documents at length, where it showed up as "no dialog" rather than as
+     * "clicked the wrong place".
+     */
+    clickText: String? = null,
     /** Asserts an icon-only control is present, for the same reason as [clickDescription]. */
     expectDescription: String? = null,
     /**
@@ -1486,6 +1523,17 @@ class ScreenshotTest {
     if (clickDescription != null) {
       // Icon-only controls have no text to match; the chevron is one of them.
       composeRule.onNodeWithContentDescription(clickDescription).performClick()
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.waitForIdle()
+    }
+
+    if (clickText != null) {
+      // `performScrollToNode` rather than `performScrollTo`: the target lives in a `LazyColumn`, and
+      // only the former is defined for a lazy list. A page with no scrollable at all is not a case
+      // this harness has, so the failure is allowed to surface instead of being swallowed.
+      composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(clickText))
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText(clickText).performClick()
       composeRule.mainClock.advanceTimeByFrame()
       composeRule.waitForIdle()
     }
