@@ -1528,13 +1528,18 @@ class ScreenshotTest {
     }
 
     if (clickText != null) {
-      // `performScrollToNode` rather than `performScrollTo`: the target lives in a `LazyColumn`, and
-      // only the former is defined for a lazy list. A page with no scrollable at all is not a case
-      // this harness has, so the failure is allowed to surface instead of being swallowed.
+      // The clock has to run free for the scroll **and** the tap. A lazy list applies a scroll on a
+      // frame boundary, so `performScrollToNode` against a frozen clock is exactly the "capture that
+      // may never return" this file warns about under `scrollToText`: the recomposer still has work
+      // pending and `waitForIdle` has no clock to advance it. The first version of this block did it
+      // frozen and the instrumented suite hit its 900s cap.
+      composeRule.mainClock.autoAdvance = true
       composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(clickText))
-      composeRule.mainClock.advanceTimeByFrame()
       composeRule.onNodeWithText(clickText).performClick()
-      composeRule.mainClock.advanceTimeByFrame()
+      // A dialog has its own enter animation; let it land before the clock is frozen again, for the
+      // same reason the scroll is followed by an advance.
+      composeRule.mainClock.advanceTimeBy(500L)
+      composeRule.mainClock.autoAdvance = false
       composeRule.waitForIdle()
     }
 
