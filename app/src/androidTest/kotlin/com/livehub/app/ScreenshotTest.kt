@@ -1536,10 +1536,13 @@ class ScreenshotTest {
       composeRule.mainClock.autoAdvance = true
       composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(clickText))
       composeRule.onNodeWithText(clickText).performClick()
-      // A dialog has its own enter animation; let it land before the clock is frozen again, for the
-      // same reason the scroll is followed by an advance.
+      // **Not** frozen again, unlike `scrollToText`. What a text click opens is a `Dialog`, which is
+      // its own window: freezing the clock right after the click captured that window before it had
+      // drawn anything, and the PNG came out as a single flat colour (703 bytes, the same signature
+      // as the blank `17-player` in this file's history). Leaving the clock free is the price of
+      // rendering a second window, and it costs only byte-stability — the page's countdown keeps
+      // ticking, exactly as it does for `13-sync`/`23c-sync-dark`.
       composeRule.mainClock.advanceTimeBy(500L)
-      composeRule.mainClock.autoAdvance = false
       composeRule.waitForIdle()
     }
 
