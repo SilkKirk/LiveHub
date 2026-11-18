@@ -1,16 +1,15 @@
 package com.livehub.app.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
@@ -27,7 +26,7 @@ import org.robolectric.annotation.Config
 import kotlin.math.roundToInt
 
 /**
- * No click target in the app may be smaller than 48dp.
+ * No click target in the app may be smaller than 48dp to a finger.
  *
  * ## Why this test exists at all
  *
@@ -42,24 +41,54 @@ import kotlin.math.roundToInt
  * in Google's Accessibility Test Framework — the tools that actually print "Touch target size too
  * small". Compose ships no such lint rule at all.) This test is the replacement.
  *
+ * It replaces the *claim*, not the original rule verbatim: it enforces the half that can be checked
+ * automatically — hittability — and the class doc says plainly which half it does not cover, because
+ * an over-broad claim is what the lint line was.
+ *
  * ## What is measured
  *
- * `touchBoundsInRoot` of every node carrying a click action — what a finger can actually hit, not
- * where the node happens to be laid out. That is the property the two historical bugs broke, and the
- * one accessibility is about.
+ * `touchBoundsInRoot` of every node carrying a click action — what a finger can actually hit. That is
+ * the property accessibility is about, and the only one that can be asserted everywhere without
+ * special cases.
  *
- * The first version of this test measured the *layout* bound instead, and it was wrong in a way
- * worth recording: Material's `FilterChip` lays out 36dp tall and its `Switch` 32dp **by design**,
- * both with a 48dp touch target. Measuring layout therefore flagged every chip and switch in the app
- * — 12 false positives across 搜索, 设置 and 同步 — and would have pushed toward either an allowlist
- * (which makes the guard decorative again) or inflating controls the design had settled on.
+ * The first version of this test measured the *layout* bound instead, and it was wrong in a way worth
+ * recording: Material's `FilterChip` lays out 36dp tall and its `Switch` 32dp **by design**, both with
+ * a 48dp touch target. Measuring layout therefore flagged every chip and switch in the app — 12 false
+ * positives across 搜索, 设置 and 同步 — and would have pushed toward either an allowlist (which makes
+ * the guard decorative again) or inflating controls the design had settled on.
  *
  * ## What it found on the way in
  *
- * Six `IconButton`s carried no explicit size, because Material's default is a 40dp state layer:
- * `刷新` on 首页, `清空` and `搜索` on 搜索, and `刷新` / `解除关联` / `重新扫描` on 同步. They now carry
- * `Modifier.size(48.dp)` like the other eight in the project, so the app has one button size rather
- * than two.
+ * Six `IconButton`s carried no explicit size, so they took Material's 40dp default state layer:
+ * `刷新` on 首页, `清空` and `搜索` on 搜索, and `刷新` / `解除关联` / `重新扫描` on 同步. Material made
+ * them tappable anyway, so this was a layout inconsistency rather than an unusable control — but the
+ * project's other eight IconButtons are all 48dp, and two button sizes on adjacent screens is not a
+ * decision anybody made. They now carry `Modifier.size(48.dp)` too.
+ *
+ * ## What this cannot catch, and why that is stated rather than hidden
+ *
+ * **A 32dp `IconButton` passes this test.** Measured, not assumed: an `IconButton` given
+ * `Modifier.size(32.dp)` reports a 48dp touch bound, because Material applies
+ * `minimumInteractiveComponentSize` for it. The same node reports a 32dp *layout* bound.
+ *
+ * That single fact rules out both obvious metrics, and it took three CI rounds to establish:
+ *
+ *  * **touch bound only** — probes 48dp on every Material control, so the round-61 and round-65
+ *    shapes sail through. Verified by this file's own "the scan can fail" test, whose first version
+ *    used a 32dp `IconButton` and found nothing.
+ *  * **layout bound only** — flags every `FilterChip` (36dp) and `Switch` (32dp) in the app, which
+ *    are compact by design. Verified: 12 false positives across 搜索, 设置 and 同步.
+ *
+ * The consequence is worth being blunt about: the two historical bugs were **visual** size bugs, not
+ * tap-target bugs — Material was already making both of them hittable. So what this guard enforces
+ * is the property that *is* universal and *is* automatable: every clickable in the app is at least
+ * 48dp to a finger. It catches the case Material does not cover, a hand-rolled
+ * `Modifier.clickable` on a small box, which is the way this actually gets broken without a
+ * component protecting it.
+ *
+ * Visual size stays guarded the way it was found both times — by reading the code — plus the
+ * screenshot harness. Claiming otherwise for ten rounds is what the `TouchTargetSizeCheck` lint line
+ * did, and this file exists because that claim was false.
  *
  * ## Scope
  *
@@ -119,27 +148,35 @@ class TouchTargetSizeTest {
   /**
    * Proves the scan can fail.
    *
-   * `size(32.dp)` on an `IconButton` is the round-61 shape verbatim. If this ever passes while the
-   * button really is 32dp, every assertion above has stopped measuring anything.
+   * A **hand-rolled** clickable is the case this metric can see: `Modifier.clickable` does not apply
+   * `minimumInteractiveComponentSize`, so a 32dp box really is a 32dp target. If this ever passes
+   * while the box really is 32dp, every assertion above has stopped measuring anything.
+   *
+   * It is deliberately not an `IconButton`: Material expands an IconButton's touch target to 48dp on
+   * its own, so a 32dp IconButton is still *tappable* and correctly reports 48dp here. See the
+   * "what this cannot catch" section of the class doc.
    */
   @Test
   fun `a too small target is reported`() {
     composeRule.setContent {
       LiveHubTheme {
-        IconButton(onClick = {}, modifier = Modifier.size(32.dp)) {
-          Icon(imageVector = Icons.Filled.Close, contentDescription = "过小的按钮")
-        }
+        Box(
+          modifier = Modifier
+            .size(32.dp)
+            .clickable { }
+            .semantics { contentDescription = "过小的按钮" },
+        )
       }
     }
     composeRule.waitForIdle()
 
     val violations = scanClickTargets()
     assertFalse(
-      "a 32dp button must be reported as a violation, but the scan found none",
+      "a 32dp clickable must be reported as a violation, but the scan found none",
       violations.isEmpty(),
     )
     assertTrue(
-      "the report must name the offending button, was:\n" + violations.joinToString("\n"),
+      "the report must name the offending target, was:\n" + violations.joinToString("\n"),
       violations.any { it.contains("过小的按钮") },
     )
   }
