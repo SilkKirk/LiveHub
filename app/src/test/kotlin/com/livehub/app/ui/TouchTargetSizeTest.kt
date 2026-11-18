@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -41,18 +42,24 @@ import kotlin.math.roundToInt
  * in Google's Accessibility Test Framework — the tools that actually print "Touch target size too
  * small". Compose ships no such lint rule at all.) This test is the replacement.
  *
- * ## What it found on the way in
- *
- * Six `IconButton`s had no explicit size: `刷新` on 首页, `清空` and `搜索` on 搜索, and `刷新` /
- * `解除关联` / `重新扫描` on 同步. Material's default is a **40dp** state layer, which measures 40dp
- * in the layout — below the minimum, on the two screens a user reaches most often. They now carry
- * `Modifier.size(48.dp)` like every other button in the project.
- *
  * ## What is measured
  *
- * `boundsInRoot` of every node carrying a click action — the *layout* bound, which is exactly what
- * both historical bugs shrank. An expanded touch area does not rescue a 32dp layout, because the
- * padding that shrank it shrank what a finger can reach too.
+ * `touchBoundsInRoot` of every node carrying a click action — what a finger can actually hit, not
+ * where the node happens to be laid out. That is the property the two historical bugs broke, and the
+ * one accessibility is about.
+ *
+ * The first version of this test measured the *layout* bound instead, and it was wrong in a way
+ * worth recording: Material's `FilterChip` lays out 36dp tall and its `Switch` 32dp **by design**,
+ * both with a 48dp touch target. Measuring layout therefore flagged every chip and switch in the app
+ * — 12 false positives across 搜索, 设置 and 同步 — and would have pushed toward either an allowlist
+ * (which makes the guard decorative again) or inflating controls the design had settled on.
+ *
+ * ## What it found on the way in
+ *
+ * Six `IconButton`s carried no explicit size, because Material's default is a 40dp state layer:
+ * `刷新` on 首页, `清空` and `搜索` on 搜索, and `刷新` / `解除关联` / `重新扫描` on 同步. They now carry
+ * `Modifier.size(48.dp)` like the other eight in the project, so the app has one button size rather
+ * than two.
  *
  * ## Scope
  *
@@ -168,24 +175,41 @@ class TouchTargetSizeTest {
   }
 
   /**
-   * Every clickable node whose layout is smaller than [MIN_TOUCH_TARGET_DP] on either side.
+   * Every clickable node whose *touch* area is smaller than [MIN_TOUCH_TARGET_DP] on either side.
    *
-   * Described rather than returned as nodes so the message names what to go and fix; a bare count
-   * would leave the next reader diffing the whole screen.
+   * ## Why the touch bound and not the layout bound
+   *
+   * `boundsInRoot` is where the node is laid out; `touchBoundsInRoot` is what a finger can hit. The
+   * second one is the property accessibility is about, and it is the one the two historical bugs
+   * actually broke — `size(32.dp)` shrank both, and `size(48.dp).padding(8.dp)` kept the layout at
+   * 48 while the clickable inside the padding was 32.
+   *
+   * Measuring the layout bound instead was the first version of this test, and it produced false
+   * positives on components that are *deliberately* shorter than 48dp while their touch target is
+   * 48dp: Material's `FilterChip` lays out 36dp tall and its `Switch` 32dp, both by design. Failing
+   * those would have meant either weakening the assertion with an allowlist or inflating controls
+   * the design had already decided on — neither of which is what this guard is for.
+   *
+   * Both numbers are reported so a failure says whether the layout or only the touch area is small.
    */
   private fun scanClickTargets(): List<String> =
     composeRule.onAllNodes(hasClickAction())
       .fetchSemanticsNodes()
       .mapNotNull { node ->
-        val bounds = node.boundsInRoot
-        val width = with(composeRule.density) { bounds.width.toDp().value }
-        val height = with(composeRule.density) { bounds.height.toDp().value }
-        if (width >= MIN_TOUCH_TARGET_DP && height >= MIN_TOUCH_TARGET_DP) {
+        val touch = dpSize(node.touchBoundsInRoot)
+        if (touch.first >= MIN_TOUCH_TARGET_DP && touch.second >= MIN_TOUCH_TARGET_DP) {
           null
         } else {
-          "${width.roundToInt()}x${height.roundToInt()}dp  ${describe(node)}"
+          val layout = dpSize(node.boundsInRoot)
+          "touch ${touch.first.roundToInt()}x${touch.second.roundToInt()}dp" +
+            " (layout ${layout.first.roundToInt()}x${layout.second.roundToInt()}dp)" +
+            "  ${describe(node)}"
         }
       }
+
+  /** A bounds rectangle in dp, as `(width, height)`. */
+  private fun dpSize(rect: Rect): Pair<Float, Float> =
+    with(composeRule.density) { rect.width.toDp().value to rect.height.toDp().value }
 
   /** Best-effort human label for a node: its text, its content description, or neither. */
   private fun describe(node: SemanticsNode): String {
