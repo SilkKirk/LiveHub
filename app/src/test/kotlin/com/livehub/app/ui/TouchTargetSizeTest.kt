@@ -26,34 +26,47 @@ import org.robolectric.annotation.Config
 import kotlin.math.roundToInt
 
 /**
- * No click target in the app shell may be smaller than 48dp.
+ * No click target in the app may be smaller than 48dp.
  *
  * ## Why this test exists at all
  *
- * The 48dp minimum has been broken twice here, both times in a way that looked fixed: `size(32.dp)`
- * on an `IconButton` (round 61), and then `size(48.dp).padding(8.dp)` — a 48dp node around a 32dp
+ * The 48dp minimum has been broken here repeatedly, always in a way that looked fixed: `size(32.dp)`
+ * on an `IconButton` (round 61), then `size(48.dp).padding(8.dp)` — a 48dp node around a 32dp
  * clickable area, because `IconButton` applies Material's minimum *inside* the caller's modifier
  * (round 65). Neither was caught by a test; both were caught by reading the code.
  *
- * The guard that was supposed to cover the third occurrence was `lint { error +=
- * "TouchTargetSizeCheck" }`, and it was **fiction**: that string is not a Gradle lint issue id, so
- * lint merely answered `UnknownIssueId` and enforced nothing. (It names an analyzer in Android
- * Studio's visual lint and in Google's Accessibility Test Framework — the things that actually
- * print "Touch target size too small". Compose ships no such lint rule at all.) This test is the
- * replacement, and unlike the lint line it fails when the property is violated.
+ * The guard meant to cover the third occurrence was `lint { error += "TouchTargetSizeCheck" }`, and
+ * it was **fiction**: that string is not a Gradle lint issue id, so lint only ever answered
+ * `UnknownIssueId` and enforced nothing. (It names an analyzer in Android Studio's visual lint and
+ * in Google's Accessibility Test Framework — the tools that actually print "Touch target size too
+ * small". Compose ships no such lint rule at all.) This test is the replacement.
+ *
+ * ## What it found on the way in
+ *
+ * Six `IconButton`s had no explicit size: `刷新` on 首页, `清空` and `搜索` on 搜索, and `刷新` /
+ * `解除关联` / `重新扫描` on 同步. Material's default is a **40dp** state layer, which measures 40dp
+ * in the layout — below the minimum, on the two screens a user reaches most often. They now carry
+ * `Modifier.size(48.dp)` like every other button in the project.
  *
  * ## What is measured
  *
- * `boundsInRoot` of every node that carries a click action. That is the *layout* bound, which is
- * exactly what the two historical bugs shrank — an expanded touch area does not rescue a target
- * whose layout is 32dp, because the padding that shrank it also shrank what the finger can reach.
+ * `boundsInRoot` of every node carrying a click action — the *layout* bound, which is exactly what
+ * both historical bugs shrank. An expanded touch area does not rescue a 32dp layout, because the
+ * padding that shrank it shrank what a finger can reach too.
  *
- * ## The second test is the important one
+ * ## Scope
  *
- * A screen-wide "no violations" assertion is worthless if the detector silently finds nothing —
- * and a detector that never fires looks identical to a clean app. [a too small target is reported]
- * renders one deliberately broken button and requires the same scan to name it, so the suite fails
- * if the measurement ever stops working.
+ * The five dock screens, each rendered through [LiveHubRoot] so what is measured is the shell a
+ * user actually gets. The player screen is not included: it composes an `ExoPlayer`, and its
+ * buttons are pinned by `PlayerChromeTest` instead. That is a real gap rather than a judgement —
+ * noted here so the next person extends this rather than assuming the player is covered.
+ *
+ * ## The last test is the important one
+ *
+ * A "no violations" assertion is worthless if the detector silently finds nothing: a scan that never
+ * fires looks identical to a clean app. [a too small target is reported] renders one deliberately
+ * broken button and requires the same scan to name it, so the suite fails if the measurement ever
+ * stops measuring.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w411dp-h891dp")
@@ -81,36 +94,26 @@ class TouchTargetSizeTest {
     ),
   )
 
-  private fun shellState() = UiState(
-    screen = Screen.Home,
-    platform = Platform.DOUYU,
-    rooms = rooms,
-  )
+  @Test
+  fun `home has no undersized click target`() = assertShellHasNoSmallTargets(Screen.Home)
 
   @Test
-  fun `no click target in the app shell is under 48dp`() {
-    composeRule.setContent {
-      LiveHubTheme {
-        Box(modifier = Modifier.size(411.dp, 891.dp)) {
-          LiveHubRoot(state = shellState(), onAction = {})
-        }
-      }
-    }
-    composeRule.waitForIdle()
+  fun `search has no undersized click target`() = assertShellHasNoSmallTargets(Screen.Search)
 
-    val violations = scanClickTargets()
-    assertTrue(
-      "these click targets are under ${MIN_TOUCH_TARGET_DP.toInt()}dp:\n" +
-        violations.joinToString("\n"),
-      violations.isEmpty(),
-    )
-  }
+  @Test
+  fun `follow has no undersized click target`() = assertShellHasNoSmallTargets(Screen.Follow)
+
+  @Test
+  fun `sync has no undersized click target`() = assertShellHasNoSmallTargets(Screen.Sync)
+
+  @Test
+  fun `settings has no undersized click target`() = assertShellHasNoSmallTargets(Screen.Settings)
 
   /**
    * Proves the scan can fail.
    *
-   * `size(32.dp)` on an `IconButton` is the round-61 shape verbatim. If this test ever passes while
-   * the button really is 32dp, the measurement above has stopped measuring anything.
+   * `size(32.dp)` on an `IconButton` is the round-61 shape verbatim. If this ever passes while the
+   * button really is 32dp, every assertion above has stopped measuring anything.
    */
   @Test
   fun `a too small target is reported`() {
@@ -131,6 +134,36 @@ class TouchTargetSizeTest {
     assertTrue(
       "the report must name the offending button, was:\n" + violations.joinToString("\n"),
       violations.any { it.contains("过小的按钮") },
+    )
+  }
+
+  /** Renders [screen] inside the real shell and asserts every click target clears the minimum. */
+  private fun assertShellHasNoSmallTargets(screen: Screen) {
+    val state = UiState(
+      screen = screen,
+      platform = Platform.DOUYU,
+      rooms = rooms,
+      // Populated so the follow and search screens draw cards rather than an empty state; an empty
+      // screen would have almost no click targets in it and would pass while proving nothing.
+      followed = rooms,
+      searchResults = rooms,
+      searchQuery = "团团",
+      lastSearchQuery = "团团",
+    )
+    composeRule.setContent {
+      LiveHubTheme {
+        Box(modifier = Modifier.size(411.dp, 891.dp)) {
+          LiveHubRoot(state = state, onAction = {})
+        }
+      }
+    }
+    composeRule.waitForIdle()
+
+    val violations = scanClickTargets()
+    assertTrue(
+      "${screen.name}: these click targets are under ${MIN_TOUCH_TARGET_DP.toInt()}dp:\n" +
+        violations.joinToString("\n"),
+      violations.isEmpty(),
     )
   }
 

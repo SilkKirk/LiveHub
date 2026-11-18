@@ -234,7 +234,10 @@ private fun SyncActionsRow(
       // leftover. A `Row` is safe now — the two items above it are weighted and full-width, so
       // nothing can be squeezed to zero the way three fixed-size buttons were. It stays enabled
       // when the permission is missing: reading the stored peer list touches no network.
-      IconButton(onClick = { onAction(UiAction.RefreshPeers) }) {
+      IconButton(
+        onClick = { onAction(UiAction.RefreshPeers) },
+        modifier = Modifier.size(48.dp),
+      ) {
         Icon(Icons.Filled.Refresh, contentDescription = "刷新")
       }
     }
@@ -575,7 +578,10 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
               )
             },
             trailingContent = {
-              IconButton(onClick = { onAction(UiAction.UnpairPeer(peer.deviceId)) }) {
+              IconButton(
+                onClick = { onAction(UiAction.UnpairPeer(peer.deviceId)) },
+                modifier = Modifier.size(48.dp),
+              ) {
                 Icon(Icons.Filled.Delete, contentDescription = "解除关联")
               }
             },
@@ -671,7 +677,10 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
         if (state.discovering) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
         }
-        IconButton(onClick = { onAction(UiAction.StartDiscovery) }) {
+        IconButton(
+          onClick = { onAction(UiAction.StartDiscovery) },
+          modifier = Modifier.size(48.dp),
+        ) {
           Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
         }
       }

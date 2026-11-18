@@ -334,12 +334,16 @@ private fun SearchField(state: UiState, onAction: (UiAction) -> Unit) {
       trailingIcon = {
         Row(verticalAlignment = Alignment.CenterVertically) {
           if (state.searchQuery.isNotEmpty()) {
-            IconButton(onClick = { onAction(UiAction.UpdateQuery("")) }) {
+            IconButton(
+              onClick = { onAction(UiAction.UpdateQuery("")) },
+              modifier = Modifier.size(48.dp),
+            ) {
               Icon(Icons.Filled.Clear, contentDescription = "清空")
             }
           }
           IconButton(
             onClick = { onAction(UiAction.SubmitSearch) },
+            modifier = Modifier.size(48.dp),
             enabled = state.searchQuery.isNotBlank(),
           ) {
             Icon(Icons.AutoMirrored.Filled.KeyboardReturn, contentDescription = "搜索")

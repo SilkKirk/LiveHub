@@ -473,7 +473,13 @@ private fun PlatformTabs(
         )
       }
     }
-    IconButton(onClick = { onAction(UiAction.Refresh) }) {
+    // 48dp, not Material's 40dp default: `TouchTargetSizeTest` measures this button and fails
+    // below the minimum. Every IconButton in this project carries the explicit size for that
+    // reason, and this one had been missed.
+    IconButton(
+      onClick = { onAction(UiAction.Refresh) },
+      modifier = Modifier.size(48.dp),
+    ) {
       Icon(
         imageVector = Icons.Filled.Refresh,
         contentDescription = "刷新",
