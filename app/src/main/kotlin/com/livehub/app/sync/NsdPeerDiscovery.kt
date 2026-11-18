@@ -59,7 +59,7 @@ class NsdPeerDiscovery(
     }
 
     val serviceInfo = NsdServiceInfo().apply {
-      serviceName = "LiveHub-$deviceId"
+      serviceName = "$SERVICE_NAME_PREFIX$deviceId"
       serviceType = SERVICE_TYPE
       port = portProvider()
       setAttribute("deviceId", deviceId.toString())
@@ -103,9 +103,16 @@ class NsdPeerDiscovery(
       }
 
       override fun onServiceLost(info: NsdServiceInfo) {
-        synchronized(managers) {
-          managers.entries.removeAll { it.value.deviceName == info.serviceName }
-        }
+        // The instance name is the only identifier that is the same on both sides.
+        //
+        // This compared `it.value.deviceName` — the human-readable name from the TXT record
+        // ("Xiaomi 13") — against `info.serviceName` ("LiveHub-12345"). Those are two different
+        // spaces, so the predicate never matched and the table only ever grew: `known()` kept
+        // reporting devices that had gone away, one entry per peer id, for the life of the process.
+        // It appeared to work only when the TXT attribute was missing, because the resolve path
+        // falls back to `serviceName` as the display name in exactly that case.
+        val lostId = info.serviceName?.removePrefix(SERVICE_NAME_PREFIX)?.toLongOrNull() ?: return
+        synchronized(managers) { managers.remove(lostId) }
       }
 
       override fun onDiscoveryStopped(serviceType: String) = Unit
@@ -125,6 +132,15 @@ class NsdPeerDiscovery(
 
   companion object {
     const val SERVICE_TYPE = "_livehub._tcp."
+
+    /**
+     * Every instance is named `LiveHub-<deviceId>`.
+     *
+     * `onServiceLost` only receives the instance name (the TXT record is not resolved on that
+     * callback), so this prefix is what lets it recover the device id it has to evict.
+     */
+    private const val SERVICE_NAME_PREFIX = "LiveHub-"
+
     private const val TAG = "LiveHubDiscovery"
   }
 }
