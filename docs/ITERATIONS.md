@@ -4822,4 +4822,102 @@ Material 本来就把它们都撑到了 48dp 可点击。原注释把它们记�
 3. **`ci.yml` 的 release-assembly 产物没归档 mapping**（价值低，备查）。
 4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
 
+---
+
+## 第一百二十八轮迭代：播放器两处「首次组合的值」，mDNS 一处键空间错配
+
+从遗留清单开始，但两条都被**自己的查证推翻**了，先记这两条，因为它们改变了清单：
+
+* **`core:data` 覆盖不薄**。我在第一百二十六轮的审查里记了「只有 1 个测试文件」，
+  实际那 1 个文件里有 18 条用例，把 `withRetry` / `isRetryable` / `classified` 的每个分支
+  都钉了（4xx 不重试、429 重试、取消原样抛出、中文消息保留……）。当时只数了文件数。
+* **mapping 已经归档了**。`release.yml` 早就在收 R8 mapping，缺了就报错失败，并把它附到
+  GitHub Release。只有 CI 那个**不发布**的 release job 没归档，而记录里多次注明那一个
+  「价值低（没人会安装那个产物）」。
+
+于是转向通读播放器。
+
+### 一、暂停中切换清晰度，画面会自己播起来
+
+`LivePlayer` 的 `LaunchedEffect(url, isHls)` 无条件 `player.play()`。而 `paused` 是
+`state.playerPaused`，切换清晰度或线路时**只有 url 变**：这个 effect 重跑，
+`LaunchedEffect(paused)` 却因为 key 没动而不重跑。
+
+于是用户暂停 → 切清晰度 → 画面立刻开始播，而 `PlayerScreen.kt:497` 的角标条件
+（`!compact && paused && effectiveVariant != null`）还写着「已暂停 · 双击继续」。
+画面与角标互相矛盾。
+
+改法：装载新 URL 后按 `paused` 决定 pause 还是 play。
+
+### 二、`onFatalError` 拿到的是首次组合的 variant
+
+监听器挂在 `LaunchedEffect(player)` 上，而 `player` 是无 key 的 `remember`，所以监听器
+**只注册一次**，闭包持有首次组合传入的 lambda。文件里已经为此把 `attempt` 套了
+`rememberUpdatedState` 并写了原因，但两个回调没套。
+
+调用点那个 lambda 不是稳定引用，它捕获了 `variant`：
+
+    onFatalError = { error ->
+      if (error.startsWith("http://") && !variant.url.startsWith("http://")) …
+    }
+
+切换清晰度后，监听器手里的仍是旧 variant，于是「要不要走 http 降级」是用**上一个流**判断的。
+这正是 `PlaybackAttempt` 当初引入时要消灭的那类张冠李戴，只在外层又出现一次。
+改法：两个回调同样走 `rememberUpdatedState`。
+
+### 三、mDNS：拿两种不同的标识符做比较
+
+注册时实例名是 `LiveHub-<deviceId>`，TXT 里另有人类可读的 `deviceName`（「Xiaomi 13」）。
+`onServiceResolved` 把后者存进 `DiscoveredPeer.deviceName`，而 `onServiceLost` 却用
+
+    managers.entries.removeAll { it.value.deviceName == info.serviceName }
+
+比较「Xiaomi 13」与「LiveHub-12345」——两个不同的键空间，**永不相等**。结果 `managers`
+只增不减，`known()` 一直报告已经离开的设备。
+
+它只在一种情况下「看起来能用」：TXT 缺 `deviceName` 时，解析路径会拿 `serviceName` 兜底当
+显示名，那时两边才碰巧相同。改法：从实例名取回 deviceId 再按 key 移除，前缀提成常量。
+
+### 四、后台刷新：一个房间一次写入 → 一次写入
+
+`FollowRefreshWorker` 逐房间调用 `updateSnapshot`，而每次 `persist` 都会**重编码整个设置记录**
+并交给 DataStore。一百个关注 = 每轮一百次全量编码 + 一百次写，每三十分钟一次。
+
+这与 `recentRooms` 封顶的理由是同一个（注释原话「every other settings write re-encodes it」），
+那边封长度，这边封次数。新增 `FollowStore.updateSnapshots`，一次 mutate 应用全部；
+`updateSnapshot`（单房间）改为委托给它，规则只有一份实现。
+
+顺带修掉一处隐性问题：原先用 `filterNot { … } + updated` 重写会把记录搬到列表末尾，现在是
+`copy`，位置稳定。
+
+### 我又犯了一次键空间的错
+
+新加的批量用例里断言 `store.records().any { it.key == gone.key && it.deleted }`，CI 报失败。
+错的是测试：`gone.key` 是 **Streamer** 键（`douyu:3`），记录键是 `room:douyu:3`。
+
+**这与我这一轮刚在 `onServiceLost` 里修掉的，是同一类错误。** 同一个概念在一份代码里有两套
+键表示，代价是每次都要想一遍用的是哪套。短期改法是把区别写进注释；真要消除得让记录键不再
+与 `Streamer.key` 长得相似。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `lintDebug`（全模块） | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增批量刷新的两条边界） |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `e160f94` 三个 job 全绿 |
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **`PictureInPictureIssue`**：仍然不做。它是设备行为，模拟器截图测不出，盲改会拿 README 的
+   主功能冒险。要做就先在真机上确认当前显式 `enterPictureInPictureMode` 的转场到底有多差。
+2. **`MainViewModel` 拆分**（见第一百二十六轮第 2 条）：重构性质，单独一轮做。
+3. **同步页「可配对设备」不会消失**：`PeerDiscovery` 的 `Flow` 只发「发现」不发「离开」，
+   所以设备走掉后仍留在列表里，直到 `SyncController.stop()`。要修得改接口（加一个 lost 事件），
+   不只是修 `onServiceLost`。
+4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
+
+
 
