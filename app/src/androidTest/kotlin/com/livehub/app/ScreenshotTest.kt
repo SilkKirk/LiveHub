@@ -504,7 +504,7 @@ class ScreenshotTest {
    * The fold is driven by a `NestedScrollConnection` on the page, and `performScrollToNode` does not
    * go through nested scrolling the way a finger does — it drives the lazy list directly — so this
    * render may come back with the tree still open. That is a fact about the harness worth knowing,
-   * not a defect in the fold: the two gesture tests in `HomeHeaderCollapseUiTest` are what pin the
+   * not a defect in the fold: the two gesture tests in `CollapsibleHeaderUiTest` are what pin the
    * behaviour.
    */
   @Test
@@ -1531,8 +1531,8 @@ class ScreenshotTest {
 
     if (swipeUpCount > 0) {
       // A real gesture: the fold on 首页 and 关注 is driven by nested scroll, which `scrollToText`
-      // never produces. The clock runs free while the gesture and the fold animation play out, then
-      // freezes, so the collapsed state is what the PNG shows.
+      // never produces. The clock runs free while the gesture and its fling play out, then freezes,
+      // so the collapsed state is what the PNG shows.
       composeRule.mainClock.autoAdvance = true
       repeat(swipeUpCount) {
         composeRule.onRoot().performTouchInput { swipeUp(startY = centerY, endY = top) }

@@ -3,6 +3,7 @@ package com.livehub.app.ui.components
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -30,18 +31,19 @@ import org.robolectric.annotation.Config
 /**
  * 下滑收起、上滑显示 — with a gesture, on both screens that use the fold.
  *
- * `CollapsibleHeaderTest` pins the decision table; this pins that the decision is wired to a real
- * list and to a real header, in both directions, on each page. Two tests per screen, because the
- * per-screen part is exactly the wiring: the component is shared, the lambda that says "the list has
- * moved" is not, and a screen that remembered its grid state in the wrong place would pass the pure
- * test and fail here.
+ * `CollapsibleHeaderTest` pins the arithmetic; this pins that it is wired to a real list and a real
+ * header, in both directions, on each page. Two tests per screen — plus the round-131 case that a
+ * short drag only folds part of the header — because the per-screen part is exactly the wiring: the
+ * component is shared, the lambda that says "the list has moved" is not, and a screen that
+ * remembered its grid state in the wrong place would pass the pure test and fail here.
  *
  * The header is identified by text that only exists while it is composed — the group chips on 首页,
  * the filter row on 关注 — so "the node is gone" means "the header folded".
  *
- * Gestures are aimed at a card rather than at the list: matching the list is ambiguous (the platform
- * pager is a scrollable too, and it contains the same cards), and the root starts inside the tabs,
- * where nothing scrolls.
+ * **Gestures are full height on purpose.** The fold is proportional to the drag now (round 131), so
+ * a gesture aimed at a single card would fold exactly the card's height and stop — it would be
+ * testing the card's size, not the wiring. `swipeUp()` on the root drags the whole 640dp window,
+ * which clears any header on either page.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w320dp-h640dp")
@@ -117,9 +119,15 @@ class CollapsibleHeaderUiTest {
    */
   private fun headerCount(): Int = count("正在直播", substring = true)
 
-  private fun cards() = composeRule.onAllNodesWithText("直播标题", substring = true)
-
-  private fun topCard() = cards().let { it[0] }
+  /**
+   * A drag from the window centre to the top: long enough to out-drag either page's header.
+   *
+   * Starting at the centre rather than at the bottom edge is what makes the gesture land: the bottom
+   * edge is the exclusive bound of the root's bounds, and a touch there hits nothing to scroll.
+   */
+  private fun swipeUpThroughTheGrid() {
+    composeRule.onRoot().performTouchInput { swipeUp(startY = centerY, endY = top) }
+  }
 
   /**
    * Drags down from the middle of the window.
@@ -138,7 +146,7 @@ class CollapsibleHeaderUiTest {
     composeHome()
     assertTrue("the tree starts open", count("网游") == 1)
 
-    topCard().performTouchInput { swipeUp() }
+    swipeUpThroughTheGrid()
     composeRule.waitForIdle()
 
     assertTrue(
@@ -151,7 +159,7 @@ class CollapsibleHeaderUiTest {
   fun `home - swiping back down brings it back`() {
     composeHome()
 
-    topCard().performTouchInput { swipeUp() }
+    swipeUpThroughTheGrid()
     composeRule.waitForIdle()
     assertTrue("folded first", count("网游") == 0)
 
@@ -167,7 +175,7 @@ class CollapsibleHeaderUiTest {
     composeFollow()
     assertTrue("the header starts visible, found ${headerCount()}", headerCount() == 1)
 
-    topCard().performTouchInput { swipeUp() }
+    swipeUpThroughTheGrid()
     composeRule.waitForIdle()
 
     assertTrue(
@@ -180,7 +188,7 @@ class CollapsibleHeaderUiTest {
   fun `follow - swiping back down brings it back`() {
     composeFollow()
 
-    topCard().performTouchInput { swipeUp() }
+    swipeUpThroughTheGrid()
     composeRule.waitForIdle()
     assertTrue("folded first, found ${headerCount()}", headerCount() == 0)
 
@@ -188,5 +196,45 @@ class CollapsibleHeaderUiTest {
     composeRule.waitForIdle()
 
     assertTrue("scrolling back up must bring the header back, found ${headerCount()}", headerCount() == 1)
+  }
+
+  /**
+   * A drag shorter than the header folds part of it, not all of it.
+   *
+   * The reported defect (round 131): any drag past 6px flipped the header away and a 160ms animation
+   * then pulled the content up by the header's whole height — "下滑时突然上面的收起来，感觉滑动很快".
+   * The old rule fails this assertion outright (the header is gone); the fold now moves by the
+   * distance actually dragged, so a 60dp gesture leaves the rest of the header on screen.
+   *
+   * The gesture is stepped rather than one jump: the first step is spent on touch slop and on moving
+   * the list at all (folding is gated on the list having moved), and the rest is what the fold uses.
+   */
+  @Test
+  fun `follow - a short drag folds the header part-way instead of away`() {
+    composeFollow()
+    val before = composeRule.onNodeWithText("正在直播", substring = true)
+      .fetchSemanticsNode().boundsInRoot
+
+    composeRule.onRoot().performTouchInput {
+      val start = center
+      val step = 15.dp.toPx()
+      down(start)
+      repeat(4) { index ->
+        moveTo(Offset(start.x, start.y - step * (index + 1)))
+      }
+      up()
+    }
+    composeRule.waitForIdle()
+
+    assertTrue(
+      "a 60dp drag must not remove the header, found ${headerCount()}",
+      headerCount() == 1,
+    )
+    val after = composeRule.onNodeWithText("正在直播", substring = true)
+      .fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "the header must have moved up by the drag, not stayed put or vanished: $before -> $after",
+      after.top < before.top,
+    )
   }
 }
