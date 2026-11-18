@@ -221,10 +221,14 @@ class CollapsibleHeaderUiTest {
    *  * the connection consumes that delta, so the list underneath does not also move by it. That is
    *    the other half of "太快": the old version consumed nothing and moved the content on a timer.
    *
-   * Driven through `onPreScroll` directly rather than by injecting a touch, because a Robolectric
-   * gesture ends in a fling: the fling legitimately folds the rest of the header, and a gesture-based
-   * version of this assertion measured the fling instead of the drag (it failed on CI that way). The
-   * four tests above are the gesture path.
+   * Driven through `onPreScroll` directly rather than by injecting a touch: a gesture and the fling
+   * that follows it are hard to separate, and what this pins is the delta, not input dispatch. (The
+   * first version of this assertion did use a gesture and failed on CI with "a 60dp drag must not
+   * remove the header, found 0".) The four tests above are the gesture path.
+   *
+   * It is also the test that found the defect in the first implementation of the fold: the header
+   * measured itself while being constrained to its own clipped height, so `fullHeight` shrank by the
+   * collapsed amount every frame and a 60dp drag folded everything (140 expected, 0 measured).
    */
   @Test
   fun `a partial drag folds the header by the drag and keeps it on screen`() {

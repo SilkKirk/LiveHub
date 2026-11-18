@@ -3,6 +3,7 @@ package com.livehub.app.ui.components
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
@@ -156,8 +157,13 @@ fun CollapsibleHeader(
       Box(
         Modifier
           .fillMaxWidth()
+          // `requiredHeight`, not `height`: the outer box is already only `remaining` tall, and
+          // plain `height` is clamped to the incoming maximum — the inner would measure the
+          // *clipped* height, `onSizeChanged` would feed that back into `fullHeight`, and the fold
+          // would shrink itself to nothing one frame at a time. The component test caught exactly
+          // that on its first run (140 expected, 0 measured after a 60dp drag).
           .then(
-            if (collapsed > 0f) Modifier.height(with(density) { fullHeight.toFloat().toDp() }) else Modifier,
+            if (collapsed > 0f) Modifier.requiredHeight(with(density) { fullHeight.toFloat().toDp() }) else Modifier,
           )
           .graphicsLayer { translationY = -collapsed }
           .onSizeChanged { fullHeight = it.height },
