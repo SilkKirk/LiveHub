@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
  * Both used to be a bare `runBlocking { dataStore.data.first() }` in the getter, and both are on hot
  * paths: `SyncEngine` asks for the peer list several times per exchange, `SyncHttpServer.peerById`
  * asks on **every** authenticated request, `PeerAddressBook` re-reads the address book through its
- * `onChange` callback, and `MainViewModel.refreshPeers` asks from the **main** thread on every visit
+ * `onChange` callback, and `SyncSurface.refreshPeers` asks from the **main** thread on every visit
  * to the sync page and after every pair and unpair. The main-thread one is the only user-visible
  * cost, and it is the same defect round 60 fixed for `deviceId`.
  *

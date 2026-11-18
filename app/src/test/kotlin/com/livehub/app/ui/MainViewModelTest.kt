@@ -45,8 +45,8 @@ class MainViewModelTest {
     container.preferences.update { com.livehub.app.di.UserSettings() }
     // Start from a clean library so tests do not depend on ordering or leftover groups.
     container.followStore.replaceAll(emptyList())
-    // And a clean peer list: it lives in its own DataStore key, and `autoSyncWanted` reads it — a
-    // device left behind by another test would let this one start the LAN server.
+    // And a clean peer list: it lives in its own DataStore key, and `SyncSurface.autoSyncWanted`
+    // reads it — a device left behind by another test would let this one start the LAN server.
     container.preferences.saveTrustedPeers(emptyList())
     viewModel = MainViewModel(container)
     idle()

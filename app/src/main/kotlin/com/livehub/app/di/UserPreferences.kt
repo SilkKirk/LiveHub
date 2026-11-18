@@ -154,12 +154,12 @@ data class UserSettings(
  *
  * [saveTrustedPeers] and [savePeerAddresses] are the exception: they still write on the caller's
  * thread, and **not** every caller is on a background dispatcher. `SyncController` is (its whole
- * exchange runs on `Dispatchers.IO`), but `MainViewModel.unpair` is not — it reaches both through
- * `SyncEngine.unpair` and `SyncController.forgetPeer` from a click handler, so removing a paired
- * device performs a blocking read and two blocking writes on the main thread. That is a known,
- * unfixed cost, recorded in `docs/ITERATIONS.md`; it is not a property of the design, and the
- * earlier version of this paragraph claimed otherwise. Fixing it means making the peer list part
- * of the cached settings record (like every other field) rather than a separate key.
+ * exchange runs on `Dispatchers.IO`), and `SyncSurface.unpair` hops there before reaching both of
+ * them, so removing a paired device no longer pays that cost on the main thread. The guarantee
+ * belongs to those call sites, not to these two methods: a new main-thread caller would put a
+ * blocking read and two blocking writes back on it. Making the peer list part of the cached
+ * settings record (like every other field) instead of a separate key is what would retire the
+ * distinction for good.
  */
 class UserPreferences(private val context: Context) {
   private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -381,8 +381,9 @@ class UserPreferences(private val context: Context) {
   /**
    * Turns the always-on LAN server and the one-sync-per-foreground-entry on or off.
    *
-   * The setting is read by `MainViewModel` rather than by `SyncController`, because "may a socket
-   * be open right now" also depends on the foreground state, and only the ViewModel knows that.
+   * The setting is read by `SyncSurface` rather than by `SyncController`, because "may a socket be
+   * open right now" also depends on the foreground state, and only `MainViewModel`'s lifecycle
+   * callbacks know that.
    */
   fun setAutoSync(enabled: Boolean) {
     update { it.copy(autoSync = enabled) }
@@ -493,7 +494,7 @@ class UserPreferences(private val context: Context) {
    * The same treatment [deviceId] got, and for the same reason: this was a blocking DataStore read
    * on **every** call. `SyncEngine` asks for the list several times per exchange, `peerById` asks on
    * every authenticated request (a server thread, so that was a disk hop per request rather than
-   * jank), and `MainViewModel.refreshPeers` asks from the **main** thread on every visit to the sync
+   * jank), and `SyncSurface.refreshPeers` asks from the **main** thread on every visit to the sync
    * page and after every pair and unpair — which is where it was user-visible.
    *
    * [saveTrustedPeers] republishes the cache, so within one installation the value is never stale.

@@ -188,7 +188,7 @@ class AutoSyncTest {
    * The address in the state is the one the server actually bound.
    *
    * `UiState.localAddress` is what the sync page renders, and it is the only value the rest of the
-   * app may trust (see `MainViewModel.startSyncServer`), while the controller can always be asked
+   * app may trust (see `SyncSurface.startSyncServer`), while the controller can always be asked
    * what it is listening on. The two have to agree — including when both are empty, which is the
    * legitimate answer on a machine with no non-loopback IPv4 interface. The bug shape this rejects
    * is "one side has an address and the other does not": a page advertising a port that is not the

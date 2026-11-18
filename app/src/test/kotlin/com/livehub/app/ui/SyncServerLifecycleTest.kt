@@ -1,6 +1,9 @@
 package com.livehub.app.ui
 
 import android.os.Looper
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.livehub.app.di.AppContainer
@@ -22,7 +25,7 @@ import org.robolectric.annotation.Config
  * open", which had a real cost — two devices could only ever meet while both users were parked on
  * that page, so the feature was a manual errand instead of something the app does. The lifetime is
  * now "the app is in the foreground, at least one device is paired, and 自动同步 is on" (see
- * `MainViewModel.autoSyncWanted`), which means the server is *supposed* to outlive the page.
+ * `SyncSurface.autoSyncWanted`), which means the server is *supposed* to outlive the page.
  *
  * What did survive the reversal, and is what these tests now pin:
  *
@@ -118,8 +121,8 @@ class SyncServerLifecycleTest {
    * The address the page shows is never one nothing is listening on.
    *
    * `SyncController.serverAddress` documents that it is only meaningful *after* a bind has landed,
-   * and `enterSyncScreen` reads it synchronously, one statement after asking for a bind that
-   * happens on another thread. The port field is still zero at that moment, so the value was
+   * and `SyncSurface.enterSyncScreen` reads it synchronously, one statement after asking for a bind
+   * that happens on another thread. The port field is still zero at that moment, so the value was
    * `"192.168.1.23:0"` — a plausible-looking endpoint that no peer can reach, drawn on the first
    * frame of the page until the bind's continuation replaced it.
    *
@@ -285,6 +288,41 @@ class SyncServerLifecycleTest {
     assertTrue(
       "the new code must have time on it",
       viewModel.state.value.pairingCodeSecondsLeft > 0,
+    )
+  }
+
+  /**
+   * The ViewModel owns the socket, so clearing it has to take the socket down.
+   *
+   * `MainViewModel.onCleared` is `protected` — Kotlin keeps the base visibility on an override — so
+   * the only honest way to reach it is the path the platform uses: put the instance in a
+   * `ViewModelStore` and clear the store. That is what `MainActivity` relies on, and an inline
+   * `MainViewModel(container)` is never stored, which is how the LAN server used to outlive every
+   * screen. Round 130 moved the teardown into `SyncSurface.shutdown`; this is the guard that the
+   * move did not quietly drop it.
+   */
+  @Test
+  fun `clearing the ViewModel takes the server down`() {
+    pairDevice()
+    viewModel.onAppForeground()
+    awaitCondition { container.syncController.isRunning }
+
+    val store = ViewModelStore()
+    ViewModelProvider(
+      store,
+      object : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+          @Suppress("UNCHECKED_CAST")
+          return viewModel as T
+        }
+      },
+    ).get(MainViewModel::class)
+    store.clear()
+    idle()
+
+    assertFalse(
+      "the socket must not outlive the ViewModel that owns it",
+      container.syncController.isRunning,
     )
   }
 }

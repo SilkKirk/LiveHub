@@ -35,12 +35,13 @@ import kotlinx.coroutines.withContext
 /**
  * The Android side of cross-device sync.
  *
- * Owns the LAN server, the client transport, discovery and the pairing handshake so the
- * ViewModel only has to call [start], [syncNow] and [stop].
+ * Owns the LAN server, the client transport, discovery and the pairing handshake so its one caller
+ * — `com.livehub.app.ui.SyncSurface`, reached through `MainViewModel`'s lifecycle callbacks — only
+ * has to call [start], [syncNow] and [stop].
  *
  * **This class does not decide when it runs.** It used to: the server's contract was "only while
  * the sync screen is open", which meant two devices could only ever meet while both users were
- * parked on that page. The decision moved to `MainViewModel` (foreground + at least one paired
+ * parked on that page. The decision moved to the sync surface (foreground + at least one paired
  * device + the auto-sync switch), because the foreground state is something only the Activity
  * knows. Everything here is the mechanism; the policy is one place, one screen away.
  */
@@ -133,7 +134,7 @@ class SyncController(
    * landed, and it can be an ephemeral one, so a reader that asks earlier gets null (or the
    * previous run's port). That is the whole reason [startAsync] returns the address itself: the app
    * publishes it as `UiState.localAddress` in the same hop, and that field — not this getter — is
-   * what the UI and the rest of the ViewModel read.
+   * what the UI and the rest of the app read.
    */
   val serverAddress: String?
     get() = PeerAddressBook.preferredLocalAddress()?.let { "$it:$listeningPort" }
