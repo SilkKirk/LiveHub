@@ -6,7 +6,11 @@ import com.livehub.core.model.LibraryKey
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import com.livehub.core.sync.Hlc
+import com.livehub.core.sync.MapSyncTargets
+import com.livehub.core.sync.SyncCodec
+import com.livehub.core.sync.SyncEngine
 import com.livehub.core.sync.SyncRecord
+import com.livehub.core.sync.SyncScope
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -144,6 +148,9 @@ class FollowStoreConcurrencyTest {
    * looks like: the peer's copy is a snapshot of *its* device, not of this one. Both changes have to
    * survive — the tap's star and the payload's new room — and neither may be silently reverted by
    * the other's write.
+   *
+   * Driven through a real [SyncEngine] rather than by calling `apply` directly: `apply` takes the
+   * **merged** set, and handing it a raw payload skips the merge this test is about.
    */
   @Test
   fun `a payload applied while a star tap is in flight keeps both`() {
@@ -151,21 +158,31 @@ class FollowStoreConcurrencyTest {
     val room2 = streamer("2")
     store.toggle(room1, hlc(), DEVICE_ID, clock)
 
-    // What the peer sends: it knows room 1 (older clock, so the local tap wins) and adds room 2.
+    // What the peer sends: it knows room 1 with an older clock (so the local star wins) and adds
+    // room 2, which this device has never seen.
     val fromPeer = listOf(
       recordOf(room1, Hlc(1L, 0)),
       recordOf(room2, hlc()),
     )
 
     assertTrue("the star must be accepted", store.toggleSpecial(room1, hlc(), DEVICE_ID, clock))
-    val applied = FollowSyncTarget(store).apply(fromPeer)
+
+    val payload = SyncCodec.buildPayload(
+      scope = SyncScope.FOLLOWS,
+      records = fromPeer,
+      deviceId = PEER_DEVICE_ID,
+      sequence = 1L,
+      now = clock,
+    )
+    val result = engine().applyPayload(payload, peer = null)
+
+    assertEquals("only the peer's new room is a remote win", 1, result.applied)
 
     // Room 2 arrived, so the payload was not thrown away.
     assertTrue(
       "the peer's new room must be stored",
       store.records().any { it.key == roomKey("2") },
     )
-    assertEquals("only the peer's new room is a change; room 1 keeps the local star", 1, applied)
 
     // And the star survives: the peer's clock for room 1 was older, so the merge keeps ours.
     val stored1 = store.records().firstOrNull { it.key == roomKey("1") }
@@ -177,6 +194,16 @@ class FollowStoreConcurrencyTest {
     )
     assertTrue("room 1 must still be followed", store.isFollowed(Platform.DOUYU, "1"))
   }
+
+  /** An engine whose only scope is this test's follow store, with no paired peers. */
+  private fun engine(): SyncEngine = SyncEngine(
+    targets = MapSyncTargets(mapOf(SyncScope.FOLLOWS to FollowSyncTarget(store))),
+    deviceIdProvider = { DEVICE_ID },
+    deviceNameProvider = { "phone" },
+    peersProvider = { emptyList() },
+    peersWriter = {},
+    clock = { clock },
+  )
 
   /** A helper that builds a live record with an explicit clock. */
   private fun recordOf(streamer: Streamer, hlc: Hlc): SyncRecord<JsonObject> = SyncRecord(
@@ -190,5 +217,8 @@ class FollowStoreConcurrencyTest {
 
   private companion object {
     const val DEVICE_ID = 4242L
+
+    /** A second device, so the payload's records are authored by someone else. */
+    const val PEER_DEVICE_ID = 9999L
   }
 }
