@@ -111,7 +111,13 @@ fun LivePlayer(
     if (url.isBlank()) return@LaunchedEffect
     player.setMediaSource(buildMediaSource(url, isHls))
     player.prepare()
-    player.play()
+    // A new URL must adopt the caller's paused flag rather than resume.
+    //
+    // `paused` is `state.playerPaused`, which survives a quality or line switch — only `url` changes.
+    // This effect re-runs on that change but the `LaunchedEffect(paused)` below does not (its key did
+    // not move), so an unconditional `play()` restarted a stream the user had paused while the
+    // badge at `PlayerScreen` still said 「已暂停 · 双击继续」. Pause instead of play when asked.
+    if (paused) player.pause() else player.play()
   }
 
   // The caller owns the paused flag; keep the player in step with it.
@@ -133,6 +139,20 @@ fun LivePlayer(
   // `rememberUpdatedState` is what makes that possible without re-registering the listener.
   val currentAttempt by rememberUpdatedState(attempt)
 
+  /**
+   * The caller's callbacks, read through [rememberUpdatedState] for the same reason.
+   *
+   * `LaunchedEffect(player)` never re-runs — `player` is `remember`ed with no keys — so the listener
+   * closes over whatever lambdas the *first* composition passed. `onFatalError` from the call site is
+   * not a stable reference: it captures the `variant` being played
+   * (`PlayerScreen`'s `if (error.startsWith("http://") && !variant.url.startsWith("http://"))`), so a
+   * listener holding the first one judged a failure against the variant the screen opened with. After
+   * switching quality once, the http-downgrade branch could therefore be skipped for a URL that
+   * needed it — the exact confusion `PlaybackAttempt` was introduced to end, one layer out.
+   */
+  val currentOnFatalError by rememberUpdatedState(onFatalError)
+  val currentOnAspectRatioChanged by rememberUpdatedState(onVideoAspectRatioChanged)
+
   LaunchedEffect(player) {
     val listener = object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
@@ -149,7 +169,7 @@ fun LivePlayer(
           fallbackMessage = "播放器错误: ${error.errorCodeName}",
         )
         when (decision) {
-          is PlaybackRecovery.DowngradeToHttp -> onFatalError?.invoke(decision.url)
+          is PlaybackRecovery.DowngradeToHttp -> currentOnFatalError?.invoke(decision.url)
           is PlaybackRecovery.Retry -> {
             attempt = decision.attempt
             scope.launch {
@@ -158,7 +178,7 @@ fun LivePlayer(
               player.play()
             }
           }
-          is PlaybackRecovery.Fatal -> onFatalError?.invoke(decision.message)
+          is PlaybackRecovery.Fatal -> currentOnFatalError?.invoke(decision.message)
         }
       }
 
@@ -170,7 +190,7 @@ fun LivePlayer(
         val (w, h) = if (rotation == 90 || rotation == 270) rawH to rawW else rawW to rawH
         val aspect = if (w > 0 && h > 0) (w.toFloat() * pixelRatio) / h.toFloat() else null
         if (aspect != null) {
-          onVideoAspectRatioChanged?.invoke(aspect)
+          currentOnAspectRatioChanged?.invoke(aspect)
         }
       }
 
