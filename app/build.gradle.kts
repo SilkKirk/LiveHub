@@ -101,19 +101,26 @@ android {
         }
     }
 
-    lint {
-        /**
-         * The 48dp touch minimum has been broken twice in this project, both times in a way that
-         * looked fixed: `size(32.dp)` on an `IconButton` (round 61), and then
-         * `size(48.dp).padding(8.dp)` — a 48dp semantics node around a 32dp clickable area,
-         * because `IconButton` applies Material's minimum *inside* the caller's modifier
-         * (round 65). Neither was caught by a test; both were caught by reading the code.
-         *
-         * Compose's own lint check knows this rule, so the third occurrence should be caught by
-         * CI instead of by whoever happens to miss the button.
-         */
-        error += "TouchTargetSizeCheck"
-    }
+    /*
+     * The 48dp touch minimum has been broken twice in this project, both times in a way that looked
+     * fixed: `size(32.dp)` on an `IconButton` (round 61), and then `size(48.dp).padding(8.dp)` — a
+     * 48dp semantics node around a 32dp clickable area, because `IconButton` applies Material's
+     * minimum *inside* the caller's modifier (round 65). Neither was caught by a test; both were
+     * caught by reading the code.
+     *
+     * This used to be guarded here with `lint { error += "TouchTargetSizeCheck" }`, and that guard
+     * was fiction. `TouchTargetSizeCheck` is not a Gradle lint issue id at all — it names an
+     * analyzer in Android Studio's **visual lint** and in Google's **Accessibility Test Framework**
+     * (both are the things that emit "Touch target size too small"), so Gradle lint answered
+     * `UnknownIssueId: Unknown issue id "TouchTargetSizeCheck"` and enforced nothing. Compose ships
+     * no touch-target lint rule: searching `androidx/androidx` for that id returns zero hits, while
+     * a check that really exists (`UnrememberedMutableState`) returns fifteen.
+     *
+     * The guard is now a test that actually runs — `TouchTargetSizeTest` in
+     * `app/src/test/.../ui/` renders the app shell and fails if any node with a click action
+     * reports a side under 48dp. It runs in the existing `test` task, so it costs no extra CI time
+     * and it fails on the *runtime* bound rather than on a source pattern.
+     */
 }
 
 kotlin {
