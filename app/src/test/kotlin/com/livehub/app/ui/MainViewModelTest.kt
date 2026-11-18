@@ -8,6 +8,7 @@ import com.livehub.core.model.Platform
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -946,5 +947,63 @@ class MainViewModelTest {
       "the load failure still needs its retry affordance on screen",
       failing.state.value.error,
     )
+  }
+
+  // --------------------------------------------------------------- playback settings ---
+
+  /**
+   * The two playback switches are ordinary preferences: persisted, and mirrored into the state.
+   *
+   * Both defaults are on — the behaviour before the switches existed — so a stored record that
+   * predates them must decode to "on". `BackgroundRefreshTest` pins that decode rule for its own
+   * pair; these two only have to prove the write travels.
+   */
+  @Test
+  fun `the playback switches are persisted and published`() {
+    assertTrue("a fresh install keeps the behaviour it always had", state.miniPlayerEnabled)
+    assertTrue(state.pictureInPictureEnabled)
+
+    viewModel.onAction(UiAction.SetMiniPlayer(false))
+    viewModel.onAction(UiAction.SetPictureInPicture(false))
+    idle()
+
+    assertFalse("the switch renders the state", state.miniPlayerEnabled)
+    assertFalse(state.pictureInPictureEnabled)
+    assertFalse("and the choice survives a restart", container.preferences.settings.miniPlayer)
+    assertFalse(container.preferences.settings.pictureInPicture)
+  }
+
+  @Test
+  fun `with the mini window on, leaving the player keeps the stream`() {
+    viewModel.onAction(UiAction.OpenRoom(streamer("1", "主播")))
+    idle()
+    assertEquals(Screen.Player, state.screen)
+
+    viewModel.onAction(UiAction.MinimizePlayer)
+    idle()
+
+    assertNotNull("the stream is still open, in the corner", state.room)
+    assertTrue(state.miniPlayer)
+  }
+
+  /**
+   * With 小窗播放 off, the same gesture means "stop watching".
+   *
+   * This is the switch's whole effect, and it is the one that could go wrong quietly: a stream the
+   * user cannot see, still holding the network and the decoder, is what the switch exists to refuse.
+   */
+  @Test
+  fun `with the mini window off, leaving the player stops the stream`() {
+    viewModel.onAction(UiAction.OpenRoom(streamer("1", "主播")))
+    idle()
+    viewModel.onAction(UiAction.SetMiniPlayer(false))
+    idle()
+
+    viewModel.onAction(UiAction.MinimizePlayer)
+    idle()
+
+    assertNull("nothing is playing behind the list", state.room)
+    assertFalse(state.miniPlayer)
+    assertNotEquals(Screen.Player, state.screen)
   }
 }

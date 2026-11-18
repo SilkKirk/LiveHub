@@ -1,13 +1,13 @@
 package com.livehub.app.ui.player
 
-import com.livehub.app.ui.Screen
+import android.graphics.Rect
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -15,78 +15,97 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * When the player is allowed to shrink into a thumbnail.
+ * When the app may shrink into a picture-in-picture window, and the parameters that arm it.
  *
- * The window needs a device, but the decision does not — and the decision is where this goes wrong:
- * popping into a floating window over a room that has not resolved yet shows a spinner the size of a
- * postage stamp, and doing it from another screen hijacks whatever the user was looking at.
+ * The rule is a pure function of [UiState] because the mistakes here are about *state*, not about
+ * windows: a room that has not resolved has no picture to show, and a forgotten reset leaves the
+ * platform opening an empty thumbnail after the room is already closed. Both are cheap to pin
+ * without an activity, which is the only reason this file exists.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PictureInPictureTest {
 
-  private val original = StreamVariant(qualityLabel = "原画", url = "https://example.com/a.flv")
+  private val variant = StreamVariant(
+    qualityLabel = "原画",
+    url = "https://example.com/a.flv",
+    lineName = null,
+    qualityCode = 1,
+  )
 
-  private fun playerState(
-    screen: Screen = Screen.Player,
-    selected: StreamVariant? = original,
-    playerError: String? = null,
-  ) = UiState(
-    screen = screen,
+  private val room = Streamer(
     platform = Platform.DOUYU,
-    room = Streamer(
-      platform = Platform.DOUYU,
-      roomId = "1",
-      streamerName = "主播",
-      title = "标题",
-      isLive = true,
-    ),
-    variants = listOfNotNull(selected),
-    selectedVariant = selected,
-    playerError = playerError,
+    roomId = "1",
+    streamerName = "主播",
+    title = "标题",
+    isLive = true,
+  )
+
+  private fun playing(
+    pictureInPictureEnabled: Boolean = true,
+    withRoom: Boolean = true,
+    withVariant: Boolean = true,
+    error: String? = null,
+  ) = UiState(
+    room = if (withRoom) room else null,
+    selectedVariant = if (withVariant) variant else null,
+    playerError = error,
+    pictureInPictureEnabled = pictureInPictureEnabled,
   )
 
   @Test
-  fun `a room with a resolved stream may shrink`() {
-    assertTrue(PictureInPicture.shouldEnter(playerState()))
+  fun `a playing room with the switch on may shrink`() {
+    assertTrue(PictureInPicture.shouldEnter(playing()))
+  }
+
+  /** The switch is not a hint: off means the stream pauses with the app like any other. */
+  @Test
+  fun `the switch off refuses the window even with a stream`() {
+    assertFalse(PictureInPicture.shouldEnter(playing(pictureInPictureEnabled = false)))
   }
 
   @Test
-  fun `a room that has not resolved yet may not`() {
+  fun `a room without a resolved variant does not shrink`() {
     assertFalse(
-      "the window would be a spinner the size of a thumbnail",
-      PictureInPicture.shouldEnter(playerState(selected = null)),
+      "a postage-stamp spinner is worse than staying paused",
+      PictureInPicture.shouldEnter(playing(withVariant = false)),
     )
   }
 
   @Test
-  fun `a stream the decoder rejected may not`() {
-    assertFalse(PictureInPicture.shouldEnter(playerState(playerError = "无法解码该流")))
+  fun `no room means no window`() {
+    assertFalse(PictureInPicture.shouldEnter(playing(withRoom = false, withVariant = false)))
+  }
+
+  @Test
+  fun `a variant the decoder rejected does not shrink`() {
+    assertFalse(PictureInPicture.shouldEnter(playing(error = "解码失败")))
   }
 
   /**
-   * A room in the mini window counts: the user is watching while they browse.
+   * Auto-enter is a parameter, and both of its values matter.
    *
-   * This used to be a negative case — the rule then demanded the player *screen*. That made leaving
-   * the app from the list pause a stream the user could see in the corner.
+   * Arming it is the whole point on API 31+; disarming it is what stops the platform from entering
+   * a window after the room is closed — the failure recorded when this was first attempted.
    */
   @Test
-  fun `a room in the mini window may shrink too`() {
-    assertTrue(PictureInPicture.shouldEnter(playerState(screen = Screen.Home)))
-    assertTrue(PictureInPicture.shouldEnter(playerState(screen = Screen.Follow)))
+  fun `auto-enter is armed and disarmed by the parameter`() {
+    assertTrue(PictureInPicture.paramsWithAutoEnter(sourceRect = null, autoEnter = true).isAutoEnterEnabled)
+    assertFalse(PictureInPicture.paramsWithAutoEnter(sourceRect = null, autoEnter = false).isAutoEnterEnabled)
   }
 
+  /** The shrink animates from the picture, so the rectangle has to reach the params unchanged. */
   @Test
-  fun `no room at all may not`() {
-    assertFalse(PictureInPicture.shouldEnter(UiState(screen = Screen.Home)))
+  fun `the source rectangle is carried into the params`() {
+    val rect = Rect(0, 64, 320, 244)
+
+    assertEquals(rect, PictureInPicture.params(rect).sourceRectHint)
+    assertEquals(rect, PictureInPicture.paramsWithAutoEnter(rect, autoEnter = true).sourceRectHint)
   }
 
+  /** Before the player has been laid out there is nothing to hint at, and nothing may be faked. */
   @Test
-  fun `the window keeps the stream's 16 by 9 shape`() {
-    val params = PictureInPicture.params()
-
-    assertNotNull(params.aspectRatio)
-    assertEquals(16, params.aspectRatio!!.numerator)
-    assertEquals(9, params.aspectRatio!!.denominator)
+  fun `no rectangle means no hint`() {
+    assertNull(PictureInPicture.params(sourceRect = null).sourceRectHint)
   }
 }

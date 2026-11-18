@@ -108,6 +108,13 @@ fun LiveHubRoot(
    * full-size shell without knowing about the activity's window mode.
    */
   inPictureInPicture: Boolean = false,
+  /**
+   * Where the picture sits in the window, for picture-in-picture's source rectangle.
+   *
+   * Defaulted like [inPictureInPicture] so every preview, screenshot and test keeps composing the
+   * shell without knowing about the activity's window.
+   */
+  onVideoBounds: (androidx.compose.ui.geometry.Rect?) -> Unit = {},
 ) {
   val snackbar = remember { SnackbarHostState() }
 
@@ -224,7 +231,12 @@ fun LiveHubRoot(
                   }
               },
             ) {
-              PlayerScreen(state = state, onAction = onAction, compact = compactPlayer)
+              PlayerScreen(
+                state = state,
+                onAction = onAction,
+                compact = compactPlayer,
+                onVideoBounds = onVideoBounds,
+              )
               if (!shellHidden) MiniPlayerChrome(onAction = onAction)
             }
           }

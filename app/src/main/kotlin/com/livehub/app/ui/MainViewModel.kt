@@ -136,6 +136,8 @@ class MainViewModel(
         // scheduled instead of a switch that only describes itself.
         backgroundRefreshEnabled = settings.backgroundRefresh,
         refreshOnWifiOnly = settings.refreshOnWifiOnly,
+        miniPlayerEnabled = settings.miniPlayer,
+        pictureInPictureEnabled = settings.pictureInPicture,
         deviceName = preferences.deviceName,
         searchHistory = settings.searchHistory,
         recentRooms = settings.recentRooms,
@@ -228,6 +230,8 @@ class MainViewModel(
       is UiAction.SetBlockedKeywords -> setBlockedKeywords(action.keywords)
       is UiAction.SetBackgroundRefresh -> setBackgroundRefresh(action.enabled)
       is UiAction.SetRefreshOnWifiOnly -> setRefreshOnWifiOnly(action.wifiOnly)
+      is UiAction.SetMiniPlayer -> setMiniPlayer(action.enabled)
+      is UiAction.SetPictureInPicture -> setPictureInPicture(action.enabled)
       UiAction.RefreshPeers -> sync.refreshPeers()
       is UiAction.UnpairPeer -> sync.unpair(action.deviceId)
       is UiAction.PairWithCode -> sync.pairWithCode(action.code)
@@ -315,8 +319,16 @@ class MainViewModel(
    * a second of black), the danmaku socket (reconnecting it would drop the backlog and restart the
    * handshake) and the pause flag. Only the screen changes, and `LiveHubRoot` answers that by
    * resizing the player composable instead of disposing it.
+   *
+   * With 小窗播放 off, "leave the player" means stop watching: this becomes [closePlayer], which is
+   * the same teardown the × in the mini window performs. A stream nobody can see, still using the
+   * network and the speaker, is exactly what the switch exists to refuse.
    */
   private fun minimizePlayer() {
+    if (!_state.value.miniPlayerEnabled) {
+      closePlayer()
+      return
+    }
     val target = playerReturnScreen.takeIf { it != Screen.Player } ?: Screen.Home
     _state.update { it.copy(screen = target) }
   }
@@ -1485,6 +1497,30 @@ class MainViewModel(
   private fun setRefreshOnWifiOnly(wifiOnly: Boolean) {
     container.preferences.setRefreshOnWifiOnly(wifiOnly)
     _state.update { it.copy(refreshOnWifiOnly = wifiOnly) }
+  }
+
+  /**
+   * Persists the mini-window switch.
+   *
+   * Nothing is started or stopped here: the value is read at the moment the player is left
+   * ([minimizePlayer]), so flipping it while the player is open must not close the stream the user
+   * is watching.
+   */
+  private fun setMiniPlayer(enabled: Boolean) {
+    container.preferences.setMiniPlayer(enabled)
+    _state.update { it.copy(miniPlayerEnabled = enabled) }
+  }
+
+  /**
+   * Persists the picture-in-picture switch.
+   *
+   * The state change is the whole effect: `MainActivity` collects the state and re-applies the
+   * window's parameters, because `setPictureInPictureParams` is the only way to arm or disarm
+   * auto-enter and only an activity can call it.
+   */
+  private fun setPictureInPicture(enabled: Boolean) {
+    container.preferences.setPictureInPicture(enabled)
+    _state.update { it.copy(pictureInPictureEnabled = enabled) }
   }
 
   /**

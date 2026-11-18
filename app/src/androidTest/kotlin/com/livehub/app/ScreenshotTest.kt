@@ -812,10 +812,19 @@ class ScreenshotTest {
   @Test
   fun settingsCache() = capture("15c-settings-cache", settingsState(), scrollToText = "清除缓存")
 
+  /**
+   * The settings page with the Bilibili session signed in.
+   *
+   * Scrolled to 账号 on purpose: the cards live below the fold, and without the scroll this render
+   * was **byte-identical** to `15-settings` — a picture whose name promises a state it does not
+   * show, which is the exact failure mode the screenshot list's hash column exists to expose
+   * (round 131 noticed the duplicate).
+   */
   @Test
   fun settingsLoggedIn() = capture(
     "16-settings-logged-in",
     baseState().copy(screen = Screen.Settings, bilibiliLogin = BiliLoginUi(loggedIn = true)),
+    scrollToText = "账号",
   )
 
   // ------------------------------------------------------------------ dark theme ---

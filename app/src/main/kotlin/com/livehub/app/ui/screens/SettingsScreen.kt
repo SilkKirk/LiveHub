@@ -18,6 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.PictureInPicture
+import androidx.compose.material.icons.outlined.PictureInPictureAlt
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Wifi
@@ -239,6 +241,49 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
             }
           }
         }
+      }
+    }
+
+    item {
+      SectionHeader("播放")
+      Card(modifier = Modifier.fillMaxWidth()) {
+        ListItem(
+          colors = listRowColors(),
+          leadingContent = { RowIcon(Icons.Outlined.PictureInPictureAlt) },
+          headlineContent = { Text("小窗播放") },
+          supportingContent = {
+            Text(
+              text = "离开播放页时把画面缩到右下角继续播放；关掉则直接停止播放。",
+              style = MaterialTheme.typography.labelSmall,
+            )
+          },
+          trailingContent = {
+            Switch(
+              checked = state.miniPlayerEnabled,
+              onCheckedChange = { onAction(UiAction.SetMiniPlayer(it)) },
+              modifier = Modifier.testTag(MINI_PLAYER_SWITCH_TAG),
+            )
+          },
+        )
+        HorizontalDivider()
+        ListItem(
+          colors = listRowColors(),
+          leadingContent = { RowIcon(Icons.Outlined.PictureInPicture) },
+          headlineContent = { Text("画中画") },
+          supportingContent = {
+            Text(
+              text = "回到桌面或最近任务时把画面缩成系统小窗；关掉则随应用一起暂停。",
+              style = MaterialTheme.typography.labelSmall,
+            )
+          },
+          trailingContent = {
+            Switch(
+              checked = state.pictureInPictureEnabled,
+              onCheckedChange = { onAction(UiAction.SetPictureInPicture(it)) },
+              modifier = Modifier.testTag(PICTURE_IN_PICTURE_SWITCH_TAG),
+            )
+          },
+        )
       }
     }
 
@@ -467,7 +512,7 @@ private const val CACHE_MB = 1024L * CACHE_KB
 private const val CACHE_GB = 1024L * CACHE_MB
 
 /**
- * Identifiers for the three switches, for the tests that pin them.
+ * Identifiers for the switches, for the tests that pin them.
  *
  * The label next to each switch is a separate semantics node, so `onNodeWithText` finds the text
  * and never the control — and "is the Wi-Fi switch disabled while the feature is off?" is exactly
@@ -477,6 +522,8 @@ private const val CACHE_GB = 1024L * CACHE_MB
 internal const val BACKGROUND_REFRESH_SWITCH_TAG = "backgroundRefreshSwitch"
 internal const val WIFI_ONLY_SWITCH_TAG = "wifiOnlySwitch"
 internal const val DYNAMIC_COLOR_SWITCH_TAG = "dynamicColorSwitch"
+internal const val MINI_PLAYER_SWITCH_TAG = "miniPlayerSwitch"
+internal const val PICTURE_IN_PICTURE_SWITCH_TAG = "pictureInPictureSwitch"
 
 /** Log tag for the two cache calls; a failed read or clear should not disappear silently. */
 private const val CACHE_TAG = "SettingsScreen"

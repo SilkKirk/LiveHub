@@ -266,6 +266,22 @@ data class UiState(
   val backgroundRefreshEnabled: Boolean = true,
   /** Whether that refresh is restricted to Wi-Fi networks. */
   val refreshOnWifiOnly: Boolean = false,
+  /**
+   * Whether leaving the player keeps the stream in the corner, or stops it.
+   *
+   * Mirrors `UserSettings.miniPlayer`, and mirrors it into the state for the same reason as
+   * [backgroundRefreshEnabled]: the switch renders the state, and the screen has no access to the
+   * preference store.
+   */
+  val miniPlayerEnabled: Boolean = true,
+  /**
+   * Whether leaving the app mid-stream may shrink it into a system picture-in-picture window.
+   *
+   * The activity reads this on every state change — *not* once at startup — because auto-enter is a
+   * parameter the platform remembers: a value that goes stale makes the system open an empty window
+   * after the room is closed.
+   */
+  val pictureInPictureEnabled: Boolean = true,
   val bilibiliLogin: com.livehub.app.ui.components.BiliLoginUi = com.livehub.app.ui.components.BiliLoginUi(),
   /**
    * True when a Douyin web session is stored.
@@ -434,6 +450,22 @@ sealed interface UiAction {
    * handler therefore also schedules or cancels the work.
    */
   data class SetBackgroundRefresh(val enabled: Boolean) : UiAction
+
+  /**
+   * Keeps the picture in the corner when the player is left, or makes leaving stop the stream.
+   *
+   * No scheduling and no player teardown here: the value is read at the moment of leaving, so
+   * flipping it while the player is open neither closes nor starts anything.
+   */
+  data class SetMiniPlayer(val enabled: Boolean) : UiAction
+
+  /**
+   * Allows or refuses the shrink into a system picture-in-picture window.
+   *
+   * The activity is the only thing that can act on it (see `MainActivity`), so the handler just
+   * persists it and publishes it — the state change is what re-arms the window parameters.
+   */
+  data class SetPictureInPicture(val enabled: Boolean) : UiAction
 
   /**
    * Restricts the periodic refresh to Wi-Fi, or lets it use mobile data.

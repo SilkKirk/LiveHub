@@ -138,6 +138,22 @@ data class UserSettings(
    * (refresh on whatever network is up), so turning it on has to be a deliberate choice.
    */
   val refreshOnWifiOnly: Boolean = false,
+  /**
+   * Whether leaving the player keeps the stream in the corner instead of stopping it.
+   *
+   * On by default because that is what the app did before the switch existed; off is the choice to
+   * make "leave the player" mean "stop watching", which is a real preference (a phone in a pocket
+   * with a stream in the corner is a battery and aural cost nobody asked for).
+   */
+  val miniPlayer: Boolean = true,
+  /**
+   * Whether leaving the app mid-stream may shrink it into a system picture-in-picture window.
+   *
+   * On by default: the app has always done this on `onUserLeaveHint`, and a switch that silently
+   * changed the default for existing installations would be a behaviour change dressed as a
+   * setting. Off means the stream pauses when the app goes away, like any other app.
+   */
+  val pictureInPicture: Boolean = true,
 )
 
 /**
@@ -376,6 +392,27 @@ class UserPreferences(private val context: Context) {
    */
   fun setRefreshOnWifiOnly(wifiOnly: Boolean) {
     update { it.copy(refreshOnWifiOnly = wifiOnly) }
+  }
+
+  /**
+   * Keeps the picture in the corner when the player is left, or makes leaving stop it.
+   *
+   * Read at the moment of leaving (`MainViewModel.minimizePlayer`) rather than mirrored into the
+   * player: the decision is "what does 返回 mean", and reading the stored value keeps the two
+   * entry points (the back gesture and the player's own button) from disagreeing.
+   */
+  fun setMiniPlayer(enabled: Boolean) {
+    update { it.copy(miniPlayer = enabled) }
+  }
+
+  /**
+   * Allows or refuses the shrink into a system picture-in-picture window.
+   *
+   * The activity owns the actual `PictureInPictureParams`; this only records the answer. See
+   * `MainActivity.applyPictureInPictureParams` for why the params are re-set on every change.
+   */
+  fun setPictureInPicture(enabled: Boolean) {
+    update { it.copy(pictureInPicture = enabled) }
   }
 
   /**

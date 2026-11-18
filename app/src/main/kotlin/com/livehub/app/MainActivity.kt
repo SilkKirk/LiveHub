@@ -14,6 +14,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import com.livehub.app.di.AppContainer
 import com.livehub.app.sync.LocalNetworkAccess
 import com.livehub.app.ui.LiveHubRoot
@@ -22,6 +23,9 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.player.PictureInPicture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -48,6 +52,23 @@ class MainActivity : ComponentActivity() {
    * to drop everything that only makes sense at full size.
    */
   private val inPictureInPicture = MutableStateFlow(false)
+
+  /**
+   * The video's rectangle in window coordinates, or null before the player has been laid out.
+   *
+   * Reported by the player composable so the shrink animates from the picture instead of from the
+   * whole activity. Kept here because only an activity can put it into `PictureInPictureParams`.
+   */
+  private val videoBounds = MutableStateFlow<android.graphics.Rect?>(null)
+
+  /**
+   * Whether API 31+'s auto-enter is currently armed.
+   *
+   * Read by [onUserLeaveHint] so the two ways into the window cannot both fire: with auto-enter
+   * armed the system shrinks the activity itself, and calling `enterPictureInPictureMode` as well
+   * would race it.
+   */
+  private var autoEnterArmed = false
 
   /**
    * Set once the system prompt has been shown in this process.
@@ -79,8 +100,14 @@ class MainActivity : ComponentActivity() {
     setContent {
       // The `MutableStateFlow` *is* the `StateFlow` the shell reads; wrapping it in `asStateFlow()`
       // here would call a flow operator from inside composition, which lint (rightly) rejects.
-      LiveHubApp(viewModel, inPictureInPicture, onRequestLocalNetwork = ::requestLocalNetwork)
+      LiveHubApp(
+        viewModel = viewModel,
+        inPictureInPicture = inPictureInPicture,
+        onRequestLocalNetwork = ::requestLocalNetwork,
+        onVideoBounds = ::onVideoBounds,
+      )
     }
+    observePictureInPicture()
   }
 
   /** Whether LAN traffic may proceed: always true below API 37, where the permission does not exist. */
@@ -113,7 +140,51 @@ class MainActivity : ComponentActivity() {
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
+    // From 31 the params carry auto-enter and the system performs the shrink itself; entering
+    // here as well would race it. Below 31 this hint is the only signal there is.
+    if (autoEnterArmed) return
     enterPictureInPicture()
+  }
+
+  /**
+   * Keeps the window's parameters in step with the state.
+   *
+   * Auto-enter is a *mode* the platform remembers, not a one-shot request: arming it when a room
+   * opens and never disarming it means the next trip to the home screen opens a window with nothing
+   * in it. So this collects the same predicate the manual path uses — [PictureInPicture.shouldEnter],
+   * which includes the 画中画 switch — and re-applies the params whenever the answer flips.
+   */
+  private fun observePictureInPicture() {
+    lifecycleScope.launch {
+      viewModel.state
+        .map { PictureInPicture.shouldEnter(it) }
+        .distinctUntilChanged()
+        .collect { armed ->
+          autoEnterArmed = armed
+          applyPictureInPictureParams()
+        }
+    }
+  }
+
+  /** The player reported where the picture is; the shrink should start from there. */
+  private fun onVideoBounds(bounds: androidx.compose.ui.geometry.Rect?) {
+    val rect = bounds?.let {
+      android.graphics.Rect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt())
+    }
+    if (rect == videoBounds.value) return
+    videoBounds.value = rect
+    applyPictureInPictureParams()
+  }
+
+  private fun applyPictureInPictureParams() {
+    val params = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      PictureInPicture.paramsWithAutoEnter(videoBounds.value, autoEnterArmed)
+    } else {
+      PictureInPicture.params(videoBounds.value)
+    }
+    // A parameter that cannot be applied is not worth crashing the screen the user is watching —
+    // the same reason `enterPictureInPicture` catches.
+    runCatching { setPictureInPictureParams(params) }
   }
 
   private fun enterPictureInPicture() {
@@ -122,7 +193,7 @@ class MainActivity : ComponentActivity() {
     // `enterPictureInPictureMode` throws when the activity is finishing or the window cannot
     // shrink (some OEM builds in freeform/split mode). A shrink that silently does not happen is
     // better than a crash on the way out of the app.
-    runCatching { enterPictureInPictureMode(PictureInPicture.params()) }
+    runCatching { enterPictureInPictureMode(PictureInPicture.params(videoBounds.value)) }
   }
 
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
@@ -203,6 +274,7 @@ private fun LiveHubApp(
   viewModel: MainViewModel,
   inPictureInPicture: StateFlow<Boolean>,
   onRequestLocalNetwork: () -> Unit,
+  onVideoBounds: (androidx.compose.ui.geometry.Rect?) -> Unit,
 ) {
   val state by viewModel.state.collectAsState()
   val pip by inPictureInPicture.collectAsState()
@@ -214,5 +286,6 @@ private fun LiveHubApp(
     state = state,
     onAction = viewModel::onAction,
     inPictureInPicture = pip,
+    onVideoBounds = onVideoBounds,
   )
 }

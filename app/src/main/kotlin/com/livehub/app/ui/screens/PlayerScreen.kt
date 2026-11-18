@@ -74,6 +74,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -161,6 +163,14 @@ internal fun PlayerScreen(
    * [PlayerOrientation].
    */
   orientationRequest: ((PlayerOrientation) -> Unit)? = null,
+  /**
+   * Where the picture sits in the window, reported for picture-in-picture's source rectangle.
+   *
+   * Defaulted to a no-op so screenshots and tests compose without an activity. The value is
+   * measured rather than assumed: portrait, full screen and the floating window are three different
+   * rectangles, and the shrink animation starts from whichever one is on screen.
+   */
+  onVideoBounds: (androidx.compose.ui.geometry.Rect?) -> Unit = {},
 ) {
   var manualFullscreen by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
@@ -169,6 +179,10 @@ internal fun PlayerScreen(
   // room instead — the same reason the reference client switches to a drawer there.
   val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
   val fullscreen = playerFullscreen(landscapeWindow = isLandscape, manualFullscreen = manualFullscreen)
+
+  // The picture stops existing when the player is disposed; a stale rectangle would make the next
+  // shrink animate from wherever it used to be.
+  DisposableEffect(Unit) { onDispose { onVideoBounds(null) } }
 
   // The one place that asks the window to turn, and the one place that stops asking. Both
   // directions are driven by the button (see `onFullscreenChange` below), never by the window:
@@ -391,7 +405,13 @@ internal fun PlayerContent(
           .aspectRatio(videoAspect ?: (16f / 9f))
       }
 
-      Box(modifier = videoModifier.background(Color.Black)) {
+      Box(
+        modifier = videoModifier
+          .background(Color.Black)
+          // Reported on every layout pass: rotating, entering full screen and shrinking into the
+          // floating window each move the picture, and the source rectangle has to follow.
+          .onGloballyPositioned { coordinates -> onVideoBounds(coordinates.boundsInWindow()) },
+      ) {
         if (videoSurface != null && isPlaying && state.playerError == null && effectiveVariant != null) {
           videoSurface(Modifier.fillMaxSize())
         } else {
