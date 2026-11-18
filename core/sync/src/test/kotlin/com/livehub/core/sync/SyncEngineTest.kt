@@ -1,6 +1,7 @@
 package com.livehub.core.sync
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -329,5 +330,56 @@ class SyncEngineTest {
       clock = { now },
     )
     assertNull(engine.buildPayload(SyncScope.FOLLOWS))
+  }
+
+  /**
+   * A paged pull must serialise one part, not all of them.
+   *
+   * `buildPullPayload` used to call `buildPayloads` and discard every part but one, which encoded
+   * the whole scope once per request and consumed one sequence number per part — so a twenty-part
+   * follow list burned twenty ids to deliver one part, and pushed this device's sequence watermark
+   * far past anything a peer had ever been sent.
+   */
+  @Test
+  fun `a paged pull consumes one sequence per request, not one per part`() {
+    val target = FakeTarget(SyncScope.FOLLOWS)
+    // One more record than a single part holds, so the scope really is split in two.
+    repeat(SyncPayload.MAX_RECORDS_PER_PAYLOAD + 1) { index ->
+      target.put(
+        SyncRecord(
+          key = "room:douyu:$index",
+          value = JsonObject(mapOf("v" to JsonPrimitive(index))),
+          hlc = Hlc(now, index.toLong()),
+          deviceId = 1,
+        ),
+      )
+    }
+    val engine = engine(listOf(target))
+
+    val first = engine.buildPullPayload(SyncScope.FOLLOWS, 0)!!
+    val second = engine.buildPullPayload(SyncScope.FOLLOWS, 1)!!
+
+    assertEquals(2, first.chunkCount, "the scope needs two parts")
+    assertEquals(0, first.chunkIndex)
+    assertEquals(1, second.chunkIndex)
+    // Consecutive, not 2 apart: one id consumed per request, which is what the old shape broke.
+    assertEquals(
+      first.sequence + 1,
+      second.sequence,
+      "each request may only consume one sequence number",
+    )
+    // Both parts still describe the same transfer, and neither is empty.
+    assertEquals(first.chunkCount, second.chunkCount)
+    assertTrue(first.recordCount > 0)
+    assertTrue(second.recordCount > 0)
+  }
+
+  /** An out-of-range part index is clamped, and the payload still reports the real chunk count. */
+  @Test
+  fun `an out of range chunk index is clamped rather than throwing`() {
+    val engine = engine(listOf(FakeTarget(SyncScope.FOLLOWS)))
+    val payload = engine.buildPullPayload(SyncScope.FOLLOWS, 99)!!
+    assertEquals(0, payload.chunkIndex)
+    assertEquals(1, payload.chunkCount)
   }
 }

@@ -103,7 +103,7 @@ jobs:
       - name: Quality gate
         run: |
           set -euo pipefail
-          ./gradlew :app:lintDebug :app:copyRobolectricRuntime --stacktrace
+          ./gradlew lintDebug :app:copyRobolectricRuntime --stacktrace
           ./gradlew test --stacktrace
 
       # A release keystore is optional. Without one the debug APK is published instead:

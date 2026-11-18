@@ -245,12 +245,18 @@ class UserPreferences(private val context: Context) {
    *
    * The second one was missing, and only the first was documented — which is the more dangerous
    * half, because the loss is silent. `update` is called from the UI thread (a star tap, a danmaku
-   * slider) **and** from the sync server's own threads (`FollowRecordSet.persist` and
-   * `CredentialStore.persist` both run inside `SyncEngine.applyPayload`). A tap that lands while an
+   * slider) **and** from the sync server's own threads (`FollowRecordSet` and
+   * `CredentialStore` both persist inside `SyncEngine.applyPayload`). A tap that lands while an
    * exchange is applying a payload made both callers read the same base record, and whichever
    * published second overwrote the other's field: the follow was not saved, or the synced record
    * was not. `update` is a whole-record read-modify-write, so "one field lost" means "one *change*
    * lost", both in memory and on disk.
+   *
+   * **This lock is not the whole story for the two record sets.** `update` makes one transform
+   * atomic, but the *base* those transforms are applied to is the follow/login record list, which
+   * those stores read on the caller's thread before `update` is entered. That is why
+   * `FollowRecordSet` and `CredentialStore` have their own locks around their read-modify-write —
+   * see `FollowRecordSet.lock`.
    *
    * @return a job that completes once this write has reached disk. Callers that only need the new
    *   value to be visible (every UI path) ignore it; tests that construct a second

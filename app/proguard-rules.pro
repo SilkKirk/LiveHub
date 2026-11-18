@@ -20,9 +20,20 @@
 # Media3
 -dontwarn androidx.media3.**
 
-# Platform adapters are resolved reflectively by the module list only, but keep the
-# public API surface so the adapters stay constructible after shrinking.
--keep class com.livehub.platform.** { *; }
+# The platform adapters are **not** reflectively resolved: `AppContainer.adapters` constructs all
+# four with `new`. There used to be a blanket `-keep class com.livehub.platform.** { *; }` here whose
+# comment claimed otherwise, and it told R8 to preserve the entire platform layer — four adapters,
+# every signature implementation and every protocol codec, which is the largest single body of code
+# in the APK. Nothing in the app reaches any of it by name at runtime.
+#
+# What actually needs keeping is kept elsewhere and for stated reasons: kotlinx.serialization's
+# generated serializers (top of this file), Rhino's engine (below), and Room's generated
+# `_Impl` (below). The Rhino script bundles were checked too — neither `cryptojs.min.js` nor
+# `webmssdk.js` references `Packages`, `Java.type`, `importClass` or `getClass`, so the JavaScript
+# never crosses into Java by name either.
+#
+# `ci.yml` installs and launches the **release** APK on an emulator, so an over-aggressive shrink
+# fails the build rather than a user's install.
 
 # Rhino evaluates Douyu's signing script at runtime. R8 cannot see that reflection, so the
 # engine and the classes it instantiates have to be kept verbatim.

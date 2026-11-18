@@ -17,7 +17,19 @@ package com.livehub.core.sync
 class PairingWindow(
   private val clock: () -> Long = System::currentTimeMillis,
   private val ttlMillis: Long = DEFAULT_TTL_MILLIS,
-  private val random: () -> Int = { (0..999_999).random() },
+  /**
+   * Source of the six-digit code.
+   *
+   * [java.security.SecureRandom], not `kotlin.random.Random`. The code *is* the pairing credential —
+   * [verify] is the only thing standing between a stranger on the Wi-Fi and the follow list plus the
+   * Bilibili/Douyin session cookies — and a plain PRNG is seeded predictably enough that observing a
+   * few issued codes can reveal the next one. Predicting it would also sidestep
+   * [MAX_FAILED_ATTEMPTS], which counts *guesses* and is no defence against a code you already know.
+   *
+   * `selfSecret()` in `UserPreferences` already used `UUID.randomUUID()` for the same reason; this
+   * was the one remaining credential generated from a non-cryptographic source.
+   */
+  private val random: () -> Int = { SECURE_RANDOM.nextInt(CODE_SPACE) },
 ) {
   /** A code currently showing on screen. */
   data class Active(
@@ -128,6 +140,18 @@ class PairingWindow(
 
     /** Source key used when the caller does not know where the request came from. */
     const val DEFAULT_SOURCE = "local"
+
+    /** Number of codes in the space: `000000`..`999999`. */
+    private const val CODE_SPACE = 1_000_000
+
+    /**
+     * Single shared instance.
+     *
+     * `SecureRandom` is thread-safe and its construction is not free, so one per process is both
+     * the cheaper and the better-seeded choice — a freshly constructed instance per window would
+     * also inherit nothing from the previous window's entropy pool.
+     */
+    private val SECURE_RANDOM: java.security.SecureRandom = java.security.SecureRandom()
   }
 }
 

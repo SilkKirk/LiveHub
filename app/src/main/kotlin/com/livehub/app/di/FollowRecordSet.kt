@@ -41,22 +41,100 @@ import kotlinx.serialization.json.JsonPrimitive
 internal class FollowRecordSet(private val preferences: UserPreferences) {
 
   /**
+   * Guards every read-modify-write over [cached].
+   *
+   * The whole record set is one value that is replaced wholesale, so "read it, derive a new one,
+   * store it" is not a sequence that may interleave with another one. Two writers used to be able
+   * to run it at once and the second would publish a list computed from the base it read
+   * *before* the first landed — losing the first writer's change from memory and from disk alike.
+   *
+   * The two writers are on different threads, which is what made it real rather than theoretical:
+   * the UI thread (a star tap, a tag edit, a drag reorder) and the sync server's connection
+   * threads (`SyncEngine.applyPayload` → `FollowSyncTarget.apply` → [replaceAll]). Pull a follow
+   * list while tapping a star and the star could disappear — the same class of bug
+   * [UserPreferences.update] already guards against, one layer up.
+   *
+   * Note that [UserPreferences.updateLock] does **not** cover this: it makes one
+   * `transform` atomic, but the base it transforms is read here, on the caller's thread, before
+   * `update` is ever entered.
+   */
+  private val lock = Any()
+
+  /**
    * `null` means "not loaded yet". An empty list is a valid cached value, so a sentinel is
    * required instead of a size check — otherwise every call re-parses DataStore.
    */
   @Volatile private var cached: List<SyncRecord<JsonObject>>? = null
 
-  fun records(): List<SyncRecord<JsonObject>> {
+  fun records(): List<SyncRecord<JsonObject>> = synchronized(lock) { recordsLocked() }
+
+  private fun recordsLocked(): List<SyncRecord<JsonObject>> {
     cached?.let { return it }
     return load().also { cached = it }
   }
 
   /** Replaces the whole set, used when a merged remote snapshot is applied. */
-  fun replaceAll(records: List<SyncRecord<JsonObject>>) = persist(normalize(records))
+  fun replaceAll(records: List<SyncRecord<JsonObject>>) =
+    synchronized(lock) { persist(normalize(records)) }
+
+  /**
+   * Applies [transform] to the current set as one atomic read-modify-write, and returns whatever
+   * it produced.
+   *
+   * Every mutation in [FollowStore] goes through here rather than doing its own
+   * `records()` → change → `replaceAll()`, because that shape is exactly the lost-update window
+   * described on [lock]. [transform] must be pure: it is handed the authoritative list and its
+   * result is both cached and written.
+   */
+  fun mutate(
+    transform: (List<SyncRecord<JsonObject>>) -> List<SyncRecord<JsonObject>>,
+  ) {
+    mutateReturning { current -> transform(current) to Unit }
+  }
+
+  /**
+   * The same, for a mutation that also has something to report — `false` when the room was not
+   * followed, for instance.
+   *
+   * A separate name rather than an overload: the two transforms differ only in their return type,
+   * and a lambda that happens to produce a list is exactly what the other one expects.
+   */
+  fun <R> mutateReturning(
+    transform: (List<SyncRecord<JsonObject>>) -> Pair<List<SyncRecord<JsonObject>>, R>,
+  ): R = synchronized(lock) {
+    val (next, result) = transform(recordsLocked())
+    persist(normalize(next))
+    result
+  }
+
+  /**
+   * Applies the key normalisation without writing.
+   *
+   * Exposed for callers that are already inside [mutateReturning] and need the filtered/rewritten
+   * list as a *value* rather than as a side effect — `FollowSyncTarget.apply` counts what survived
+   * normalisation, so it needs the result without a second write.
+   */
+  fun normalizeForApply(records: List<SyncRecord<JsonObject>>): List<SyncRecord<JsonObject>> =
+    normalize(records)
+
+  /**
+   * Runs [block] holding [lock].
+   *
+   * The critical section the sync engine needs: `SyncEngine.applyPayload` has to read the set,
+   * merge against it and write the result, and the read and the write must not be separated by a
+   * local mutation. `apply` being atomic on its own would not be enough — the merged list is
+   * derived from the snapshot read before it.
+   *
+   * Reentrant — `synchronized` is a JVM monitor — so the nested acquisition in [replaceAll] or in a
+   * mutator is harmless. It still must not be used as a general-purpose lock: [block] runs with
+   * every other writer blocked, so it must not wait on anything outside this class.
+   */
+  fun <R> locked(block: () -> R): R = synchronized(lock) { block() }
 
   /** The live value at [key], or null when the record is absent or tombstoned. */
-  fun liveValue(key: String): JsonObject? =
-    records().firstOrNull { it.key == key && !it.deleted }?.value
+  fun liveValue(key: String): JsonObject? = synchronized(lock) {
+    recordsLocked().firstOrNull { it.key == key && !it.deleted }?.value
+  }
 
   fun tombstone(key: String, hlc: Hlc, deviceId: Long, now: Long): SyncRecord<JsonObject> =
     SyncRecord(key = key, value = null, deleted = true, hlc = hlc, deviceId = deviceId, updatedAt = now)

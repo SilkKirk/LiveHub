@@ -124,31 +124,36 @@ class FollowStore(preferences: UserPreferences) {
    */
   fun toggleSpecial(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long): Boolean {
     val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
-    val existing = records().firstOrNull { it.key == roomKey }
-    // Bound to a local before the null check: `SyncRecord` is declared in `:core:sync`, and Kotlin
-    // cannot smart cast a `val` from another module — `existing.value[...]` below would not compile.
-    val existingValue = existing?.value
-    if (existing == null || existing.deleted || existingValue == null) return false
+    // The whole read-derive-write runs inside the set's lock. Doing it as
+    // `records()` → build → `persist(...)` left the window described on
+    // [FollowRecordSet.lock]: a payload applied by the sync server between the read and the
+    // write was silently discarded, and a star tap "did nothing".
+    return set.mutateReturning { current ->
+      val existing = current.firstOrNull { it.key == roomKey }
+      // Bound to a local before the null check: `SyncRecord` is declared in `:core:sync`, and Kotlin
+      // cannot smart cast a `val` from another module — `existing.value[...]` below would not compile.
+      val existingValue = existing?.value
+      if (existing == null || existing.deleted || existingValue == null) return@mutateReturning current to false
 
-    val special = !FollowCodec.isSpecial(existingValue)
-    val updated = SyncRecord(
-      key = roomKey,
-      value = FollowCodec.fromStreamer(
-        streamer = streamer,
-        now = now,
-        // All three survive the rewrite: this only flips one flag, it must not reset the
-        // arrangement the user made by dragging, nor forget the labels they typed.
-        order = existingValue["order"],
-        special = special,
-        tags = FollowCodec.tagsOf(existingValue),
-      ),
-      deleted = false,
-      hlc = hlc,
-      deviceId = deviceId,
-      updatedAt = now,
-    )
-    persist(records().filterNot { it.key == roomKey } + updated)
-    return true
+      val special = !FollowCodec.isSpecial(existingValue)
+      val updated = SyncRecord(
+        key = roomKey,
+        value = FollowCodec.fromStreamer(
+          streamer = streamer,
+          now = now,
+          // All three survive the rewrite: this only flips one flag, it must not reset the
+          // arrangement the user made by dragging, nor forget the labels they typed.
+          order = existingValue["order"],
+          special = special,
+          tags = FollowCodec.tagsOf(existingValue),
+        ),
+        deleted = false,
+        hlc = hlc,
+        deviceId = deviceId,
+        updatedAt = now,
+      )
+      current.filterNot { it.key == roomKey } + updated to true
+    }
   }
 
   /**
@@ -163,31 +168,32 @@ class FollowStore(preferences: UserPreferences) {
    */
   fun setTags(streamer: Streamer, tags: List<String>, hlc: Hlc, deviceId: Long, now: Long): Boolean {
     val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
-    val existing = records().firstOrNull { it.key == roomKey }
-    val existingValue = existing?.value
-    if (existing == null || existing.deleted || existingValue == null) return false
+    return set.mutateReturning { current ->
+      val existing = current.firstOrNull { it.key == roomKey }
+      val existingValue = existing?.value
+      if (existing == null || existing.deleted || existingValue == null) return@mutateReturning current to false
 
-    val cleaned = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-    // Nothing to do: re-stamping the clock for an unchanged list would make two devices fight over
-    // the same value on every sync.
-    if (cleaned == FollowCodec.tagsOf(existingValue)) return true
+      val cleaned = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+      // Nothing to do: re-stamping the clock for an unchanged list would make two devices fight over
+      // the same value on every sync.
+      if (cleaned == FollowCodec.tagsOf(existingValue)) return@mutateReturning current to true
 
-    val updated = SyncRecord(
-      key = roomKey,
-      value = FollowCodec.fromStreamer(
-        streamer = streamer,
-        now = now,
-        order = existingValue["order"],
-        special = FollowCodec.isSpecial(existingValue),
-        tags = cleaned,
-      ),
-      deleted = false,
-      hlc = hlc,
-      deviceId = deviceId,
-      updatedAt = now,
-    )
-    persist(records().filterNot { it.key == roomKey } + updated)
-    return true
+      val updated = SyncRecord(
+        key = roomKey,
+        value = FollowCodec.fromStreamer(
+          streamer = streamer,
+          now = now,
+          order = existingValue["order"],
+          special = FollowCodec.isSpecial(existingValue),
+          tags = cleaned,
+        ),
+        deleted = false,
+        hlc = hlc,
+        deviceId = deviceId,
+        updatedAt = now,
+      )
+      current.filterNot { it.key == roomKey } + updated to true
+    }
   }
 
   /**
@@ -200,23 +206,25 @@ class FollowStore(preferences: UserPreferences) {
    */
   fun toggle(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long) {
     val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
-    val existing = records().firstOrNull { it.key == roomKey }
-    val following = existing == null || existing.deleted
+    set.mutate { current ->
+      val existing = current.firstOrNull { it.key == roomKey }
+      val following = existing == null || existing.deleted
 
-    val next = records().filterNot { it.key == roomKey }.toMutableList()
-    if (following) {
-      next += SyncRecord(
-        key = roomKey,
-        value = FollowCodec.fromStreamer(streamer, now, order = null, special = false),
-        deleted = false,
-        hlc = hlc,
-        deviceId = deviceId,
-        updatedAt = now,
-      )
-    } else {
-      next += set.tombstone(roomKey, hlc, deviceId, now)
+      val next = current.filterNot { it.key == roomKey }.toMutableList()
+      if (following) {
+        next += SyncRecord(
+          key = roomKey,
+          value = FollowCodec.fromStreamer(streamer, now, order = null, special = false),
+          deleted = false,
+          hlc = hlc,
+          deviceId = deviceId,
+          updatedAt = now,
+        )
+      } else {
+        next += set.tombstone(roomKey, hlc, deviceId, now)
+      }
+      next
     }
-    persist(next)
   }
 
   /**
@@ -227,27 +235,29 @@ class FollowStore(preferences: UserPreferences) {
    */
   fun updateSnapshot(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long) {
     val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
-    val existing = records().firstOrNull { it.key == roomKey }
-    if (existing == null || existing.deleted) return
-    val updated = SyncRecord(
-      key = roomKey,
-      // The manual order, the 特别关注 mark *and* the tags survive the refresh. The worker rebuilds
-      // the record from a network `Streamer`, which knows nothing about any of them — dropping the
-      // flag here would quietly empty the avatar row every 30 minutes, and dropping the tags would
-      // erase labels the user typed.
-      value = FollowCodec.fromStreamer(
-        streamer = streamer,
-        now = now,
-        order = existing.value?.get("order"),
-        special = FollowCodec.isSpecial(existing.value),
-        tags = FollowCodec.tagsOf(existing.value),
-      ),
-      deleted = false,
-      hlc = hlc,
-      deviceId = deviceId,
-      updatedAt = now,
-    )
-    persist(records().filterNot { it.key == roomKey } + updated)
+    set.mutate { current ->
+      val existing = current.firstOrNull { it.key == roomKey }
+      if (existing == null || existing.deleted) return@mutate current
+      val updated = SyncRecord(
+        key = roomKey,
+        // The manual order, the 特别关注 mark *and* the tags survive the refresh. The worker rebuilds
+        // the record from a network `Streamer`, which knows nothing about any of them — dropping the
+        // flag here would quietly empty the avatar row every 30 minutes, and dropping the tags would
+        // erase labels the user typed.
+        value = FollowCodec.fromStreamer(
+          streamer = streamer,
+          now = now,
+          order = existing.value?.get("order"),
+          special = FollowCodec.isSpecial(existing.value),
+          tags = FollowCodec.tagsOf(existing.value),
+        ),
+        deleted = false,
+        hlc = hlc,
+        deviceId = deviceId,
+        updatedAt = now,
+      )
+      current.filterNot { it.key == roomKey } + updated
+    }
   }
 
   /**
@@ -260,21 +270,43 @@ class FollowStore(preferences: UserPreferences) {
   fun reorder(roomKeys: List<String>, hlc: Hlc, deviceId: Long, now: Long) {
     if (roomKeys.isEmpty()) return
     val positions = roomKeys.withIndex().associate { it.value to it.index }
-    persist(
-      records().map { record ->
+    set.mutate { current ->
+      current.map { record ->
         val key = LibraryKey.decode(record.key) as? LibraryKey.Room
         val index = key?.let { positions[Streamer.keyOf(it.platform, it.roomId)] }
         if (key == null || index == null || record.deleted) record else record.withOrder(index, hlc, deviceId, now)
-      },
-    )
+      }
+    }
   }
 
   /** Replaces the whole set, used when a merged remote snapshot is applied. */
   fun replaceAll(records: List<SyncRecord<JsonObject>>) = set.replaceAll(records)
 
-  // ------------------------------------------------------------------ internals
+  /**
+   * Atomic read-modify-write over the record set.
+   *
+   * Exposed for [FollowSyncTarget], which has to read the current versions, write a merged set and
+   * count what changed — three steps that are only meaningful together. Everything else in this
+   * class mutates through the same lock via [FollowRecordSet.mutate].
+   */
+  internal fun <R> mutateReturning(
+    transform: (List<SyncRecord<JsonObject>>) -> Pair<List<SyncRecord<JsonObject>>, R>,
+  ): R = set.mutateReturning(transform)
 
-  private fun persist(records: List<SyncRecord<JsonObject>>) = set.replaceAll(records)
+  /** Applies the store's key normalisation without writing; used by [FollowSyncTarget.apply]. */
+  internal fun normalized(records: List<SyncRecord<JsonObject>>): List<SyncRecord<JsonObject>> =
+    set.normalizeForApply(records)
+
+  /**
+   * Runs [block] holding the record set's lock.
+   *
+   * Used by [FollowSyncTarget.locked] so the engine's snapshot-merge-apply is one critical
+   * section. Reentrant, like any JVM monitor, so a mutator nested inside is harmless — but [block]
+   * must not wait on anything outside this class.
+   */
+  internal fun <R> locked(block: () -> R): R = set.locked(block)
+
+  // ------------------------------------------------------------------ internals
 }
 
 /** [SyncTarget] for the follow scope — the followed rooms and their manual order. */
@@ -283,15 +315,30 @@ class FollowSyncTarget(private val store: FollowStore) : SyncTarget {
 
   override fun snapshot(): List<SyncRecord<out Any>> = store.records()
 
+  /**
+   * Holds the store's own lock for the whole merge, not just for the write.
+   *
+   * `SyncEngine.applyPayload` reads `snapshot()`, merges, then calls [apply]. Without this, a star
+   * tap landing between the read and the write was computed away: [apply] stored the merged list
+   * derived from the older snapshot. Entering the same lock the mutators use is what makes the
+   * three steps one.
+   */
+  override fun <R> locked(block: () -> R): R = store.locked(block)
+
   override fun apply(records: List<SyncRecord<out Any>>): Int {
     @Suppress("UNCHECKED_CAST")
     val typed = records as List<SyncRecord<JsonObject>>
-    val before = store.records().associate { it.key to it.version }
-    store.replaceAll(typed)
-    // Counted against what the store *kept*, not against what arrived: a retired `group:` record
-    // from an older peer is dropped by the store, and reporting it as an applied change would make
-    // the sync log claim it moved data it never stored.
-    return store.records().count { before[it.key] != it.version }
+    // The "before" snapshot, the write and the "after" count are one atomic step. Read
+    // separately, a UI mutation landing in between showed up as an applied change this
+    // payload never made — and, worse, the write itself could clobber that mutation.
+    return store.mutateReturning { current ->
+      val before = current.associate { it.key to it.version }
+      val next = store.normalized(typed)
+      // Counted against what the store *kept*, not against what arrived: a retired `group:` record
+      // from an older peer is dropped by the store, and reporting it as an applied change would make
+      // the sync log claim it moved data it never stored.
+      next to next.count { before[it.key] != it.version }
+    }
   }
 }
 

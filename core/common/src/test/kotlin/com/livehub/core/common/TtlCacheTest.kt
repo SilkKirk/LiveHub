@@ -93,6 +93,55 @@ class TtlCacheTest {
     assertEquals(0, cache.size())
   }
 
+  /**
+   * The cache is bounded, and it evicts the least recently used entry.
+   *
+   * A TTL only removes an entry when something asks for that key again, so without a cap a key
+   * that is written once and never re-read stays resident for the life of the process.
+   * `roomDetail` is keyed per room, so that was "one entry per room ever opened".
+   */
+  @Test
+  fun `entries over the cap are evicted, least recently used first`() = runTest {
+    var now = 0L
+    val cache = TtlCache<String, Int>(ttlMillis = TtlCache.NEVER, clock = { now }, maxEntries = 3)
+
+    cache.put("a", 1)
+    cache.put("b", 2)
+    cache.put("c", 3)
+    assertEquals(3, cache.size())
+
+    // Touch "a" so it is no longer the least recently used; "b" now is.
+    assertEquals(1, cache.peek("a"))
+    now = 1
+    cache.put("d", 4)
+
+    assertEquals(3, cache.size())
+    assertNull(cache.peek("b"))
+    assertEquals(1, cache.peek("a"))
+    assertEquals(3, cache.peek("c"))
+    assertEquals(4, cache.peek("d"))
+  }
+
+  /**
+   * A producer that throws must not leave its key pinned in the in-flight table.
+   *
+   * That table used to gain one mutex per distinct key and never release any, and a failing
+   * producer never reached the value map, so the TTL could not age it out either: every room whose
+   * detail request failed leaked one entry permanently.
+   */
+  @Test
+  fun `a failing producer does not leak its in-flight entry`() = runTest {
+    val cache = TtlCache<String, Int>(ttlMillis = TtlCache.NEVER)
+    repeat(50) { index ->
+      runCatching { cache.getOrPut("fail-$index") { throw IllegalStateException("boom") } }
+    }
+    // The next call for one of those keys must compute again rather than deadlock on a stale
+    // mutex, and the cache must still be empty.
+    assertEquals(0, cache.size())
+    assertEquals(7, cache.getOrPut("fail-0") { 7 })
+    assertEquals(1, cache.size())
+  }
+
   private fun assertTrueAllEqual(values: List<Int>) {
     assertEquals(1, values.distinct().size)
   }

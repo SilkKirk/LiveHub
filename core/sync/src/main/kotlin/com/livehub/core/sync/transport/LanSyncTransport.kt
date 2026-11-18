@@ -287,6 +287,19 @@ class LanSyncTransport(
     return RawResponse(status, body)
   }
 
+  /**
+   * Reads one CRLF-terminated line, bounded.
+   *
+   * The bound is the point. This client talks to addresses that have **not** been authenticated
+   * yet: `CodePairing` offers the code to every one of the 254 addresses on the local /24, so any
+   * host there can answer, and a response that never sends a newline used to grow this
+   * `StringBuilder` until the process ran out of memory. `SyncHttpServer.readLine` has had the same
+   * guard for the same reason; the client half was missed.
+   *
+   * Returns null on overflow, which the callers already treat as a malformed response — the status
+   * line becomes `RawResponse(0, "")` and the header loop breaks, both of which surface as a
+   * protocol error rather than as a crash.
+   */
   private fun readLine(input: InputStream): String? {
     val builder = StringBuilder()
     while (true) {
@@ -294,6 +307,7 @@ class LanSyncTransport(
       if (byte == -1) return if (builder.isEmpty()) null else builder.toString()
       if (byte == '\n'.code) break
       if (byte != '\r'.code) builder.append(byte.toChar())
+      if (builder.length > MAX_LINE_LENGTH) return null
     }
     return builder.toString()
   }
@@ -330,6 +344,16 @@ class LanSyncTransport(
      * pairing sweep offers the code to an entire subnet.
      */
     private const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+
+    /**
+     * Upper bound on one response *line*, matching
+     * [com.livehub.core.sync.server.SyncHttpServer.MAX_LINE_LENGTH].
+     *
+     * Every legitimate line here is a status line or a header — tens of bytes. The bound exists so
+     * an unpaired address on a swept subnet cannot answer with an endless line and grow the reader
+     * without limit; see [readLine].
+     */
+    private const val MAX_LINE_LENGTH = 8192
   }
 }
 

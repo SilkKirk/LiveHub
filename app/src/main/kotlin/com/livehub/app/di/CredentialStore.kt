@@ -43,6 +43,20 @@ class CredentialStore(
   }
 
   /**
+   * Guards the read-modify-write over the login record set.
+   *
+   * Same window as [FollowRecordSet.lock], and the same two threads: a login or logout from the
+   * settings screen runs on the UI thread, while a login record arriving from a paired device is
+   * applied inside `SyncEngine.applyPayload` on the sync server's connection thread. Both read the
+   * current set, derive a replacement and store it; interleaved, the later write discarded the
+   * earlier change and the losing device's login state was silently dropped.
+   *
+   * The cookie stores these records mirror are already serialised per file by
+   * [SerialWriteQueue]; this lock covers the record set above them, which had no such protection.
+   */
+  private val lock = Any()
+
+  /**
    * Records a login (or its removal) for [platform] and mirrors it into the cookie store.
    *
    * Every login action goes through here rather than straight to a cookie store, otherwise the
@@ -65,12 +79,14 @@ class CredentialStore(
       deviceId = deviceId,
       updatedAt = now,
     )
-    if (alive) {
-      write(platform, header.orEmpty())
-    } else {
-      clear(platform)
+    synchronized(lock) {
+      if (alive) {
+        write(platform, header.orEmpty())
+      } else {
+        clear(platform)
+      }
+      persist(records().filterNot { it.key == key } + record)
     }
-    persist(records().filterNot { it.key == key } + record)
   }
 
   /** True when [platform] currently holds a session this app can use. */
@@ -80,7 +96,7 @@ class CredentialStore(
     else -> false
   }
 
-  internal fun apply(records: List<SyncRecord<out Any>>): Int {
+  internal fun apply(records: List<SyncRecord<out Any>>): Int = synchronized(lock) {
     @Suppress("UNCHECKED_CAST")
     val typed = records as List<SyncRecord<JsonObject>>
     val before = this.records().associate { it.key to it.version }
@@ -95,7 +111,7 @@ class CredentialStore(
       }
     }
     persist(typed)
-    return typed.count { before[it.key] != it.version }
+    typed.count { before[it.key] != it.version }
   }
 
   /** Writes a login into the cookie store the next request reads from. */
@@ -125,6 +141,15 @@ class CredentialStore(
 
   private fun keyOf(platform: Platform): String = "login:${platform.id}"
 
+  /**
+   * Runs [block] holding [lock].
+   *
+   * Used by [CredentialSyncTarget.locked] so the engine's snapshot-merge-apply is one critical
+   * section. Reentrant — `synchronized` is a JVM monitor — so the nested acquisition in [apply] is
+   * harmless, which is what lets [apply] stay independently safe when called on its own.
+   */
+  internal fun <R> locked(block: () -> R): R = synchronized(lock) { block() }
+
   private fun platformOf(key: String): Platform? {
     val id = key.removePrefix("login:")
     if (id == key) return null
@@ -137,6 +162,9 @@ class CredentialSyncTarget(private val store: CredentialStore) : SyncTarget {
   override val scope: SyncScope = SyncScope.CREDENTIALS
 
   override fun snapshot(): List<SyncRecord<out Any>> = store.records()
+
+  /** See [FollowSyncTarget.locked]: the merge's read and write must not be separated. */
+  override fun <R> locked(block: () -> R): R = store.locked(block)
 
   override fun apply(records: List<SyncRecord<out Any>>): Int = store.apply(records)
 }

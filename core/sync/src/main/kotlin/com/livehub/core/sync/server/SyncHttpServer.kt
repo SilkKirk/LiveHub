@@ -63,6 +63,19 @@ class SyncHttpServer(
 
   private val running = AtomicBoolean(false)
 
+  /**
+   * Permits for connections being served at once.
+   *
+   * See the acquire site in [start] for why this exists. A connection that is refused here is
+   * closed without a response rather than answered with 503: the pairing sweep treats any reply as
+   * "something is there" and the flood case deserves nothing at all.
+   *
+   * Created per [start] rather than once per instance so a stop/start cycle does not inherit a
+   * permit leaked by a thread that died mid-request.
+   */
+  @Volatile private var slots: java.util.concurrent.Semaphore =
+    java.util.concurrent.Semaphore(MAX_CONCURRENT_CONNECTIONS)
+
   @Volatile private var serverSocket: ServerSocket? = null
 
   @Volatile var port: Int = DEFAULT_PORT
@@ -73,6 +86,10 @@ class SyncHttpServer(
   /** Starts listening; safe to call twice. */
   fun start(preferredPort: Int = DEFAULT_PORT): Int {
     if (running.getAndSet(true)) return port
+    // Fresh permits for this run. Connection threads left over from a previous run hold the *old*
+    // semaphore, so releasing on it cannot inflate this one's budget — which is the point of
+    // replacing it rather than resetting it.
+    slots = java.util.concurrent.Semaphore(MAX_CONCURRENT_CONNECTIONS)
     val socket = bind(preferredPort)
     serverSocket = socket
     port = socket.localPort
@@ -92,7 +109,30 @@ class SyncHttpServer(
             runCatching { client.close() }
             break
           }
-          thread(name = "livehub-sync-conn", isDaemon = true) { serve(client) }
+          // Bounded, not one-thread-per-connection.
+          //
+          // The socket timeout already caps how long one request may take, but it does not cap how
+          // many may be in flight: any host on the LAN could open thousands of connections and hold
+          // a thread each for the full timeout, which on Android ends in
+          // `OutOfMemoryError: pthread_create failed` — the process dies with no dialog and no
+          // stack the user can act on. Body size and header length were both bounded; this was the
+          // third dimension and it was left open.
+          //
+          // Four is generous for what this server is: a phone-to-phone exchange is sequential
+          // per scope, and the pairing sweep only ever targets one device at a time.
+          if (!slots.tryAcquire()) {
+            // Refused without reading the request: the caller is either a sweep that will move on
+            // or a flood, and neither is worth spending a thread on.
+            runCatching { client.close() }
+            continue
+          }
+          thread(name = "livehub-sync-conn", isDaemon = true) {
+            try {
+              serve(client)
+            } finally {
+              slots.release()
+            }
+          }
         } catch (error: SocketException) {
           // Socket closed during shutdown.
           break
@@ -294,8 +334,26 @@ class SyncHttpServer(
   /** A peer is trusted when it presents the secret issued during pairing. */
   private fun authenticate(envelope: SyncEnvelope): TrustedPeer? {
     val peer = handler.peerById(envelope.deviceId) ?: return null
-    return if (peer.sharedSecret == envelope.secret) peer else null
+    return if (secretMatches(peer.sharedSecret, envelope.secret)) peer else null
   }
+
+  /**
+   * Constant-time comparison of the presented secret against the stored one.
+   *
+   * `==` on `String` returns as soon as two characters differ, so the time it takes leaks how much
+   * of a guess was correct. Over a LAN, with a pairing secret of 32 hex characters, turning that
+   * into a practical attack also needs a way to measure single-character timing differences
+   * reliably — which is why this is defence in depth rather than a hole being closed. It costs
+   * one method call and removes the question.
+   *
+   * `MessageDigest.isEqual` is the JDK's own constant-time implementation for exactly this, and it
+   * compares the arrays in full-length time regardless of where a difference is.
+   */
+  private fun secretMatches(stored: String, presented: String): Boolean =
+    java.security.MessageDigest.isEqual(
+      stored.toByteArray(Charsets.UTF_8),
+      presented.toByteArray(Charsets.UTF_8),
+    )
 
   private fun decode(body: String): SyncEnvelope? =
     runCatching { SyncEnvelope.decode(body) }.getOrNull()
@@ -421,6 +479,17 @@ class SyncHttpServer(
      * request header and [`PATH_PAIR`]/[`PATH_PING`] are answered before any authentication.
      */
     internal const val MAX_BODY_BYTES = 4 * 1024 * 1024
+
+    /**
+     * How many connections may be served at once.
+     *
+     * The server answers one request per connection and closes it, so this is also the number of
+     * live threads it may hold. Sized for the protocol rather than for a web server: a sync
+     * exchange is sequential per scope (pull, then push, then the next scope), so even a device
+     * syncing with several peers at once stays well inside this. The limit exists to make a flood
+     * cost a `close()` instead of a thread.
+     */
+    internal const val MAX_CONCURRENT_CONNECTIONS = 4
 
     /** Best-effort LAN IPv4 address of this device. */
     fun localIpv4Addresses(): List<String> = try {

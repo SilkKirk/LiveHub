@@ -137,31 +137,9 @@ class SyncEngine(
     require(maxRecordsPerPayload > 0) { "maxRecordsPerPayload must be positive" }
     val target = targets.targetFor(scope) ?: return emptyList()
     val pending = pendingRecords(target, peerKnown)
-
-    val chunkSize = maxRecordsPerPayload
-    // `pending.size + chunkSize - 1` overflows when the caller passes Int.MAX_VALUE to mean
-    // "no limit" (which buildPayload does), so the comparison comes first.
-    val chunkCount = when {
-      pending.isEmpty() -> 1
-      pending.size <= chunkSize -> 1
-      else -> (pending.size + chunkSize - 1) / chunkSize
-    }
+    val chunkCount = chunkCountOf(pending.size, maxRecordsPerPayload)
     return (0 until chunkCount).map { index ->
-      val slice = if (pending.isEmpty()) {
-        emptyList()
-      } else {
-        pending.subList(index * chunkSize, minOf((index + 1) * chunkSize, pending.size))
-      }
-      val payloadSequence = nextSequence()
-      SyncCodec.buildPayload(
-        scope = scope,
-        records = slice,
-        deviceId = deviceId,
-        sequence = payloadSequence,
-        now = clock(),
-        chunkIndex = index,
-        chunkCount = chunkCount,
-      )
+      buildChunk(scope, pending, maxRecordsPerPayload, chunkCount, index)
     }
   }
 
@@ -172,11 +150,56 @@ class SyncEngine(
    * the available range, and the returned payload reports `chunkCount` so the caller knows
    * whether to ask for another. Note this deliberately uses the default record cap — the
    * pull path is the one place where a scope really can exceed a single response.
+   *
+   * **Only the requested part is serialised.** This used to call [buildPayloads] and throw away
+   * all but one result, which meant a 20-part follow list was fully encoded twenty times per
+   * request and burned twenty sequence numbers to deliver one. The chunk *count* still comes from
+   * the whole set, because that is what tells the caller whether to ask again.
    */
   fun buildPullPayload(scope: SyncScope, chunkIndex: Int): SyncPayload? {
-    val payloads = buildPayloads(scope)
-    if (payloads.isEmpty()) return null
-    return payloads[chunkIndex.coerceIn(0, payloads.lastIndex)]
+    val target = targets.targetFor(scope) ?: return null
+    val pending = pendingRecords(target, emptyList())
+    val chunkSize = SyncPayload.MAX_RECORDS_PER_PAYLOAD
+    val chunkCount = chunkCountOf(pending.size, chunkSize)
+    return buildChunk(
+      scope = scope,
+      pending = pending,
+      chunkSize = chunkSize,
+      chunkCount = chunkCount,
+      index = chunkIndex.coerceIn(0, chunkCount - 1),
+    )
+  }
+
+  /** How many parts [size] records need, never zero. */
+  private fun chunkCountOf(size: Int, chunkSize: Int): Int = when {
+    size <= chunkSize -> 1
+    // `size + chunkSize - 1` overflows when the caller passes Int.MAX_VALUE to mean "no limit"
+    // (which buildPayload does), so the comparison above comes first.
+    else -> (size + chunkSize - 1) / chunkSize
+  }
+
+  /** Encodes one part of [pending]; the only place a payload sequence is consumed. */
+  private fun buildChunk(
+    scope: SyncScope,
+    pending: List<SyncRecord<JsonObject>>,
+    chunkSize: Int,
+    chunkCount: Int,
+    index: Int,
+  ): SyncPayload {
+    val slice = if (pending.isEmpty()) {
+      emptyList()
+    } else {
+      pending.subList(index * chunkSize, minOf((index + 1) * chunkSize, pending.size))
+    }
+    return SyncCodec.buildPayload(
+      scope = scope,
+      records = slice,
+      deviceId = deviceId,
+      sequence = nextSequence(),
+      now = clock(),
+      chunkIndex = index,
+      chunkCount = chunkCount,
+    )
   }
 
   /**
@@ -246,25 +269,34 @@ class SyncEngine(
       ?: return SyncApplyResult(rejectedReason = "本机不支持该范围: ${scope.displayName}")
 
     val incoming = SyncCodec.decodeRecords(payload.entries)
-    val local = target.snapshot().map { record ->
-      SyncRecord(
-        key = record.key,
-        value = record.value as? JsonObject,
-        deleted = record.deleted,
-        hlc = record.hlc,
-        deviceId = record.deviceId,
-        updatedAt = record.updatedAt,
-      )
-    }
-
     incoming.forEach { observeRemote(it.hlc) }
 
-    val outcome = SyncMerge.merge(local, incoming)
-    // Tombstones every peer has already confirmed are dropped here, not by a timer: the rule
-    // needs the peer watermarks, and an exchange is the only moment at which they are known to
-    // be current. See [SyncMerge.prune].
-    val merged = SyncMerge.prune(outcome.merged, peersProvider(), scope)
-    val changed = target.apply(merged)
+    // Read, merge and write are one critical section on the target.
+    //
+    // They were three separate steps, and the gap between the first and the last was a lost
+    // update: a star tap on the UI thread between `snapshot()` and `apply()` computed its new
+    // list, and `apply` then stored the merged list derived from the older snapshot — silently
+    // reverting the tap to whatever the peer's copy said, and to disk as well. `apply` being
+    // atomic on its own does not fix that; the base it merges against has to be stable too.
+    val (changed, remoteWins) = target.locked {
+      val local = target.snapshot().map { record ->
+        SyncRecord(
+          key = record.key,
+          value = record.value as? JsonObject,
+          deleted = record.deleted,
+          hlc = record.hlc,
+          deviceId = record.deviceId,
+          updatedAt = record.updatedAt,
+        )
+      }
+
+      val outcome = SyncMerge.merge(local, incoming)
+      // Tombstones every peer has already confirmed are dropped here, not by a timer: the rule
+      // needs the peer watermarks, and an exchange is the only moment at which they are known to
+      // be current. See [SyncMerge.prune].
+      val merged = SyncMerge.prune(outcome.merged, peersProvider(), scope)
+      target.apply(merged) to outcome.remoteWins
+    }
 
     peer?.let { known ->
       val updated = known.withApplied(scope.wireName, payload.sequence, clock())
@@ -277,7 +309,7 @@ class SyncEngine(
         direction = SyncLogEntry.Direction.PULL,
         peerName = peer?.deviceName ?: "未知设备",
         scope = scope.displayName,
-        itemCount = outcome.remoteWins,
+        itemCount = remoteWins,
         success = true,
         note = if (changed == 0) "无变化" else "更新 $changed 条",
       ),
@@ -286,7 +318,7 @@ class SyncEngine(
     // `remoteWins` is what actually reached the store: records the peer knew and we did not,
     // plus records whose version beat ours (which replace a local record rather than adding
     // one, hence `applied` rather than `added`).
-    return SyncApplyResult(applied = outcome.remoteWins)
+    return SyncApplyResult(applied = remoteWins)
   }
 
   /**

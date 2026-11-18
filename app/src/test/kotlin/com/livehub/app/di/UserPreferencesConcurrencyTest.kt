@@ -26,8 +26,8 @@ import java.util.concurrent.TimeUnit
  * Both halves of that are reachable in production and neither is hypothetical:
  *
  *  * the UI thread writes (a star tap in `MainViewModel.toggleFollow`, a danmaku slider drag), and
- *  * the sync server's connection threads write (`FollowRecordSet.persist` and
- *    `CredentialStore.persist` are both called from `SyncEngine.applyPayload`).
+ *  * the sync server's connection threads write (`FollowRecordSet` and `CredentialStore` both
+ *    persist from inside `SyncEngine.applyPayload`).
  *
  * A tap that lands during an exchange was therefore able to be erased by the exchange, or the other
  * way round, with no error anywhere.
