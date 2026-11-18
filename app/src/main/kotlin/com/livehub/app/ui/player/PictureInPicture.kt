@@ -51,7 +51,7 @@ internal object PictureInPicture {
   fun params(sourceRect: android.graphics.Rect?): PictureInPictureParams =
     PictureInPictureParams.Builder()
       .setAspectRatio(Rational(ASPECT_WIDTH, ASPECT_HEIGHT))
-      .apply { sourceRect?.let(::setSourceRectHint) }
+      .apply { sourceRect?.let { setSourceRectHint(it) } }
       .build()
 
   /**
@@ -65,6 +65,6 @@ internal object PictureInPicture {
     PictureInPictureParams.Builder()
       .setAspectRatio(Rational(ASPECT_WIDTH, ASPECT_HEIGHT))
       .setAutoEnterEnabled(autoEnter)
-      .apply { sourceRect?.let(::setSourceRectHint) }
+      .apply { sourceRect?.let { setSourceRectHint(it) } }
       .build()
 }
