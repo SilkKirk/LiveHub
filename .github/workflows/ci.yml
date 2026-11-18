@@ -66,6 +66,16 @@ jobs:
       - name: Assertion argument order
         run: python3 .github/scripts/check_assert_order.py
 
+      # Same idea, same reason: a mistake that already happened twice. The 48dp touch minimum was
+      # broken by `size(32.dp)` on an IconButton (round 61) and by `size(48.dp).padding(8.dp)`
+      # (round 65), and for ten rounds a `lint { error += "TouchTargetSizeCheck" }` line claimed to
+      # guard it while doing nothing — that string is not a Gradle lint issue id. This is source
+      # checking rather than a test because neither runtime metric works: `touchBoundsInRoot` is
+      # normalised to 48dp for every clickable, and `boundsInRoot` flags Material's deliberately
+      # compact chips and switches. See the script's docstring.
+      - name: Touch target size
+        run: python3 .github/scripts/check_touch_targets.py
+
       # The screenshot comparator decides whether a render changed, so its judgement is verified
       # here rather than trusted. `--self-test` needs no image library on purpose: the thresholds
       # are a pure function, and this step runs before anything expensive.

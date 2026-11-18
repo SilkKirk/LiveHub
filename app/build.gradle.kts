@@ -116,10 +116,14 @@ android {
      * no touch-target lint rule: searching `androidx/androidx` for that id returns zero hits, while
      * a check that really exists (`UnrememberedMutableState`) returns fifteen.
      *
-     * The guard is now a test that actually runs — `TouchTargetSizeTest` in
-     * `app/src/test/.../ui/` renders the app shell and fails if any node with a click action
-     * reports a side under 48dp. It runs in the existing `test` task, so it costs no extra CI time
-     * and it fails on the *runtime* bound rather than on a source pattern.
+     * The guard is now `.github/scripts/check_touch_targets.py`, run as its own step before anything
+     * expensive compiles. It rejects an `IconButton` with no `modifier`, with a literal size under
+     * 48dp, or with `padding` in the modifier that would shrink the clickable inside the node — the
+     * two historical shapes plus the 40dp Material default. It is a source check rather than a test
+     * because neither runtime metric survives contact: `touchBoundsInRoot` is normalised to 48dp for
+     * every clickable (a 32dp `IconButton` and even a hand-rolled 32dp `Box { clickable {} }` both
+     * report 48), while `boundsInRoot` flags Material's deliberately compact chips (36dp) and
+     * switches (32dp) — 12 false positives across 搜索, 设置 and 同步.
      */
 }
 

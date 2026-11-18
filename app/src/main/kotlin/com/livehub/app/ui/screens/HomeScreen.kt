@@ -473,9 +473,9 @@ private fun PlatformTabs(
         )
       }
     }
-    // 48dp, not Material's 40dp default: `TouchTargetSizeTest` measures this button and fails
-    // below the minimum. Every IconButton in this project carries the explicit size for that
-    // reason, and this one had been missed.
+    // 48dp, not Material's 40dp default: `.github/scripts/check_touch_targets.py` rejects an
+    // IconButton whose modifier cannot reach the minimum, and this one had been missed. Every
+    // IconButton in this project carries the explicit size for that reason.
     IconButton(
       onClick = { onAction(UiAction.Refresh) },
       modifier = Modifier.size(48.dp),
