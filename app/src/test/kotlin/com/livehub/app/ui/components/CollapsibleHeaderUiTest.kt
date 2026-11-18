@@ -208,6 +208,8 @@ class CollapsibleHeaderUiTest {
    *
    * The gesture is stepped rather than one jump: the first step is spent on touch slop and on moving
    * the list at all (folding is gated on the list having moved), and the rest is what the fold uses.
+   * It also pauses before the lift — a fling would fold the rest of the header, and then the test
+   * would be measuring the fling instead of the drag.
    */
   @Test
   fun `follow - a short drag folds the header part-way instead of away`() {
@@ -220,8 +222,14 @@ class CollapsibleHeaderUiTest {
       val step = 15.dp.toPx()
       down(start)
       repeat(4) { index ->
+        advanceEventTime(100)
         moveTo(Offset(start.x, start.y - step * (index + 1)))
       }
+      // A pause before lifting, so the gesture ends with no velocity. Without it the drag becomes a
+      // fling, the fling is what folds the rest of the header, and the test would be asserting the
+      // fling's distance rather than the drag's — which is how the first version of this test failed
+      // on CI with "a 60dp drag must not remove the header, found 0".
+      advanceEventTime(500)
       up()
     }
     composeRule.waitForIdle()
