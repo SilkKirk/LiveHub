@@ -4919,5 +4919,89 @@ Material 本来就把它们都撑到了 48dp 可点击。原注释把它们记�
    不只是修 `onServiceLost`。
 4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
 
+---
+
+## 第一百二十九轮迭代：http 降级的地址会盖掉新选的线路
+
+上一轮清单第 3 项（可配对设备不消失）要改 `PeerDiscovery` 的接口才能修，收益是「离开页面前
+列表偏旧」；先放下，转去看别处，结果在播放器里找到一处会**播错内容**的缺陷。
+
+### 一、降级之后换线路，画面还是旧的
+
+`PlayerScreen` 的 `httpFallbackUrl` 只按房间 `remember`：
+
+    var httpFallbackUrl by remember(state.room?.key) { mutableStateOf<String?>(null) }
+    val effectiveVariant = variant?.let { current ->
+      httpFallbackUrl?.let { fallback -> current.copy(url = fallback) } ?: current
+    }
+
+它记录的是「解析出的地址在 TLS 上过不去，改用同一个地址的 http 形式」那次降级。切换清晰度或
+线路时 `selectQuality` 会换掉 `selectedVariant`，但这个降级值不重置，于是**新的 variant 被旧
+variant 的降级 URL 覆盖**：界面上新线路的 chip 已经选中，实际仍在播上一条。
+
+可达性：虎牙同时是「需要 http 降级」（其 CDN 主机名里的下划线过不了 TLS SNI）与「有线路轴」
+（`preferredLine` 是它的 CDN 轴）的那个平台，所以「降级之后换线路」在真实使用里走得到。
+
+改法：`remember` 的 key 加上 `variant?.url`。降级本身不改变 `variant`，所以降级结果留得住；
+真正的切换才会重置——那正是旧 URL 失效的时刻。
+
+### 二、三处把「取消」记成「失败」
+
+`MainViewModel` 里三处 `runCatching` 包了**可挂起**的调用，会吞掉 `CancellationException`：
+
+| 调用 | 吞掉取消的后果 |
+| --- | --- |
+| `syncController.pairByCode` | 配对要扫十秒网段，用户离开屏幕即取消；状态里留下「配对失败」 |
+| `syncController.syncNow` | 把「离开应用」记成「同步失败」 |
+| `bilibiliAuth.poll` | 把「用户按了取消」记成「这轮轮询没结果」 |
+
+这正是 `RunCatchingCancellable` 的文档写明要避免的写法（「it runs the fallback on behalf of
+nobody」），项目里其他六十余处已经遵守它。三处改为 `runCatchingCancellable`；`finally` 仍在
+两条路径上释放标志位，所以取消不会把按钮卡住。
+
+### 三、这一轮读过但没改的
+
+* **`DanmakuOverlay`**：车道在帧时钟上排队、房间切换清空、真空风险（快照在动画创建*之后*
+  推进）都已有注释与对应处理。唯一小瑕疵是拖动「显示区域」时已飞出的弹幕仍停在旧车道，
+  但它们不会被裁剪、最多八秒就自然消失，**不值得改**。
+* **`SettingsScreen` 的图片缓存**：`Dispatchers.IO` + 针对「块内没有挂起点」的 `runCatching`
+  有注释说明，正确。
+* **风险模式扫描**：主源码 `GlobalScope` 0 处、`!!` 强制解包 0 处；4 处 `Thread(...)` 全是命名
+  守护线程，其中同步服务的两处本轮已有并发上限；2 处 `lateinit` 都是 Android 标准写法
+  （Application 的 container、Activity 的 viewModel）且各有注释。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `lintDebug`（全模块） | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿 |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `2127380` 三个 job 全绿 |
+
+### 关于「还要不要继续改」
+
+到这里，通读已经覆盖了 `core:*`、`platform:*`、`:app` 的全部主源码与主要测试，逐轮修掉的都是
+可复现的具体缺陷。**剩下的两类都不该盲改**：
+
+* **需要设备验证的**：PiP 转场（见上）。
+* **结构性的**：`MainViewModel` 的 2159 行。它要拆的是同步相关的约二十个方法与六个字段，
+  接近七百行；调用方是 `onAction`，拆完对外行为不变，所以测试能兜住，但它**不是缺陷**，
+  是一次纯粹的重构。第一百二十六轮记过切法（同步面整体抽出，连同 `syncInFlight` /
+  `syncServerJob` / `lastAutoSyncAtMillis` / `appForeground` / `discoveryJob` /
+  `pairingCountdownJob`），那应该是一次明确决定要做的重构轮，而不是审查的副产品。
+
+在没有新缺陷可修的情况下继续「顺手优化」，风险大于收益：这个仓库的注释密度说明每一处
+折中都是想过之后写下的，改动它的理由应当是发现它错了，而不是它还能换个写法。
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **`MainViewModel` 拆分**：明确决定后再做，见上。
+2. **`PictureInPictureIssue`**：先在真机上量一次转场，再决定。
+3. **同步页「可配对设备」不会消失**：改 `PeerDiscovery` 接口，加 lost 事件。
+4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
+
+
 
 
