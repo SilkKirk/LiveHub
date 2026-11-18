@@ -5002,6 +5002,106 @@ nobody」），项目里其他六十余处已经遵守它。三处改为 `runCat
 3. **同步页「可配对设备」不会消失**：改 `PeerDiscovery` 接口，加 lost 事件。
 4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
 
+---
 
+## 第一百三十轮迭代：同步面整块搬出 `MainViewModel`（一次明确决定的重构）
 
+前两轮的「剩下的」里都写着同一件事，但都压着没做：`MainViewModel` 的同步面该拆，而它不是
+缺陷。这一轮用户明确说了「按那个切法做」，于是它成了这一轮唯一的事。
 
+### 切法兑现成数字
+
+上一轮记的是「约二十个方法与六个字段，接近七百行」。实际量出来：
+
+| 项目 | 数量 |
+| --- | --- |
+| 搬走的方法 | 21 个 |
+| 搬走的字段 | 6 个（`syncInFlight`、`syncServerJob`、`lastAutoSyncAtMillis`、`appForeground`、`discoveryJob`、`pairingCountdownJob`） |
+| 一并搬走的 | `shouldAutoSync`、`AUTO_SYNC_MIN_INTERVAL_MILLIS`、两个发现轮询常量 |
+| 搬走的行数 | **568**（含 KDoc） |
+| `MainViewModel` | 2280 → **1719** 行（净减 561） |
+| 新文件 `SyncSurface.kt` | **706** 行 |
+
+「接近七百行」偏大了，量出来是 568。这不影响当初的决定，但记录里出现过两个数，就该说清哪个
+是数出来的。
+
+### 这一刀为什么切得干净
+
+三条边界是量的，不是感觉的：
+
+1. **字段的读者全在搬走的代码里。** 六个字段逐个 grep，唯一的例外是 `onCleared`——它现在
+   调 `sync.shutdown()`，里面的三行与原收尾逐条对应（取消倒计时、取消发现、停服务器）。
+2. **状态只有一个。** `_state` 以构造参数传进 `SyncSurface`（类里叫 `state`），不是复制。
+   两份 `UiState` 会是 bug，不是架构。
+3. **生命周期不变。** `viewModelScope` 作为 `scope` 传入，所以所有协程仍然随
+   `ViewModelStore.clear()` 一起结束；线程约定也没动（入口都在主线程，`unpair` 仍先 hop 到
+   `Dispatchers.IO` 再发布状态）。
+
+### 「行为不变」是怎么核对的
+
+不是靠读一遍觉得像。搬完之后跑了一个脚本，把原文件的每一条非空行拿去新文件里对：
+
+| 检查 | 结果 |
+| --- | --- |
+| 原文件非空行 | 2170 |
+| 在新文件里找不到逐字副本的行 | **50** |
+| 这 50 行 | 7 行是注释（类与构造器的旧句、`[navigate]` 与 `[leaveSyncScreen]` 的跨类引用、两处删掉的分区标题），43 行是同一批机械替换：`_state` → `state`、`viewModelScope.launch` → `scope.launch`、`private fun` → `fun`（8 个方法现在由 ViewModel 调用）、9 处 `sync.` 转发、`SetAutoSync` 的三行折进 `setAutoSync()` |
+
+另外逐条确认了两处**顺序**没有动，因为顺序在这里就是行为：
+
+- 离开同步页：仍然「先 `leaveSyncScreen()`（此时 `state.screen` 还是 `Sync`）、再改 screen」；
+- 进入同步页：仍然「先改 screen、再 `enterSyncScreen()`」。
+
+`autoSyncWanted` 与 `applyAutoSyncPolicy` 都读 `state.screen`，把顺序写反就是另一个行为，而
+现有测试对这两条只有间接覆盖。
+
+搬运本身由脚本按行号切片完成，每一片都断言首行与末行——第一次跑就中止了，因为我按「每个函数
+以 `  }` 结尾」写了断言，而 `addressIfListening` 是单表达式函数，没有那个 `}`。断言拦住的是
+我，不是文件。
+
+### 补一条此前一条都没有的守卫
+
+`onCleared` 的收尾（取消倒计时与发现、停服务器）此前没有任何测试：它只能由
+`ViewModelStore.clear()` 触发，而测试里从来没有建过一个 store。这一轮恰好把它挪进了
+`SyncSurface.shutdown()`，于是补了 `clearing the ViewModel takes the server down`：把
+`MainViewModel` 放进真的 `ViewModelStore`，用 `ViewModelProvider` 取出来，然后 `store.clear()`。
+`onCleared` 是 `protected`（Kotlin 的 override 默认继承基类可见性），这条路径是唯一不需要
+改产品代码可见性就能走到它的办法。
+
+### 搬代码时读到的一句错注释
+
+`UserPreferences` 的类注释写着「`MainViewModel.unpair` 不在后台 dispatcher，所以解除配对要在
+主线程做一次阻塞读和两次阻塞写」。从 `2c3735c`（把三处主线程工作挪走）起这句话就不成立了：
+`unpair` 整段都在 `Dispatchers.IO` 里。改成如实描述——不阻塞主线程是**调用点**的属性，不是
+`saveTrustedPeers` / `savePeerAddresses` 这两个方法的属性。
+
+这不是本轮改出来的缺陷，但它就在搬走那段代码的注释旁边，且已经错了若干轮，记在这里。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| 逐行核对（2170 行，50 行预期差） | ✅ |
+| `assert-order`、`touch-targets` 源码检查 | ✅ 本地通过 |
+| `lintDebug`（全模块） | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 1 条 `onCleared` 守卫） |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `eddfcd7` 三个 job 全绿 |
+
+### 记在案上的
+
+- **重构也要有度量。** 「搬了多少、留下多少、原文件的每一行去了哪」三个数都是脚本给的；
+  这个规模上，目测只能证明「看起来对」。
+- **记录里的估算会变成下一轮的依据。** 「接近七百行」让这一轮的预期偏大，实际 568。候选
+  清单里的数字应当当场量。
+- **切完仍是 1719 行。** 这一轮没有把「文件小了」说成「变简单了」：搜索、关注、播放各自
+  仍是一刀，而且同样要先有明确决定，不能当审查的副产品。
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **`PictureInPictureIssue`**：仍要真机量一次转场，见第一百二十九轮。
+2. **同步页「可配对设备」不会消失**：改 `PeerDiscovery` 接口，加 lost 事件。
+3. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
+4. **`MainViewModel` 的下一步**：搜索（`submitSearch` 一族）、关注（`refreshFollowStatus`
+   一族）、播放（`openRoom` / `selectQuality` / 弹幕）各是一刀，每一刀都要先有「明确决定」。
