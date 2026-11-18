@@ -4672,3 +4672,154 @@ ModalBottomSheet」两种组合下分别选中哪个根（后者已知能拍成�
 3. **`ci.yml` 的 release-assembly 产物也没归档 mapping**（价值低，备查）。
 4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
 
+---
+
+## 第一百二十六轮迭代：审查发现的一处静默数据丢失，与同步服务的四个边界
+
+用户要求「审查代码和功能，看看还有什么可以优化调整的」。通读之后，显式缺陷大多已在前面百轮
+里修掉；剩下的集中在两类：**并发**，和**只增不减的资源**。
+
+### 关注列表的读-改-写没有锁
+
+`FollowStore` 的 `toggle` / `toggleSpecial` / `setTags` / `updateSnapshot` / `reorder` 是同一个形状：
+读 `records()`、算出新表、整表写回。`FollowStore` 与 `FollowRecordSet` 里**没有任何锁**
+（grep `synchronized` / `Mutex` / `Atomic`，零命中）。
+
+两个写者分属不同线程，都不是假设出来的：
+
+* **UI 线程**——点星标、改标签、拖动排序；
+* **同步服务的连接线程**——`SyncEngine.applyPayload` → `FollowSyncTarget.apply`。
+
+后写者用自己读到的旧底稿覆盖先写者，整个变更从内存和磁盘一起消失。用户看到的是
+「点了星标没反应」。同一轮里 `CredentialStore` 是同一个 bug 的第二个实例（登录状态）。
+
+值得记的是：`UserPreferences.update` **早就为同一类 bug 加过 `updateLock`**，注释也把原因写透了。
+但锁加在最后一步，而读-改-写的前两步在锁外。同一个推理、同一个 bug 类别，修了一个没修另一个。
+
+### 更靠上的一处：合并的底稿也不稳
+
+给 `FollowRecordSet` 加锁之后，写测试时才发现在 `SyncEngine.applyPayload` 里
+`snapshot()` 到 `apply()` 之间同样是裸露的。**`apply` 本身原子并不够——合并所依据的底稿也必须稳定**，
+否则一份从旧底稿算出的合并结果会覆盖掉中间发生的本地修改。
+
+所以 `SyncTarget` 加了 `locked()`，让「读 → 合并 → 写」整体进入目标的锁。
+
+第一版测试直接调 `apply(fromPeer)` 并断言「只有房间 2 是变更」，CI 报
+`expected:<1> but was:<2>`。**错的是断言**：`apply` 接收的是**已合并**的集合，直接喂原始 payload
+会绕过合并。改成走真实的 `applyPayload` 后通过。
+
+### 四个边界
+
+| 位置 | 问题 | 改法 |
+| --- | --- | --- |
+| `SyncHttpServer` | 每连接一线程且无上限；局域网内并发连接可打到 `pthread_create` 失败 | 4 个许可，超出直接 `close()` |
+| `LanSyncTransport.readLine` | 无长度上限（服务端有）。配对扫描会把码发给整个 /24，任一台机器回一个不含换行的流就能 OOM | 与服务端同样 8 KB |
+| `TtlCache` | `entries` 与 `inFlight` 都只增不减（`inFlight` 按 key 永久留一个 `Mutex`，生产者抛异常时连 TTL 都救不了） | LRU 上限 256；`inFlight` 按引用计数，最后一个等待者离开才移除 |
+| `buildPullPayload` | 每次请求构造**全部**分片再丢掉，消耗 N 个 sequence 才发 1 片 | 只编码请求的那一片 |
+
+另外两处凭据处理：六位配对码改用 `SecureRandom`（它是配对的唯一凭据，普通 PRNG 可预测）；
+`sharedSecret` 比较改用 `MessageDigest.isEqual`（常数时间）。
+
+以及两处收紧：删掉 `proguard-rules.pro` 的 `-keep class com.livehub.platform.** { *; }`
+（四个适配器全是直接 `new`，assets 里两个 JS 包也不引用 `Packages` / `Java.type`；
+release CI 当场验证通过）；lint 从 `:app:lintDebug` 改为全模块 `lintDebug`
+（`core:sync` 与 `platform:*` 此前**完全没跑过** lint）。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `lintDebug`（全模块） | ✅ 0 error |
+| JVM 单元测试 | ✅ 全绿（新增 `FollowStoreConcurrencyTest`、`TtlCache` LRU 与 inFlight 泄漏、分片序号） |
+| 仪器测试 | ✅ |
+| Release assembly（R8，已删 `-keep`） | ✅ |
+| CI | ✅ `b9e92eb` 三个 job 全绿 |
+
+### 剩下的（下一轮候选）
+
+1. **`app/build.gradle.kts` 里的 `error += "TouchTargetSizeCheck"`**（下面一轮处理）。
+2. `MainViewModel` 的 2159 行：切法是同步相关的 8 个方法连同 `syncInFlight` /
+   `syncServerJob` / `lastAutoSyncAtMillis` 一起抽出，但这是重构不是修复，应单独一轮。
+3. `PictureInPictureIssue` lint 警告：建议补 `setAutoEnterEnabled` 与 `setSourceRectHint`。
+
+---
+
+## 第一百二十七轮迭代：那条「48dp 守卫」是假的，而运行时两种度量都救不了它
+
+第一百二十六轮审查时注意到一条警告：`UnknownIssueId: Unknown issue id "TouchTargetSizeCheck"`。
+顺着查下去，`app/build.gradle.kts` 里那行 `lint { error += "TouchTargetSizeCheck" }` 的注释写着
+「Compose 自己的 lint 检查知道这条规则」，承诺守卫本项目栽过两次的那条线。**这个承诺是假的。**
+
+查证（不猜）：
+
+* CI 一直在报 `UnknownIssueId`，即 Gradle lint 不认识这个 id；
+* 在 `androidx/androidx` 全仓搜该 id 是 **0 命中**，而同一次搜索里真实存在的
+  `UnrememberedMutableState` 是 **15 命中**（说明搜索本身有效）；
+* 它其实是 Android Studio **visual lint** 与 Google **Accessibility Test Framework** 里的
+  分析器名字——也就是真正会打印 "Touch target size too small" 的那些工具，不是 lint 的 issue id。
+
+所以那行配置十轮以来一个字都没拦过。它守护的正是第六十一轮（`size(32.dp)`）与
+第六十五轮（`size(48.dp).padding(8.dp)`）栽过的线。
+
+### 三次尝试，两种运行时度量，全部失败
+
+| # | 度量 | 结果 |
+| --- | --- | --- |
+| 1 | `boundsInRoot`（布局尺寸） | **12 处误报**：Material 的 `FilterChip` 布局 36dp、`Switch` 52x32dp，都是设计尺寸而触摸范围是 48dp |
+| 2 | `touchBoundsInRoot`（触摸尺寸） | 五个页面全过——但「测试的测试」那条用例失败：**32dp 的 IconButton 也报 48dp** |
+| 3 | `touchBoundsInRoot` + 手写 `clickable` 探测 | 仍然失败：**手写的 32dp clickable 也报 48dp** |
+
+第 3 次给出了定论：Compose 会把**任何**带点击语义节点的 `touchBoundsInRoot` 规范化到最小触摸尺寸，
+它恒等于 48dp。作为度量它永远不可能失败——那条运行时测试是**真空的**，无论代码怎么写都通过。
+（这也修正了一个旧认识：那两个历史 bug 其实是**视觉**尺寸问题，不是可点击性问题——
+Material 本来就把它们都撑到了 48dp 可点击。原注释把它们记成触摸尺寸问题，也不准确。）
+
+### 改法：守卫写成源码检查
+
+删掉真空的测试，改为 `.github/scripts/check_touch_targets.py`，逐条检查 `IconButton`：
+
+1. 必须传 `modifier`（Material 默认 state layer 只有 40dp）；
+2. `modifier` 里的字面量 `size` 必须 ≥48dp；
+3. `modifier` 里不许有 `padding`（第六十五轮那种：外层 48dp、padding 里的 clickable 只有 32dp）。
+
+接在 `check_assert_order.py` 之后、编译之前。与它同样的定位：**一个已经犯过两次、在源码里便宜可查、
+但无法表述成运行时属性的错误**。
+
+它顺带找出六处没有显式尺寸的 `IconButton`（Material 默认 40dp）：首页「刷新」、搜索页
+「清空」「搜索」、同步页「刷新」「解除关联」「重新扫描」。Material 让它们可点，所以这不算不可用，
+但项目另外八处都是 48dp，相邻页面上两种按钮尺寸不是任何人的决定，已统一。
+
+用两种历史形状做对照验证过：`size(32.dp)` 与 `size(48.dp).padding(8.dp)` 都被抓到；
+`size(48.dp)`、`align(...).size(48.dp)`、命名常量、多行写法全部通过。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| 新脚本本地对照 | ✅ 两种历史形状被抓，四种合法写法放行 |
+| `lintDebug`（全模块） | ✅ 0 error，`UnknownIssueId` 警告消失 |
+| JVM 单元测试 | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `ac77a30` 三个 job 全绿 |
+
+### 教训
+
+**「测试的测试」这条用例三次否决了我的方案，而且是唯一一个做到这件事的东西。** 第 2、3 次
+它直接报「扫描没找到任何违规」——如果没有它，第 2 次的真空测试会带着全绿的 CI 通过，
+并成为下一个十年的假守卫，与 `TouchTargetSizeCheck` 那行一模一样。
+
+具体到方法：**给度量写断言之前，先用一个已知的坏输入验证它会失败。** 这一轮我在猜「哪种尺寸属性
+是对的」上花了三次 CI，而如果第一次就把「故意做小」的样本放进测试，两次能省掉。
+
+另一条：查清一个 id / API 是否存在，要用**有对照的**搜索。第一轮 web 搜索给出的答案互相矛盾，
+而「在 androidx 里搜到 0 命中、同一个搜索里搜已知存在的 id 有 15 命中」是决定性的。
+
+### 剩下的（下一轮候选，按价值排）
+
+1. **`PictureInPictureIssue`**：lint 建议补 `setAutoEnterEnabled(true)` 与 `setSourceRectHint(...)`。
+2. **`MainViewModel` 拆分**（见第一百二十六轮第 2 条）：重构性质，单独一轮做。
+3. **`ci.yml` 的 release-assembly 产物没归档 mapping**（价值低，备查）。
+4. **把比较器接成 CI 基线门禁**：需要稳定基线与 token。
+
+
