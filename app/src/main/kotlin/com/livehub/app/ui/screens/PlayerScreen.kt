@@ -335,7 +335,16 @@ internal fun PlayerContent(
   // which keeps the surface at 16:9 instead of collapsing to zero height on open.
   var videoAspect by remember(state.room?.key) { mutableStateOf(videoAspectHint) }
   // Set when a CDN hostname cannot pass TLS; the same URL is retried over http.
-  var httpFallbackUrl by remember(state.room?.key) { mutableStateOf<String?>(null) }
+  //
+  // Keyed on the variant's URL as well as the room. Keyed on the room alone it survived a quality
+  // or line switch, and `effectiveVariant` below then overwrote the *new* variant's URL with the
+  // downgraded form of the old one — so on Huya, the one platform that both needs the downgrade and
+  // offers a line axis, picking another line re-selected the chip while the picture kept playing the
+  // previous line's URL. The fallback itself does not change `selectedVariant`, so applying it does
+  // not clear the key; only a real switch does, which is exactly when the old URL stops being valid.
+  var httpFallbackUrl by remember(state.room?.key, variant?.url) {
+    mutableStateOf<String?>(null)
+  }
 
   val isPlaying = variant != null && !state.loading
   LaunchedEffect(controlsVisible, variant?.url, isPlaying, fullscreen) {

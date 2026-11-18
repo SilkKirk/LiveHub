@@ -11,6 +11,7 @@ import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
+import com.livehub.core.network.runCatchingCancellable
 import com.livehub.platform.api.PlatformException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -1920,7 +1921,10 @@ class MainViewModel(
   private suspend fun pollUntilConfirmed(key: String) {
     repeat(LOGIN_POLL_ATTEMPTS) {
       kotlinx.coroutines.delay(LOGIN_POLL_INTERVAL_MILLIS)
-      when (val result = runCatching { container.bilibiliAuth.poll(key) }.getOrNull()) {
+      // `runCatchingCancellable`: 取消 means the user pressed 取消 or the screen went away, and it
+      // must not be read as "the poll said nothing". The outer coroutine rethrows it, which is what
+      // lets `startBilibiliLogin` keep that case out of the error path.
+      when (val result = runCatchingCancellable { container.bilibiliAuth.poll(key) }.getOrNull()) {
         null -> Unit
         com.livehub.platform.bilibili.BilibiliAuth.PollResult.Waiting -> Unit
         com.livehub.platform.bilibili.BilibiliAuth.PollResult.Scanned -> _state.update {
@@ -2077,7 +2081,11 @@ class MainViewModel(
       // `finally` rather than a plain sequence: any throw between the handshake and the
       // state reads used to leave the flag stuck and 立即同步 permanently disabled.
       val result = try {
-        runCatching { container.syncController.pairByCode(digits) }
+        // `runCatchingCancellable`, not `runCatching`: the sweep is a ten second socket walk, and
+        // closing the screen cancels it. A swallowed `CancellationException` would report
+        // "配对失败" for a pairing the user called off, and would keep the result of a request
+        // nobody is waiting for. `finally` still runs, so the flag is released either way.
+        runCatchingCancellable { container.syncController.pairByCode(digits) }
           .getOrElse { Result.failure(it) }
       } finally {
         _state.update { it.copy(pairing = false) }
@@ -2159,7 +2167,10 @@ class MainViewModel(
     _state.update { it.copy(syncing = true) }
     viewModelScope.launch {
       try {
-        val summary = runCatching { container.syncController.syncNow() }
+        // Cancellation is not a sync failure. The exchange opens sockets over several peers, so
+        // leaving the app cancels it; `runCatching` turned that into "同步失败" written into a
+        // state the screen no longer shows. `finally` below still releases the flags.
+        val summary = runCatchingCancellable { container.syncController.syncNow() }
           .getOrElse { error ->
             SyncController.SyncSummary(0, 0, error.message ?: "同步失败")
           }
