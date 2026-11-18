@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.livehub.app.LiveHubApplication
+import com.livehub.core.model.Streamer
 import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 
@@ -71,6 +72,11 @@ class FollowRefreshWorker(
     val now = System.currentTimeMillis()
     val hlc = container.syncEngine.nextHlc()
 
+    // Collected and written once, not once per room. Each write re-encodes the whole settings
+    // record, so a hundred follows used to mean a hundred encodings and a hundred DataStore writes
+    // per run; see `FollowStore.updateSnapshots`.
+    val refreshed = ArrayList<Streamer>(followed.size)
+
     followed.forEach { streamer ->
       val status = try {
         container.platformRepository.liveStatus(streamer.platform, streamer.roomId)
@@ -88,20 +94,17 @@ class FollowRefreshWorker(
       if (status == null) {
         failures++
       } else {
-        container.followStore.updateSnapshot(
-          streamer = streamer.copy(
-            isLive = status.isLive,
-            title = status.title ?: streamer.title,
-            viewerCount = status.viewerCount,
-            coverUrl = status.coverUrl ?: streamer.coverUrl,
-            updatedAt = now,
-          ),
-          hlc = hlc,
-          deviceId = deviceId,
-          now = now,
+        refreshed += streamer.copy(
+          isLive = status.isLive,
+          title = status.title ?: streamer.title,
+          viewerCount = status.viewerCount,
+          coverUrl = status.coverUrl ?: streamer.coverUrl,
+          updatedAt = now,
         )
       }
     }
+
+    container.followStore.updateSnapshots(refreshed, hlc, deviceId, now)
 
     // A partial failure is normal (a platform may be rate limiting); only ask for a
     // retry when nothing succeeded.

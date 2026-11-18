@@ -232,31 +232,48 @@ class FollowStore(preferences: UserPreferences) {
    *
    * Used by the background refresh worker: it must not *add* a follow (the user may have
    * unfollowed on another device since the worker started), only update one that is still alive.
+   *
+   * A one-room call is [updateSnapshots] with a single element, so the rules live in one place.
    */
   fun updateSnapshot(streamer: Streamer, hlc: Hlc, deviceId: Long, now: Long) {
-    val roomKey = LibraryKey.Room(streamer.platform, streamer.roomId).encode()
+    updateSnapshots(listOf(streamer), hlc, deviceId, now)
+  }
+
+  /**
+   * Refreshes the cached metadata of many already-followed rooms in **one** write.
+   *
+   * The worker used to call [updateSnapshot] once per room, and every call re-encodes the whole
+   * record set and hands the whole settings record to `DataStore`. A hundred follows therefore
+   * produced a hundred full encodings and a hundred writes every thirty minutes — the same argument
+   * that put a cap on `recentRooms` ("every other settings write re-encodes it"). Batching keeps the
+   * per-room rules identical and makes the cost one write.
+   *
+   * The rules [updateSnapshot] documents still hold per record: a room the user no longer follows
+   * (or one tombstoned since the list was read) is left exactly as it is, and the manual order, the
+   * 特别关注 mark and the tags survive, because the worker's `Streamer` comes from the network and
+   * knows nothing about any of them.
+   */
+  fun updateSnapshots(streamers: List<Streamer>, hlc: Hlc, deviceId: Long, now: Long) {
+    if (streamers.isEmpty()) return
+    val incoming = streamers.associateBy { LibraryKey.Room(it.platform, it.roomId).encode() }
     set.mutate { current ->
-      val existing = current.firstOrNull { it.key == roomKey }
-      if (existing == null || existing.deleted) return@mutate current
-      val updated = SyncRecord(
-        key = roomKey,
-        // The manual order, the 特别关注 mark *and* the tags survive the refresh. The worker rebuilds
-        // the record from a network `Streamer`, which knows nothing about any of them — dropping the
-        // flag here would quietly empty the avatar row every 30 minutes, and dropping the tags would
-        // erase labels the user typed.
-        value = FollowCodec.fromStreamer(
-          streamer = streamer,
-          now = now,
-          order = existing.value?.get("order"),
-          special = FollowCodec.isSpecial(existing.value),
-          tags = FollowCodec.tagsOf(existing.value),
-        ),
-        deleted = false,
-        hlc = hlc,
-        deviceId = deviceId,
-        updatedAt = now,
-      )
-      current.filterNot { it.key == roomKey } + updated
+      current.map { record ->
+        val fresh = incoming[record.key]
+        if (fresh == null || record.deleted) return@map record
+        record.copy(
+          value = FollowCodec.fromStreamer(
+            streamer = fresh,
+            now = now,
+            order = record.value?.get("order"),
+            special = FollowCodec.isSpecial(record.value),
+            tags = FollowCodec.tagsOf(record.value),
+          ),
+          deleted = false,
+          hlc = hlc,
+          deviceId = deviceId,
+          updatedAt = now,
+        )
+      }
     }
   }
 

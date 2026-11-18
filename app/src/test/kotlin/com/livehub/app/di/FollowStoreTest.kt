@@ -166,6 +166,46 @@ class FollowStoreTest {
     assertTrue(store.records().isEmpty())
   }
 
+  /**
+   * The batched refresh applies every room in one pass and keeps the per-room rules.
+   *
+   * The worker used to call `updateSnapshot` once per room, which re-encoded the whole settings
+   * record each time; it now collects the answers and calls `updateSnapshots` once. This pins the
+   * two halves that batching can get wrong: every requested room is updated, and a room that the
+   * caller did not send — or one tombstoned since — is left alone rather than added or resurrected.
+   */
+  @Test
+  fun `a batched refresh updates the rooms it was given and nothing else`() {
+    val a = streamer("1")
+    val b = streamer("2")
+    val gone = streamer("3")
+    follow(a)
+    follow(b)
+    follow(gone)
+    follow(gone) // unfollowed, so it is only a tombstone now
+    store.toggleSpecial(b, hlc(), 1L, clock)
+    val starOnB = store.specialKeys()
+
+    store.updateSnapshots(
+      streamers = listOf(a.copy(viewerCount = 111), b.copy(viewerCount = 222), gone),
+      hlc = hlc(),
+      deviceId = 1L,
+      now = clock,
+    )
+
+    val byKey = store.followed().associateBy { it.key }
+    assertEquals(111, byKey.getValue(a.key).viewerCount.toInt())
+    assertEquals(222, byKey.getValue(b.key).viewerCount.toInt())
+    // The tombstone is untouched: a refresh must not resurrect a room the user removed.
+    assertFalse("the unfollowed room must stay gone", byKey.containsKey(gone.key))
+    assertTrue(
+      "and its tombstone must still be there",
+      store.records().any { it.key == gone.key && it.deleted },
+    )
+    // The 特别关注 mark survives the rewrite of the record it lives on.
+    assertEquals(starOnB, store.specialKeys())
+  }
+
   /** A peer can be on a different platform, and the two must not collide by room id. */
   @Test
   fun `the same room id on two platforms is two records`() {
