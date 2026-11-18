@@ -227,6 +227,7 @@ internal fun PlayerScreen(
         onOpenSettings = { showSettings = true },
         compact = compact,
         landscapeWindow = isLandscape,
+        onVideoBounds = onVideoBounds,
       )
     }
 
@@ -333,6 +334,13 @@ internal fun PlayerContent(
    * see the `onVideoAspectRatioChanged` call below.
    */
   videoAspectHint: Float? = null,
+  /**
+   * Where the picture sits in the window, reported for picture-in-picture's source rectangle.
+   *
+   * Defaulted to a no-op so the chrome tests and the screenshot harness compose without an
+   * activity; [PlayerScreen] passes the activity's observer through.
+   */
+  onVideoBounds: (androidx.compose.ui.geometry.Rect?) -> Unit = {},
 ) {
   val variant: StreamVariant? = state.selectedVariant
   var controlsVisible by remember { mutableStateOf(true) }
