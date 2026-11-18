@@ -198,9 +198,12 @@ class FollowStoreTest {
     assertEquals(222, byKey.getValue(b.key).viewerCount.toInt())
     // The tombstone is untouched: a refresh must not resurrect a room the user removed.
     assertFalse("the unfollowed room must stay gone", byKey.containsKey(gone.key))
+    // Record keys are `room:<platform>:<roomId>`; `gone.key` is the *streamer* key, which is a
+    // different space — comparing the two is exactly the bug this suite exists to notice elsewhere.
+    val goneRecordKey = LibraryKey.Room(Platform.DOUYU, "3").encode()
     assertTrue(
       "and its tombstone must still be there",
-      store.records().any { it.key == gone.key && it.deleted },
+      store.records().any { it.key == goneRecordKey && it.deleted },
     )
     // The 特别关注 mark survives the rewrite of the record it lives on.
     assertEquals(starOnB, store.specialKeys())
