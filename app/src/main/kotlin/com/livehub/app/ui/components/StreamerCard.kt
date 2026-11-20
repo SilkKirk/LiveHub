@@ -246,9 +246,19 @@ fun StreamerCard(
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
+      // A `FlowRow`, not the `Row` this used to be. The name is the only text on the tile that says
+      // *who* is streaming, and the audience figure is the one that can move; in a `Row` the count
+      // keeps its intrinsic width and the name — `weight(1f, fill = false)` — absorbs the whole loss.
+      // At 2.0× text on a 140dp tile that left the name one character and an ellipsis ("—…",
+      // `33-home-huge-font`). `StreamerSearchCard` below was fixed this way in round 122 for exactly
+      // the same reason; this tile is the one it left behind.
+      //
+      // `itemVerticalAlignment` is spelled out so nothing moves on the tiles that still fit on one
+      // line: `Row` centred them, `FlowRow` defaults to top.
+      FlowRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.padding(top = 4.dp),
       ) {
         Text(
@@ -257,24 +267,31 @@ fun StreamerCard(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.weight(1f, fill = false),
         )
-        // The audience figure, moved here from the cover. `fill = false` on the name is what lets
-        // a short name sit next to the number instead of being pushed to the far edge by the
-        // weight, and the eye glyph is what still says *what* the number counts.
+        // The audience figure, moved here from the cover. The glyph and the number travel as one
+        // item — in a `FlowRow` a bare `Icon` and `Text` are two items, so the eye would stay on the
+        // name's line and its number would wrap alone underneath it.
+        //
+        // 4dp between the two, the same gap the whole row had when all three were siblings in a
+        // `Row`, so the tiles that still fit on one line do not move.
         if (streamer.viewerCount > 0) {
-          Icon(
-            imageVector = Icons.Outlined.Visibility,
-            contentDescription = null,
-            modifier = Modifier.size(11.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          Text(
-            text = ViewerCountFormatter.format(streamer.viewerCount),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-          )
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Outlined.Visibility,
+              contentDescription = null,
+              modifier = Modifier.size(11.dp),
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+              text = ViewerCountFormatter.format(streamer.viewerCount),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+            )
+          }
         }
       }
     }
