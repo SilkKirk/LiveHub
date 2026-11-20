@@ -433,7 +433,9 @@ private fun ImageCacheCard(onAction: (UiAction) -> Unit) {
   var cacheBytes by remember { mutableStateOf<Long?>(null) }
   var clearing by remember { mutableStateOf(false) }
 
-  LaunchedEffect(context) { cacheBytes = readImageCacheBytes(context) }
+  LaunchedEffect(context) {
+    cacheBytes = withContext(Dispatchers.IO) { readCoilCacheBytes(context) }
+  }
 
   // null means "could not be read", which is not the same thing as an empty cache.
   val sizeText = cacheBytes?.let { formatCacheSize(it) } ?: "—"
@@ -459,14 +461,25 @@ private fun ImageCacheCard(onAction: (UiAction) -> Unit) {
             if (clearing) return@TextButton
             clearing = true
             // The clear walks Coil's disk directory, so it runs off the main thread, and the
-            // snackbar is sent from the same coroutine so "已清除图片缓存" is not a claim about a
-            // clear that has not run yet. The size is read again rather than assumed to be zero:
-            // what clearing actually left behind is the honest thing to show.
+            // snackbar is sent from the same coroutine so it is not a claim about a clear that has
+            // not run yet.
+            //
+            // The verdict comes from `clearCacheAndDescribe`, not from the fact that the coroutine
+            // reached its end: this used to send 已清除图片缓存 unconditionally while the clear
+            // swallowed its own exception, so a cache that refused to empty still read "cleared"
+            // next to a number that had not moved. The size the card shows afterwards is the one the
+            // verdict was decided on, so the two cannot disagree.
             scope.launch {
               try {
-                clearImageCaches(context)
-                cacheBytes = readImageCacheBytes(context)
-                onAction(UiAction.ShowMessage("已清除图片缓存"))
+                val outcome = withContext(Dispatchers.IO) {
+                  clearCacheAndDescribe(
+                    before = cacheBytes,
+                    clear = { clearCoilCaches(context) },
+                    readAfter = { readCoilCacheBytes(context) },
+                  )
+                }
+                cacheBytes = outcome.remainingBytes
+                onAction(UiAction.ShowMessage(outcome.notice))
               } finally {
                 clearing = false
               }
@@ -533,14 +546,18 @@ private const val CACHE_TAG = "SettingsScreen"
  *
  * Both caches are nullable in Coil 3 (`ImageLoader.diskCache` and `memoryCache`) and a null one
  * simply holds nothing, so only a read that throws counts as unknown. Every call into Coil's cache
- * API this screen makes is in this function or in [clearImageCaches]: if an upgrade renames one of
+ * API this screen makes is in this function or in [clearCoilCaches]: if an upgrade renames one of
  * them there are two places to fix, not a scattering.
+ *
+ * Blocking, not `suspend`: the card wraps the whole clear-and-read (and the read that fills the card
+ * on first composition) in a single `Dispatchers.IO` hop, so these two functions are already called
+ * from a background thread and do not need a dispatcher of their own.
  */
-private suspend fun readImageCacheBytes(context: Context): Long? = withContext(Dispatchers.IO) {
+private fun readCoilCacheBytes(context: Context): Long? =
   // `runCatching` and not `try`/`catch (Exception)`: a cache that cannot even be created is
   // already the "read failed" case, whatever the platform throws for it (a missing directory, an
   // unreadable journal, a class the release build stripped), and none of those may take the
-  // settings page down. The block has no suspension point, so nothing can be cancelled inside it.
+  // settings page down.
   runCatching {
     val loader = SingletonImageLoader.get(context)
     (loader.diskCache?.size ?: 0L) + (loader.memoryCache?.size ?: 0L)
@@ -549,24 +566,65 @@ private suspend fun readImageCacheBytes(context: Context): Long? = withContext(D
     Log.w(CACHE_TAG, "读取图片缓存占用失败", error)
     null
   }
+
+/**
+ * Empties both of Coil's caches, letting whatever it throws out.
+ *
+ * It used to swallow the exception and log it, which is how the card came to say 已清除图片缓存 over
+ * a number that had not moved: the caller had no way to tell a clear from a no-op.
+ */
+private fun clearCoilCaches(context: Context) {
+  val loader = SingletonImageLoader.get(context)
+  loader.diskCache?.clear()
+  loader.memoryCache?.clear()
 }
 
 /**
- * Empties both of Coil's caches.
+ * What the 清除缓存 button should say afterwards, and what the card should show meanwhile.
  *
- * Best effort: an entry that will not be deleted is no reason to leave the button dead, so a
- * failure is logged and the caller re-reads the size anyway.
+ * A real seam rather than a formality: the three ways this can go are all reachable (a clear that
+ * throws, one that empties the cache, one that returns without freeing anything because a file is
+ * still open) and only the first is visible in a log. `clear` and `readAfter` are parameters so the
+ * decision can be exercised without Coil — its caches are a process-wide singleton.
+ *
+ * @property notice the snackbar text.
+ * @property remainingBytes the size to print on the card. On a failure nothing was read, so the
+ *   previous number is kept rather than replaced by a fresh guess.
  */
-private suspend fun clearImageCaches(context: Context) {
-  withContext(Dispatchers.IO) {
-    runCatching {
-      val loader = SingletonImageLoader.get(context)
-      loader.diskCache?.clear()
-      loader.memoryCache?.clear()
-    }.onFailure { error ->
-      Log.w(CACHE_TAG, "清除图片缓存失败", error)
-    }
+internal data class CacheClearOutcome(val notice: String, val remainingBytes: Long?)
+
+/** Snackbar for a clear that threw. */
+internal const val CACHE_CLEAR_FAILED = "清除失败，请稍后再试"
+
+/** Snackbar for a clear that worked, or that had nothing left to do. */
+internal const val CACHE_CLEARED = "已清除图片缓存"
+
+/**
+ * Snackbar for a clear that returned normally and freed nothing.
+ *
+ * Distinct from [CACHE_CLEAR_FAILED] on purpose: the operation did not throw, so the honest report is
+ * "it is still there", not "it failed" — and the number next to it agrees.
+ */
+internal const val CACHE_CLEAR_NO_EFFECT = "缓存没有清空，可能仍有文件被占用"
+
+internal fun clearCacheAndDescribe(
+  before: Long?,
+  clear: () -> Unit,
+  readAfter: () -> Long?,
+): CacheClearOutcome {
+  val cleared = runCatching(clear)
+  if (cleared.isFailure) {
+    cleared.exceptionOrNull()?.let { Log.w(CACHE_TAG, "清除图片缓存失败", it) }
+    return CacheClearOutcome(notice = CACHE_CLEAR_FAILED, remainingBytes = before)
   }
+  val after = readAfter()
+  // `after > 0` keeps an empty cache (0 → 0) out of the "nothing freed" branch: 0 bytes before and
+  // after means there was nothing to clear, which is a success with nothing to report.
+  val freedNothing = before != null && after != null && after >= before && after > 0
+  return CacheClearOutcome(
+    notice = if (freedNothing) CACHE_CLEAR_NO_EFFECT else CACHE_CLEARED,
+    remainingBytes = after,
+  )
 }
 
 private val THEME_OPTIONS = listOf(

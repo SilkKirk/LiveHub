@@ -13,6 +13,8 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.designsystem.LiveHubTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -27,9 +29,10 @@ import org.robolectric.annotation.Config
  * Two things are worth pinning here. `formatCacheSize` decides strings a user reads, and the
  * boundaries are where a size readout lies: `0 B` is not `0.0 B`, `999 B` is not `1.0 KB`, and a
  * failed read has to show `—` rather than `0 B`, which would look like a successful measurement of
- * an empty cache. The card itself has no other seam — Coil's caches are a process-wide singleton —
- * so the honest assertions are "rendering the page does not crash", "the control is reachable",
- * and "clearing sends exactly one snackbar".
+ * an empty cache. The card has one seam more than it used to — the clear/verdict pair is passed in as
+ * lambdas (`clearCacheAndDescribe`) — but Coil's caches are still a process-wide singleton, so what
+ * these tests can say about the *card* is "rendering the page does not crash", "the control is
+ * reachable", and "clearing sends exactly one snackbar".
  *
  * The page is rendered inside [LiveHubTheme], as every screen test in this package has been since
  * round 85: these assertions describe a real `SettingsScreen`, and the `scrollTo` calls below are
@@ -155,6 +158,91 @@ class CacheSettingsTest {
 
     val messages = actions.filterIsInstance<UiAction.ShowMessage>()
     assertEquals("expected exactly one snackbar, got: $actions", 1, messages.size)
-    assertEquals("the snackbar text", "已清除图片缓存", messages.single().text)
+    assertEquals("the snackbar text", CACHE_CLEARED, messages.single().text)
+  }
+
+  // ------------------------------------------------------- what the button claims ---
+  //
+  // The reported defect: the button said 已清除图片缓存 while the number above it had not moved.
+  // `clearImageCaches` swallowed its own exception and logged it, and the call site sent the success
+  // snackbar on the strength of having reached the next line — so a clear that threw and a clear
+  // that emptied the cache produced the same message.
+  //
+  // The verdict lives in `clearCacheAndDescribe`, which takes the clear and the re-read as lambdas
+  // for exactly this reason: Coil's caches are a process-wide singleton, so these three outcomes are
+  // not reachable through the card itself, and only one of them leaves anything in a log.
+
+  private val bigCache = 312_000_000L
+
+  @Test
+  fun `a clear that throws reports the failure`() {
+    var reRead = false
+
+    val outcome = clearCacheAndDescribe(
+      before = bigCache,
+      clear = { throw IllegalStateException("磁盘只读") },
+      readAfter = { reRead = true; 0L },
+    )
+
+    assertEquals(CACHE_CLEAR_FAILED, outcome.notice)
+    assertFalse("nothing may be re-read after a failure", reRead)
+    assertEquals(
+      "the card keeps the number it had rather than replacing it with a guess",
+      bigCache,
+      outcome.remainingBytes,
+    )
+  }
+
+  @Test
+  fun `a clear that empties the cache reports success`() {
+    val outcome = clearCacheAndDescribe(
+      before = bigCache,
+      clear = {},
+      readAfter = { 0L },
+    )
+
+    assertEquals(CACHE_CLEARED, outcome.notice)
+    assertEquals(0L, outcome.remainingBytes)
+  }
+
+  /**
+   * The regression: a clear that returns normally and frees nothing is not a success.
+   *
+   * This is the shape the user actually reported — the operation does not throw (Coil skips files it
+   * cannot delete), so the old code had nothing to notice, and the snackbar contradicted the number
+   * directly above it.
+   */
+  @Test
+  fun `a clear that frees nothing says so`() {
+    val outcome = clearCacheAndDescribe(
+      before = bigCache,
+      clear = {},
+      readAfter = { bigCache },
+    )
+
+    assertEquals(CACHE_CLEAR_NO_EFFECT, outcome.notice)
+    assertEquals(bigCache, outcome.remainingBytes)
+  }
+
+  /** An empty cache has nothing to free, which is a success — not "nothing happened". */
+  @Test
+  fun `an empty cache is cleared successfully`() {
+    val outcome = clearCacheAndDescribe(before = 0L, clear = {}, readAfter = { 0L })
+
+    assertEquals(CACHE_CLEARED, outcome.notice)
+    assertEquals(0L, outcome.remainingBytes)
+  }
+
+  /** A size that cannot be read afterwards leaves the card on `—`; it does not invent a number. */
+  @Test
+  fun `an unreadable size after the clear still reports success`() {
+    val outcome = clearCacheAndDescribe(
+      before = bigCache,
+      clear = {},
+      readAfter = { null },
+    )
+
+    assertEquals(CACHE_CLEARED, outcome.notice)
+    assertNull("the card must read — rather than a stale number", outcome.remainingBytes)
   }
 }
