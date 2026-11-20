@@ -97,6 +97,7 @@ class PlaybackAttemptTest {
       attempt = attempt,
       error = PlaybackError(url = first, message = "连接被重置"),
       isIdnFailure = false,
+      paused = false,
       fallbackMessage = "播放器错误",
     )
     assertTrue("the first failure must be retried", firstDecision is PlaybackRecovery.Retry)
@@ -106,6 +107,7 @@ class PlaybackAttemptTest {
       attempt = retried,
       error = PlaybackError(url = first, message = "连接被重置"),
       isIdnFailure = false,
+      paused = false,
       fallbackMessage = "播放器错误",
     )
     assertEquals(
@@ -129,6 +131,7 @@ class PlaybackAttemptTest {
       attempt = attempt,
       error = PlaybackError(url = first, message = "Invalid input to toASCII"),
       isIdnFailure = true,
+      paused = false,
       fallbackMessage = "播放器错误",
     )
 
@@ -149,6 +152,7 @@ class PlaybackAttemptTest {
       attempt = PlaybackAttempt(url = plain),
       error = PlaybackError(url = plain, message = "toASCII"),
       isIdnFailure = true,
+      paused = false,
       fallbackMessage = "播放器错误",
     )
 
@@ -164,6 +168,7 @@ class PlaybackAttemptTest {
       attempt = spent,
       error = PlaybackError(url = first, message = null),
       isIdnFailure = false,
+      paused = false,
       fallbackMessage = "播放器错误: ERROR_CODE_IO_NETWORK_CONNECTION_FAILED",
     )
 
@@ -182,6 +187,7 @@ class PlaybackAttemptTest {
       attempt = spent,
       error = PlaybackError(url = first, message = "   "),
       isIdnFailure = false,
+      paused = false,
       fallbackMessage = "播放器错误",
     )
 
@@ -203,12 +209,58 @@ class PlaybackAttemptTest {
       attempt = switched,
       error = PlaybackError(url = switched.url, message = "toASCII"),
       isIdnFailure = true,
+      paused = false,
       fallbackMessage = "播放器错误",
     )
 
     assertEquals(
       PlaybackRecovery.DowngradeToHttp("http://other.example.com/c.flv"),
       decision,
+    )
+  }
+
+  // ---------------------------------------------------------------- the pause rule ---
+
+  /**
+   * An automatic retry must not overrule a pause the user pressed.
+   *
+   * The listener called `play()` after `prepare()` unconditionally, while the badge on screen still
+   * said 「已暂停 · 双击继续」: a routine CDN blip in a paused room started playing by itself, and the
+   * user's next double tap — which believes it is resuming — only stopped what they never started.
+   * `LivePlayer`'s two effects already answer this question ("the caller owns whether the stream is
+   * playing"); this third path was written without it.
+   */
+  @Test
+  fun `a paused stream stays paused through an automatic retry`() {
+    val decision = decideRecovery(
+      attempt = PlaybackAttempt(url = first),
+      error = PlaybackError(url = first, message = "连接被重置"),
+      isIdnFailure = false,
+      paused = true,
+      fallbackMessage = "播放器错误",
+    )
+
+    assertTrue("the first failure is still retried: $decision", decision is PlaybackRecovery.Retry)
+    val retry = decision as PlaybackRecovery.Retry
+    assertFalse("a retry must not resume a stream the user paused", retry.resume)
+    assertEquals("the retry is still spent", 1, retry.attempt.retriesUsed)
+  }
+
+  /** The same failure on a stream that was playing has to come back by itself. */
+  @Test
+  fun `a playing stream resumes after an automatic retry`() {
+    val decision = decideRecovery(
+      attempt = PlaybackAttempt(url = first),
+      error = PlaybackError(url = first, message = "连接被重置"),
+      isIdnFailure = false,
+      paused = false,
+      fallbackMessage = "播放器错误",
+    )
+
+    assertTrue("the first failure is retried: $decision", decision is PlaybackRecovery.Retry)
+    assertTrue(
+      "a dropped stream has to reconnect on its own",
+      (decision as PlaybackRecovery.Retry).resume,
     )
   }
 }

@@ -140,6 +140,16 @@ fun LivePlayer(
   val currentAttempt by rememberUpdatedState(attempt)
 
   /**
+   * The caller's paused flag, read at the moment a failure arrives.
+   *
+   * The listener below is registered once, so a plain `paused` reference there would be the value
+   * from the first composition — "not paused", because that is how every room opens. A retry would
+   * then resume a stream the user had paused a minute earlier, which is exactly the defect
+   * `PlaybackRecovery.Retry.resume` exists to prevent.
+   */
+  val currentPaused by rememberUpdatedState(paused)
+
+  /**
    * The caller's callbacks, read through [rememberUpdatedState] for the same reason.
    *
    * `LaunchedEffect(player)` never re-runs — `player` is `remember`ed with no keys — so the listener
@@ -166,6 +176,9 @@ fun LivePlayer(
           attempt = currentAttempt,
           error = PlaybackError(url = currentAttempt.url, message = error.message),
           isIdnFailure = idnFailure,
+          // The listener never re-runs (see the note on `currentPaused`), so the flag has to be read
+          // through `rememberUpdatedState` rather than captured.
+          paused = currentPaused,
           fallbackMessage = "播放器错误: ${error.errorCodeName}",
         )
         when (decision) {
@@ -175,7 +188,9 @@ fun LivePlayer(
             scope.launch {
               delay(RETRY_DELAY_MILLIS)
               player.prepare()
-              player.play()
+              // The two effects above follow "the caller owns whether the stream is playing"; this
+              // third path is the one that used to call `play()` and overrule a pause.
+              if (decision.resume) player.play() else player.pause()
             }
           }
           is PlaybackRecovery.Fatal -> currentOnFatalError?.invoke(decision.message)

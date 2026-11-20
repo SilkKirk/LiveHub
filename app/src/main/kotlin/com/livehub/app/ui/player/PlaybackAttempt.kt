@@ -71,8 +71,14 @@ internal sealed interface PlaybackRecovery {
    * Retry the current URL after a pause.
    *
    * @property attempt the state to adopt, with one retry spent.
+   * @property resume whether the retried stream may start playing on its own. False when the user
+   *   had paused the picture: an automatic retry exists to reconnect a dropped stream, not to
+   *   overrule a control the user pressed. The listener used to call `play()` unconditionally here
+   *   while the pause badge still said 「已暂停 · 双击继续」, so one CDN blip in a paused room started
+   *   playing by itself — the same rule the two `LaunchedEffect`s in `LivePlayer` already follow for
+   *   a URL change, written in a third place that forgot it.
    */
-  data class Retry(val attempt: PlaybackAttempt) : PlaybackRecovery
+  data class Retry(val attempt: PlaybackAttempt, val resume: Boolean) : PlaybackRecovery
 
   /**
    * Re-open the same stream over plain http.
@@ -89,14 +95,22 @@ internal sealed interface PlaybackRecovery {
 /**
  * Decides what to do when [url] failed with [error].
  *
+ * Three rules, in this order: a name that cannot pass the SNI check is downgraded to http (costs no
+ * retry, because retrying it is guaranteed to fail again); an ordinary failure is retried once; a
+ * second failure is fatal and carries a readable message.
+ *
  * @param attempt the flags for [url]; [PlaybackAttempt.forUrl] must have been applied first.
  * @param isIdnFailure whether the failure chain mentions the IDN/SNI check.
+ * @param paused whether the user had paused the stream when this failure arrived. A retry adopts it
+ *   instead of resuming — see [PlaybackRecovery.Retry.resume]. Required rather than defaulted so a
+ *   new call site has to answer the question instead of inheriting "play".
  * @param fallbackMessage what to show when the error carries no message of its own.
  */
 internal fun decideRecovery(
   attempt: PlaybackAttempt,
   error: PlaybackError,
   isIdnFailure: Boolean,
+  paused: Boolean,
   fallbackMessage: String,
 ): PlaybackRecovery {
   // The IDN downgrade comes first and costs no retry: retrying an unreachable-because-of-its-name
@@ -105,7 +119,7 @@ internal fun decideRecovery(
     return PlaybackRecovery.DowngradeToHttp(error.url.replaceFirst("https://", "http://"))
   }
   if (attempt.canRetry) {
-    return PlaybackRecovery.Retry(attempt.afterRetry())
+    return PlaybackRecovery.Retry(attempt.afterRetry(), resume = !paused)
   }
   return PlaybackRecovery.Fatal(error.message?.takeIf { it.isNotBlank() } ?: fallbackMessage)
 }
