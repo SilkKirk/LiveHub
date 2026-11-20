@@ -3,13 +3,10 @@ package com.livehub.app.ui.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
@@ -278,40 +275,33 @@ class CardInformationDensityTest {
     )
   }
 
-  // ------------------------------------------------------------ the name at 2.0× text ---
+  // ------------------------------------------------------ the tile's information row ---
   //
-  // The tile's name and audience figure were a `Row` with `weight(1f, fill = false)` on the name:
-  // the count keeps its intrinsic width and the name absorbs whatever is left. On a 140dp tile at
-  // 2.0× text that is one character plus an ellipsis — `33-home-huge-font` reads 「—…」 next to
-  // 「12.9万」, and the same tile in the follow grid reads 「旭旭…」. The name is the only thing on
-  // the tile that says *who* is streaming, so the number is the one that has to give way.
+  // The name and the audience figure were a `Row` with `weight(1f, fill = false)` on the name:
+  // the count keeps its intrinsic width and the name absorbs whatever is left. At 2.0× text on a
+  // 140dp tile that is one character plus an ellipsis — `33-home-huge-font` reads 「—…」 beside
+  // 「12.9万」 and the grid under `34-follow-special-huge-font` reads 「旭旭…」. The name is the only
+  // thing on the tile that says *who* is streaming, so the number is the one that has to give way.
+  // `StreamerSearchCard` was fixed this way in round 122; the grid tile is what that left behind.
   //
-  // The search row was fixed exactly this way in round 122 (`FlowRow`), which left the grid tile as
-  // the one surface still compressing the name. The assertions below compare the two laid-out edges
-  // rather than a pixel width, so they survive a type-scale change.
+  // **What a JVM test can and cannot pin here.** Robolectric has no font backend: every label
+  // measures one dp per character whatever the text, so "does this name still fit at 2.0×" is not
+  // reproducible on the JVM — the first version of this test compared the two node widths and got
+  // `5.0dp` against `5.0dp`. The 2.0× *symptom* is therefore only visible in those two renders.
+  // What is testable is the rule underneath it: when the row runs out of room the count moves to a
+  // second line instead of the name being squeezed. That is what the narrow-window test below does,
+  // and a `Row` fails it because a `Row` never wraps.
 
-  private fun composeCard(name: String, viewers: Long, fontScale: Float) {
+  private fun composeCard(name: String, viewers: Long, width: Int = 140) {
     composeRule.setContent {
-      // The same shape the screenshot harness uses: `sp` is rescaled, dp is not, and at 1f nothing
-      // is provided at all so the normal case composes the tree it always did.
-      val wrap: @Composable () -> Unit = {
-        LiveHubTheme {
-          Box(modifier = Modifier.size(140.dp, 260.dp)) {
-            StreamerCard(
-              streamer = streamer(name, viewers),
-              followed = false,
-              onClick = {},
-              onToggleFollow = {},
-            )
-          }
-        }
-      }
-      if (fontScale == 1f) {
-        wrap()
-      } else {
-        val density = LocalDensity.current
-        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
-          wrap()
+      LiveHubTheme {
+        Box(modifier = Modifier.size(width.dp, 260.dp)) {
+          StreamerCard(
+            streamer = streamer(name, viewers),
+            followed = false,
+            onClick = {},
+            onToggleFollow = {},
+          )
         }
       }
     }
@@ -323,41 +313,37 @@ class CardInformationDensityTest {
     composeRule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
 
   @Test
-  fun `the tile keeps the streamer name at 2x text`() {
-    composeCard(name = "一条小团团", viewers = 129_000, fontScale = 2f)
+  fun `the information row wraps instead of squeezing the name`() {
+    // 24dp of tile, which is not a phone — it is the cheapest way to run the row out of room on a
+    // JVM, where a five-character name is five dp wide.
+    composeCard(name = "一条小团团", viewers = 129_000, width = 24)
 
     val name = boundsOf("一条小团团")
     val count = boundsOf("12.9万")
 
     assertTrue(
-      "the name is ${name.width}dp wide against the count's ${count.width}dp — the count is " +
-        "supposed to yield, not the name",
-      name.width > count.width,
-    )
-    // The figure moved to a second line, which is what a `FlowRow` does and what the `Row` could not.
-    assertTrue(
-      "the count starts at ${count.top}, the name ends at ${name.bottom}",
+      "the count starts at ${count.top} while the name spans ${name.top}..${name.bottom}: " +
+        "it has to move to its own line rather than take the width from the name",
       count.top >= name.bottom - 1f,
     )
   }
 
   /**
-   * The normal text size keeps both on one line.
+   * And a tile with room keeps both on one line.
    *
-   * Without this the fix could pass by wrapping the tile at *every* size — 320dp of window is where
-   * most of the app is used, and a name that drops to its own line there would make every tile two
-   * rows taller.
+   * Without this the rule above could be satisfied by always wrapping, which would make every tile
+   * two rows taller across the whole grid at the size the app is mostly used at.
    */
   @Test
-  fun `the tile keeps name and count on one line at normal text`() {
-    composeCard(name = "一条小团团", viewers = 129_000, fontScale = 1f)
+  fun `a tile with room keeps name and count on one line`() {
+    composeCard(name = "一条小团团", viewers = 129_000, width = 140)
 
     val name = boundsOf("一条小团团")
     val count = boundsOf("12.9万")
 
     assertTrue(
       "both must stay on one line: the name is ${name.top}..${name.bottom}, the count starts at " +
-        count.top,
+        "${count.top}",
       count.top < name.bottom,
     )
   }
