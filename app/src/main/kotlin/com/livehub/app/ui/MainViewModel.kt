@@ -1137,6 +1137,11 @@ class MainViewModel(
         // showed the previous room's chat under the new room's name — and since the buffer was
         // already full, the new room's own messages had nowhere to go (see [MAX_DANMAKU_BUFFER]).
         danmaku = emptyList(),
+        // A quality switch that was still in flight when this room opened is cancelled two lines
+        // below, and its `catch` rethrows — so the flag it set stayed up. Every later room then
+        // opened its settings panel with a 正在切换清晰度… spinner that never stopped. See
+        // [closePlayer] for the other canceller.
+        switchingQuality = false,
       )
     }
     playbackJob = viewModelScope.launch {
@@ -1278,6 +1283,11 @@ class MainViewModel(
         playerError = null,
         // Nothing is open any more, so nothing can be paused.
         playerPaused = false,
+        // And nothing can be mid-switch either. This is the second of the two places that cancel
+        // `playbackJob` while a re-resolve may be suspended inside it; the cancellation rethrows
+        // instead of resetting the flag, so closing the player during a quality switch left it set
+        // for the rest of the session.
+        switchingQuality = false,
       )
     }
   }
