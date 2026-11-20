@@ -57,6 +57,38 @@ class PlayerOrientationTest {
   }
 
   /**
+   * Who owns the landscape decides whether 退出全屏 exists.
+   *
+   * Four inputs, and the two landscape ones are the whole point: they are indistinguishable from the
+   * window, so the button's own flag is what tells "the user turned the phone" (nothing to go back
+   * to, the way out leaves the room) from "we asked it to turn" (the portrait player is right there,
+   * and the lock has to be released).
+   */
+  @Test
+  fun `only a landscape we asked for exits back to portrait`() {
+    assertEquals(
+      "a portrait window always has the portrait player behind it",
+      true,
+      fullscreenExitReturnsToPortrait(landscapeWindow = false, manualFullscreen = false),
+    )
+    assertEquals(
+      "the frame between the tap and the window turning",
+      true,
+      fullscreenExitReturnsToPortrait(landscapeWindow = false, manualFullscreen = true),
+    )
+    assertEquals(
+      "the button asked for this landscape, so it can undo it",
+      true,
+      fullscreenExitReturnsToPortrait(landscapeWindow = true, manualFullscreen = true),
+    )
+    assertEquals(
+      "the user turned the phone: there is no portrait arrangement to land in",
+      false,
+      fullscreenExitReturnsToPortrait(landscapeWindow = true, manualFullscreen = false),
+    )
+  }
+
+  /**
    * The thumbnail never owns the device's orientation — not even while the flag is still set.
    *
    * The flag *is* cleared when the player minimizes (see `PlayerScreen`), but the decision must be

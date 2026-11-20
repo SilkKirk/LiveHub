@@ -92,6 +92,7 @@ import com.livehub.app.ui.player.DanmakuOverlay
 import com.livehub.app.ui.player.LivePlayer
 import com.livehub.app.ui.player.PlayerOrientation
 import com.livehub.app.ui.player.findActivity
+import com.livehub.app.ui.player.fullscreenExitReturnsToPortrait
 import com.livehub.app.ui.player.playerOrientation
 import com.livehub.app.ui.player.toActivityInfo
 import com.livehub.app.ui.player.withoutBlockedKeywords
@@ -179,6 +180,13 @@ internal fun PlayerScreen(
   // room instead — the same reason the reference client switches to a drawer there.
   val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
   val fullscreen = playerFullscreen(landscapeWindow = isLandscape, manualFullscreen = manualFullscreen)
+  // A landscape window is full screen either because the user turned the phone or because the 全屏
+  // button asked it to turn. Only the second one has a portrait player to go back to, and the two
+  // are indistinguishable from the window itself — see `fullscreenExitReturnsToPortrait`.
+  val exitReturnsToPortrait = fullscreenExitReturnsToPortrait(
+    landscapeWindow = isLandscape,
+    manualFullscreen = manualFullscreen,
+  )
 
   // The picture stops existing when the player is disposed; a stale rectangle would make the next
   // shrink animate from wherever it used to be.
@@ -205,15 +213,27 @@ internal fun PlayerScreen(
   }
   // A thumbnail is never "full screen by choice": coming back from the mini window lands in the
   // portrait player, not in a chrome-less portrait rectangle that re-locks landscape.
+  //
+  // The settings panel is closed with it. This composable is *not* disposed when the picture shrinks
+  // into the corner — one call site, three sizes is the whole point — so `showSettings` survived the
+  // trip and the panel re-opened by itself, unclicked, the next time the picture was expanded.
   LaunchedEffect(compact) {
-    if (compact) manualFullscreen = false
+    if (compact) {
+      manualFullscreen = false
+      showSettings = false
+    }
   }
 
-  // Only meaningful in a portrait window: there *is* a portrait layout to land in there. In
-  // landscape the same gesture is "step off the player", which is what `LiveHubRoot`'s handler
-  // does with it — leaving full screen would land back in the arrangement `playerFullscreen`
-  // exists to avoid.
-  BackHandler(enabled = fullscreen && !compact && !isLandscape) { manualFullscreen = false }
+  // Back leaves full screen whenever there is a portrait player behind it, which includes the
+  // landscape window the 全屏 button turned. In a landscape window the *user* turned there is
+  // nowhere to land, so the same gesture is "step off the player" and `LiveHubRoot`'s handler does it.
+  //
+  // Not while the settings panel is open: that panel is drawn in this window rather than as a
+  // dialog, so it answers for the gesture itself (see the drawer below), and one press must not both
+  // close the panel and drop the room.
+  BackHandler(enabled = fullscreen && !compact && exitReturnsToPortrait && !showSettings) {
+    manualFullscreen = false
+  }
 
   Box(modifier = Modifier.fillMaxSize()) {
     // Swipe from the left edge to step off the player. It used to close the room; now it minimises
@@ -226,10 +246,15 @@ internal fun PlayerScreen(
         onFullscreenChange = { manualFullscreen = it },
         onOpenSettings = { showSettings = true },
         compact = compact,
-        landscapeWindow = isLandscape,
+        exitReturnsToPortrait = exitReturnsToPortrait,
         onVideoBounds = onVideoBounds,
       )
     }
+
+    // The drawer is drawn inside the activity's window rather than as a dialog, so no framework
+    // hands it the back gesture: without this, back fell through to `LiveHubRoot` and became 缩小,
+    // leaving the panel open over a room the user had just left.
+    BackHandler(enabled = showSettings && isLandscape && !compact) { showSettings = false }
 
     if (showSettings && isLandscape && !compact) {
       PlayerSettingsDrawer(onDismiss = { showSettings = false }) {
@@ -317,14 +342,17 @@ internal fun PlayerContent(
    */
   compact: Boolean = false,
   /**
-   * True when the window is wider than it is tall.
+   * Whether 退出全屏 has a portrait player to land in.
    *
-   * A landscape window has no portrait arrangement to return to, so the full-screen bar's
-   * leading button leaves the room rather than leaving full screen, and the side column drops
-   * its fullscreen toggle because there is nowhere for it to go. [PlayerScreen] reads this from
-   * the configuration; the chrome tests pass it directly.
+   * The window being sideways does not answer this on its own — *why* it is sideways does, and the
+   * two cases need opposite controls. A window the user turned has no portrait arrangement to return
+   * to, so the bar's leading button leaves the room and the side column drops the fullscreen toggle
+   * because there is nowhere for it to go. A window the 全屏 button turned is the mirror image: the
+   * portrait player is exactly where the control should land, and hiding it there is what made the
+   * button a one-way door. `PlayerScreen` derives the answer from `fullscreenExitReturnsToPortrait`
+   * and the chrome tests pass it directly.
    */
-  landscapeWindow: Boolean = false,
+  exitReturnsToPortrait: Boolean = true,
   /**
    * The aspect to assume before the decoder has reported one, or null in the app.
    *
@@ -497,12 +525,13 @@ internal fun PlayerContent(
         if (!compact && fullscreen && controlsVisible) {
           FullscreenBar(
             state = state,
-            // A landscape window has no portrait layout to go back to: leaving full screen
-            // there would restore exactly the arrangement [playerFullscreen] exists to avoid,
-            // so the leading button does what back does and steps off the player.
-            exitDescription = if (landscapeWindow) "返回" else "退出全屏",
+            // A landscape window the *user* turned has no portrait layout to go back to: leaving
+            // full screen there would restore exactly the arrangement [playerFullscreen] exists to
+            // avoid, so the leading button does what back does and steps off the player. A window
+            // the 全屏 button turned is the opposite case — see [exitReturnsToPortrait].
+            exitDescription = if (exitReturnsToPortrait) "退出全屏" else "返回",
             onExit = {
-              if (landscapeWindow) onAction(UiAction.MinimizePlayer) else onFullscreenChange(false)
+              if (exitReturnsToPortrait) onFullscreenChange(false) else onAction(UiAction.MinimizePlayer)
             },
             onAction = onAction,
             modifier = Modifier.align(Alignment.TopCenter),
@@ -561,9 +590,10 @@ internal fun PlayerContent(
         if (!compact && controlsVisible) {
           SideControls(
             fullscreen = fullscreen,
-            // Nowhere to go in a landscape window: see `playerFullscreen`. A button that
-            // changes nothing is worse than no button.
-            showFullscreenToggle = !landscapeWindow,
+            // The same question the bar's leading button answers: nowhere to land means no button.
+            // A control that changes nothing is worse than no control — and while the window is
+            // sideways because the button asked, this is the only 退出全屏 left once the bar hides.
+            showFullscreenToggle = exitReturnsToPortrait,
             onToggleFullscreen = {
               onFullscreenChange(!fullscreen)
               controlsVisible = true

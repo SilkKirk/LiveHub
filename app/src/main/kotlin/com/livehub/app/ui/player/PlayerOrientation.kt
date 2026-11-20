@@ -45,6 +45,30 @@ internal fun playerOrientation(manualFullscreen: Boolean, compact: Boolean): Pla
   }
 
 /**
+ * Whether 退出全屏 has a portrait player to land in.
+ *
+ * The window being sideways is not the question — *why* it is sideways is. Two different states
+ * produce `landscapeWindow == true` and they need opposite controls:
+ *
+ *  * **the user turned the phone.** There is no portrait arrangement to go back to, so the way out
+ *    is the system back gesture and the bar's 返回, which leaves the room;
+ *  * **the 全屏 button asked the window to turn.** The portrait player is exactly where 退出全屏
+ *    should land, and hiding the control there made the button a one-way door: the bar's leading
+ *    button became 返回 (缩小), the side column dropped its toggle, and rotating the phone did not
+ *    help because the orientation lock the button holds is the thing that has to be released —
+ *    `manualFullscreen` is the only flag that releases it (see [playerOrientation]).
+ *
+ * The first version keyed both controls on `landscapeWindow` alone and produced exactly the second
+ * case by accident: the two states are indistinguishable from the window, and only the button's own
+ * flag tells them apart. This is the same flag [playerOrientation] reads, on purpose — one owner for
+ * "we asked for landscape", one answer for "what does leaving full screen mean".
+ */
+internal fun fullscreenExitReturnsToPortrait(
+  landscapeWindow: Boolean,
+  manualFullscreen: Boolean,
+): Boolean = manualFullscreen || !landscapeWindow
+
+/**
  * `SENSOR_LANDSCAPE`, not `LANDSCAPE`: both landscape directions are valid, so a phone turned the
  * other way still shows the picture upright.
  */

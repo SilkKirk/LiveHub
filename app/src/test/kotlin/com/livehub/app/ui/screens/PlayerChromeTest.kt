@@ -99,9 +99,10 @@ class PlayerChromeTest {
     state: UiState = uiState(),
     fullscreen: Boolean = false,
     compact: Boolean = false,
-    landscapeWindow: Boolean = false,
+    exitReturnsToPortrait: Boolean = true,
     videoAspect: Float? = null,
     onAction: (UiAction) -> Unit = {},
+    onFullscreenChange: (Boolean) -> Unit = {},
   ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
@@ -110,11 +111,11 @@ class PlayerChromeTest {
           state = state,
           onAction = onAction,
           fullscreen = fullscreen,
-          onFullscreenChange = {},
+          onFullscreenChange = onFullscreenChange,
           onOpenSettings = {},
           videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
           compact = compact,
-          landscapeWindow = landscapeWindow,
+          exitReturnsToPortrait = exitReturnsToPortrait,
           videoAspectHint = videoAspect,
         )
       }
@@ -326,20 +327,24 @@ class PlayerChromeTest {
   }
 
   /**
-   * A landscape window puts the same way out on the full-screen bar.
+   * A landscape window the *user* turned puts the same way out on the full-screen bar.
    *
    * Nothing about the landscape player could be asserted before: its layout is derived from the
-   * window, and the only renderer runs at 320x640. Here the window is passed in, which is also
-   * how `PlayerScreen` decides — see `playerFullscreen`.
+   * window, and the only renderer runs at 320x640. Here the decision is passed in, which is also
+   * how `PlayerScreen` answers it — see `fullscreenExitReturnsToPortrait`.
    *
-   * The side column must lose its fullscreen toggle in the same breath: in a landscape window
-   * leaving full screen has no portrait arrangement to land in, so that button could only be a
-   * control that does nothing.
+   * The side column must lose its fullscreen toggle in the same breath: in a window the user turned
+   * there is no portrait arrangement to land in, so that button could only be a control that does
+   * nothing.
    */
   @Test
-  fun `a landscape window puts the way out on the bar`() {
+  fun `a landscape window the user turned puts the way out on the bar`() {
     val actions = mutableListOf<UiAction>()
-    render(fullscreen = true, landscapeWindow = true, onAction = { actions += it })
+    render(
+      fullscreen = true,
+      exitReturnsToPortrait = false,
+      onAction = { actions += it },
+    )
 
     assertEquals("the bar keeps one back control", 1, count("返回"))
     assertEquals("the fullscreen toggle has nowhere to go", 0, count("退出全屏"))
@@ -352,6 +357,38 @@ class PlayerChromeTest {
       "back leaves the room in landscape, got ${actions.first()}",
       actions.first() is UiAction.MinimizePlayer,
     )
+  }
+
+  /**
+   * A landscape window the 全屏 *button* asked for keeps both exits, and both leave full screen.
+   *
+   * This is the state the two controls disappeared from: the window really was sideways, so the
+   * `landscapeWindow`-keyed branch treated it as "the user rotated" and hid 退出全屏 in favour of
+   * 返回 — which minimises the room instead of releasing the orientation lock the button holds. With
+   * no control left that released it, the button was a one-way door out of the portrait player.
+   */
+  @Test
+  fun `a landscape window the button asked for keeps both exits`() {
+    val actions = mutableListOf<UiAction>()
+    val fullscreenChanges = mutableListOf<Boolean>()
+    render(
+      fullscreen = true,
+      exitReturnsToPortrait = true,
+      onAction = { actions += it },
+      onFullscreenChange = { fullscreenChanges += it },
+    )
+
+    assertEquals("the bar offers 退出全屏", 0, count("返回"))
+    assertTrue(
+      "the bar and the side column both exit full screen, got ${count("退出全屏")}",
+      count("退出全屏") >= 2,
+    )
+
+    composeRule.onAllNodesWithContentDescription("退出全屏")[0].performClick()
+    composeRule.waitForIdle()
+
+    assertEquals("nothing should leave the room here", 0, actions.size)
+    assertEquals("the exit has to release the orientation lock", listOf(false), fullscreenChanges)
   }
 
   /**
