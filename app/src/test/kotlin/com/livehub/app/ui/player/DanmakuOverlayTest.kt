@@ -97,6 +97,38 @@ class DanmakuOverlayTest {
     composeRule.onNodeWithText("c").assertExists()
   }
 
+  /**
+   * The first thing the overlay draws is the *newest* chat, not the oldest.
+   *
+   * The overlay is only composed once the user is in full screen (the portrait layout uses the list
+   * below the picture), so its first emission carries the whole rolling buffer — up to two hundred
+   * comments collected behind that layout. Placing from the front put comments from minutes ago on
+   * the screen and threw the recent ones away, which is the report "怎么突然冒出一堆很旧的弹幕".
+   *
+   * `areaFraction` is squeezed to a single lane so the expectation does not depend on the test
+   * window's height: with one lane exactly one label can be placed, and which one it is *is* the
+   * rule under test.
+   */
+  @Test
+  fun `the first emission shows the newest messages, not the oldest`() {
+    freezeClock()
+    val backlog = (0 until 20).map { message("旧$it") }
+
+    composeRule.setContent {
+      DanmakuOverlay(
+        messages = backlog,
+        enabled = true,
+        blockedKeywords = emptyList(),
+        areaFraction = 0.05f,
+      )
+    }
+    settle()
+
+    composeRule.onAllNodesWithText("旧19").assertCountEquals(1)
+    composeRule.onAllNodesWithText("旧0").assertCountEquals(0)
+    composeRule.onAllNodesWithText("旧18").assertCountEquals(0)
+  }
+
   /** A disabled overlay composes nothing, and therefore costs nothing. */
   @Test
   fun `a disabled overlay renders no messages`() {
@@ -450,5 +482,69 @@ class DanmakuFlightSpeedTest {
         "($fixedFlight vs $ownFlight)",
       fixedFlight < ownFlight - 500,
     )
+  }
+}
+
+/**
+ * How many lanes the overlay uses, which is a share of the window and not a constant.
+ *
+ * The rule used to be `MAX_LANES * areaFraction`: six lanes whatever the window. That is half of a
+ * landscape phone and a fifth of a full-bleed vertical picture, so 「全屏」 covered 288dp of an 800dp
+ * room and 「上1/2」 covered 140dp — the setting's name disagreed with its behaviour, and the one
+ * case that happened to look right was the landscape player.
+ */
+class DanmakuLaneCountTest {
+
+  private val lane = 24f
+  private val doubledLane = 48f
+
+  @Test
+  fun `half of a tall window is half of it`() {
+    // 640 / 24 = 26 lanes fit; the setting asks for half of them.
+    assertEquals(13, laneCountFor(availableHeightDp = 640f, laneHeightDp = lane, areaFraction = 0.5f))
+  }
+
+  @Test
+  fun `the full setting fills a tall window`() {
+    val lanes = laneCountFor(availableHeightDp = 800f, laneHeightDp = lane, areaFraction = 1f)
+
+    assertEquals("800 / 24 = 33 lanes", 33, lanes)
+    assertTrue(
+      "the lowest lane has to stay inside the window: ${lanes * lane}dp of 800",
+      lanes * lane >= 800f - lane,
+    )
+  }
+
+  @Test
+  fun `a landscape window gets fewer lanes than a portrait one`() {
+    // Same setting, same lane height, only the window changed — this is the case that accidentally
+    // looked right before, because six lanes happen to be half of 411.
+    assertEquals(8, laneCountFor(availableHeightDp = 411f, laneHeightDp = lane, areaFraction = 0.5f))
+  }
+
+  @Test
+  fun `a bigger danmaku font gets fewer lanes`() {
+    // 2.0x doubles the lane height, so the same window holds half as many lanes.
+    assertEquals(
+      6,
+      laneCountFor(availableHeightDp = 640f, laneHeightDp = doubledLane, areaFraction = 0.5f),
+    )
+  }
+
+  @Test
+  fun `a quarter of the picture is a quarter`() {
+    assertEquals(8, laneCountFor(availableHeightDp = 800f, laneHeightDp = lane, areaFraction = 0.25f))
+  }
+
+  @Test
+  fun `a window shorter than one lane still gets one`() {
+    assertEquals(1, laneCountFor(availableHeightDp = 20f, laneHeightDp = lane, areaFraction = 1f))
+  }
+
+  @Test
+  fun `a degenerate input never yields zero lanes`() {
+    // Zero lanes draws nothing, which is indistinguishable from a socket that never connected.
+    assertEquals(1, laneCountFor(availableHeightDp = 640f, laneHeightDp = 0f, areaFraction = 0.5f))
+    assertEquals(1, laneCountFor(availableHeightDp = 640f, laneHeightDp = lane, areaFraction = 0f))
   }
 }

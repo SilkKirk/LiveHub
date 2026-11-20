@@ -17,6 +17,7 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.designsystem.LiveHubTheme
 import com.livehub.core.model.Category
+import com.livehub.core.model.DanmakuMessage
 import com.livehub.core.model.Platform
 import com.livehub.core.model.StreamVariant
 import com.livehub.core.model.Streamer
@@ -323,6 +324,41 @@ class PlayerChromeTest {
     assertTrue(
       "leaving the player is 缩小 into the mini window, got ${actions.first()}",
       actions.first() is UiAction.MinimizePlayer,
+    )
+  }
+
+  /**
+   * The danmaku layer starts below the bar, not across it.
+   *
+   * The overlay's top inset was a bare 56dp while the bar is 60dp *before* its status-bar inset, so
+   * the first lane drew itself through the exit arrow and the follow star — over a screen whose
+   * controls are unlabelled and rely on being visible. The two numbers live apart (the bar's padding
+   * and `FULLSCREEN_BAR_HEIGHT`), which is exactly why this compares their laid-out edges instead of
+   * asserting either constant.
+   */
+  @Test
+  fun `the first danmaku label starts below the full screen bar`() {
+    render(
+      state = uiState().copy(
+        danmaku = listOf(
+          DanmakuMessage(roomKey = room.key, userName = "观众", text = "别压着按钮"),
+        ),
+      ),
+      fullscreen = true,
+    )
+    // The bubble is placed by an effect and animated by an `Animatable`; one frame composes the
+    // effect but the label needs the following one to exist in the tree.
+    composeRule.mainClock.advanceTimeBy(500L)
+    composeRule.waitForIdle()
+
+    val bar = composeRule.onAllNodesWithContentDescription("退出全屏")[0]
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val label = composeRule.onNodeWithText("别压着按钮").fetchSemanticsNode().boundsInRoot
+
+    assertTrue(
+      "the label starts at ${label.top}, but the bar ends at ${bar.bottom}",
+      label.top >= bar.bottom,
     )
   }
 

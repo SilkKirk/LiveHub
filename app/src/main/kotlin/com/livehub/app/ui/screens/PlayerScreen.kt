@@ -553,7 +553,14 @@ internal fun PlayerContent(
               state.danmakuFontScale
             },
             areaFraction = state.danmakuAreaFraction,
-            modifier = Modifier.fillMaxSize().padding(top = 56.dp, bottom = 16.dp),
+            // Below the bar, and below the status bar it insets itself by. This used to be a bare
+            // 56dp — four short of a 60dp bar even with no status bar at all, and about 28dp short
+            // on a phone — so the first lane drew itself across the exit and follow buttons.
+            // See [FULLSCREEN_BAR_HEIGHT].
+            modifier = Modifier
+              .fillMaxSize()
+              .windowInsetsPadding(WindowInsets.statusBars)
+              .padding(top = FULLSCREEN_BAR_HEIGHT, bottom = 16.dp),
           )
         }
 
@@ -799,6 +806,8 @@ private fun FullscreenBar(
       // Same reason as `PortraitTopBar`: the picture is edge to edge in full screen, so without
       // this inset the bar and its two 48dp targets sit under the status bar.
       .windowInsetsPadding(WindowInsets.statusBars)
+      // 6 + 48 + 6 = [FULLSCREEN_BAR_HEIGHT]. The danmaku layer starts below that number, so
+      // changing this padding without changing it moves the labels onto the buttons.
       .padding(horizontal = 6.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
@@ -1583,6 +1592,17 @@ private val LANDSCAPE_DANMAKU_FONT_SCALES = listOf(
 
 private const val PORTRAIT_HIDE_DELAY_MILLIS = 4_000L
 private const val FULLSCREEN_HIDE_DELAY_MILLIS = 3_000L
+
+/**
+ * What the full-screen bar occupies vertically, before the status-bar inset it pads itself by:
+ * 6dp of padding, a 48dp target, 6dp again (see `FullscreenBar`).
+ *
+ * The danmaku overlay starts below this number rather than at a literal of its own, because the two
+ * do not exist independently — a label flying across the exit and follow buttons is what the old
+ * hardcoded 56dp bought. `PlayerChromeTest` pins the relationship by comparing the first label's top
+ * edge with the bar's bottom edge, so a change to either number fails there.
+ */
+private val FULLSCREEN_BAR_HEIGHT = 60.dp
 
 /**
  * Tag for the 显示弹幕 switch, for `PlayerControlsTest`.

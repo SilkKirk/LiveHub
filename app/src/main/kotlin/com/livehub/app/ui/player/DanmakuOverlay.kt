@@ -118,6 +118,29 @@ internal fun laneFreeAfterMs(textWidthPx: Float, screenWidthPx: Float, flightMil
 }
 
 /**
+ * How many lanes fit in [availableHeightDp], scaled by [areaFraction].
+ *
+ * Height, not a constant. The old rule was `MAX_LANES * areaFraction`, which came out at six lanes
+ * for every window — that is half of a landscape window (411dp tall) but about a fifth of a
+ * full-bleed vertical one (800dp), so on a 抖音 room 「上1/2」 covered the top 140dp of 800 and
+ * 「全屏」 covered 288dp rather than the screen. The setting promises a share of the *picture*, and
+ * only the geometry knows how much of the picture one lane is worth.
+ *
+ * At least one lane is always returned: an overlay with zero lanes draws nothing, which looks
+ * exactly like a broken socket.
+ */
+internal fun laneCountFor(
+  availableHeightDp: Float,
+  laneHeightDp: Float,
+  areaFraction: Float,
+): Int {
+  if (laneHeightDp <= 0f || availableHeightDp <= 0f) return 1
+  val fits = (availableHeightDp / laneHeightDp).toInt()
+  if (fits <= 0) return 1
+  return (fits * areaFraction.coerceIn(0f, 1f)).toInt().coerceIn(1, fits)
+}
+
+/**
  * The entries of [current] that were not already part of [previous].
  *
  * The ViewModel keeps a **rolling** buffer: `(danmaku + new).takeLast(MAX_DANMAKU_BUFFER)`. Once it
@@ -230,12 +253,17 @@ fun DanmakuOverlay(
     TextStyle(fontSize = (16 * fontScale).sp, fontWeight = FontWeight.Medium)
   }
 
-  val laneCount = (MAX_LANES * areaFraction).toInt().coerceIn(1, MAX_LANES)
-
   BoxWithConstraints(modifier = modifier.fillMaxSize().clipToBounds()) {
     val screenWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
     val laneHeightDp = 24.dp * fontScale
     val laneHeightPx = with(density) { laneHeightDp.toPx() }
+    // The share `areaFraction` promises is a share of the *picture*, so the count comes from the
+    // height this overlay was actually given. See [laneCountFor] for what the constant cost.
+    val laneCount = laneCountFor(
+      availableHeightDp = maxHeight.value,
+      laneHeightDp = laneHeightDp.value,
+      areaFraction = areaFraction,
+    )
 
     /**
      * When each lane is next free.
@@ -272,7 +300,13 @@ fun DanmakuOverlay(
 
     LaunchedEffect(messages, laneCount, screenWidthPx) {
       val pending = newDanmakuSince(animatedSoFar, messages)
-      if (pending.isEmpty()) {
+      // The first emission is the whole buffer — `newDanmakuSince` returns everything when there is
+      // no snapshot yet — and the overlay is only composed once the user is in full screen, so that
+      // buffer can be two hundred comments collected behind the portrait layout. Only the newest
+      // lanes' worth of it is worth placing: the overlay is a live surface, and placing from the
+      // front put comments from minutes ago on screen while the recent ones were thrown away.
+      val toPlace = if (animatedSoFar.isEmpty()) pending.takeLast(laneCount) else pending
+      if (toPlace.isEmpty()) {
         // Nothing new: refresh the snapshot (a room switch replaces the buffer outright) and stop.
         animatedSoFar.clear()
         animatedSoFar.addAll(messages)
@@ -280,7 +314,7 @@ fun DanmakuOverlay(
       }
 
       withFrameMillis { frameTime ->
-        pending.forEach { message ->
+        toPlace.forEach { message ->
           if (blocked.any { keyword -> message.text.lowercase().contains(keyword) }) {
             return@forEach
           }
@@ -387,7 +421,14 @@ internal fun DanmakuLine(
   )
 }
 
-private const val MAX_LANES = 12
+/**
+ * Ceiling on simultaneously flying labels.
+ *
+ * A lane cap used to live here as well (`MAX_LANES = 12`), and it was a layout rule in disguise:
+ * twelve 24dp lanes are 288dp, which is the whole picture on a landscape phone and a third of a
+ * full-bleed vertical one. The count is derived from the window now — see [laneCountFor] — and what
+ * is left to bound is the number of bubbles, which is what this constant does.
+ */
 private const val MAX_VISIBLE = 60
 
 /**
