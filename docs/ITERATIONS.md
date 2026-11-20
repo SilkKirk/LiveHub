@@ -5281,3 +5281,134 @@ fixture（只设了 `bilibiliLogin.loggedIn = true`，没有滚动），登录�
    房间后再按 Home 会不会进空白小窗——模拟器的 PiP 转场不可靠。
 2. 「各种优化」的第三条：同步页「可配对设备」不会消失（要改 `PeerDiscovery` 接口加 lost 事件）。
 3. 折叠手感的真机确认（第一百三十一轮候选）。
+
+---
+
+## 第一百三十三轮迭代：横屏的两个出口
+
+用户：「查看界面和功能，看看还有哪些地方可以优化调整的」。审计出十二条，挑最贵的一条开工——
+播放页点「全屏」之后没有任何控件能退出全屏。它和第一百零四轮记下的「横屏设置抽屉退不出」是同一个
+洞的两半。
+
+### 缺陷是什么
+
+1. **「全屏」是单向门。** 竖屏点右侧「全屏」→ 窗口真的转成横屏（`SENSOR_LANDSCAPE`）→ 而这时
+   `isLandscape` 变真，两个「退出全屏」入口同时消失：侧栏 `showFullscreenToggle = !landscapeWindow`，
+   顶栏箭头按 `landscapeWindow` 分支改成「返回」，点下去是 `MinimizePlayer`（缩成小窗）。想回竖屏
+   播放页没有任何控件，把手机转回竖屏也没用——窗口被按钮锁着，而释放锁的唯一标志
+   `manualFullscreen` 就是按钮自己写的那一个，没有任何入口能清掉它。用户手里只剩「缩成小窗 → 再点
+   小窗」，一次误触要多两步才回得来。
+2. **横屏设置抽屉不认返回键。** 抽屉开着时按返回，事件落到 `LiveHubRoot` 的 `BackHandler`，变成
+   「缩成小窗」：抽屉不理、播放页走了。而 `PlayerScreen` 不随小窗销毁（一次调用点、三种尺寸，就是
+   为了不重建解码器），`showSettings` 于是活过了抽屉的宿主，下次展开时自己弹回来。
+
+### 为什么会这样
+
+同一个 `landscapeWindow` 布尔描述了两件不同的事：**用户自己转的手机**（没有竖屏布局可回，所以
+「返回」应该是离开播放页）和**按钮请窗口转的横屏**（竖屏播放页就在那里，所以「退出全屏」必须是
+它）。两个入口都是在只有第一种情况存在的年代写的（`938ce47` 横屏即全屏）；第一百零六轮
+（`2cfdcd5`）给按钮加了转屏请求，从此第二种情况成立，而那两条条件没跟着改——从窗口上它们看不出
+区别。
+
+两个测试各自只挡住了一半，合起来仍是零：`PlayerChromeTest` 那条「landscape window 把出口放在顶栏」
+是把 `landscapeWindow = true` 手写进布局的，于是它把「用户转的手机」测了两遍；`PlayerOrientationTest`
+里点「全屏」→ 点「退出全屏」那条，窗口是 320×640 的竖屏、测试窗口不会真的旋转，所以那里的
+`landscapeWindow` 始终是 false。
+
+抽屉那条更早就被记下来了：第一百零四轮「留下的」第 1 条，诊断一字不差（`BackHandler` 只在
+`!isLandscape` 时启用，而抽屉只在 `isLandscape` 出现），当时的修法是换 `ModalNavigationDrawer` +
+`ModalDrawerSheet`——「能一次解决三条」，但会改宽度与形状、且没有截图基线，于是放了 29 轮。
+
+### 怎么修的
+
+判据抽成纯函数，与 `playerOrientation` 放在一起：它们读同一个标志，回答同一个问题的两面。
+
+    internal fun fullscreenExitReturnsToPortrait(landscapeWindow, manualFullscreen) =
+      manualFullscreen || !landscapeWindow
+
+`PlayerContent` 的参数从 `landscapeWindow` 换成这个结论（`exitReturnsToPortrait`，默认 true，所以
+竖屏渲染与截图 harness 的调用点都不动），三处判断改成读它：顶栏箭头的文案与行为、侧栏
+`showFullscreenToggle`、`PlayerScreen` 里那个返回键。按钮请来的横屏于是有三条出路——顶栏「退出
+全屏」、侧栏「退出全屏」、系统返回键，三者都是 `onFullscreenChange(false)` →
+`manualFullscreen = false` → 请求 `UNSPECIFIED` → 窗口转回竖屏。
+
+抽屉那条**没有**按第一百零四轮的建议换组件：需要的只是「返回键关掉它」，一个
+`BackHandler(enabled = showSettings && isLandscape && !compact)` 就够，而换 M3 的
+`ModalNavigationDrawer` 会改掉 42% / 320dp 的宽度与圆角、且没有截图基线可比。真正要一起改的是状态
+的生命周期：`LaunchedEffect(compact)` 现在把 `showSettings` 和 `manualFullscreen` 一起复位，小窗不再
+是「抽屉还开着」的存档点。
+
+`landscapeWindow` 这个参数**删掉**了——它只喂那两个判断，留一个「只用来派生默认值」的参数比换名字
+更不诚实。`PlayerChromeTest` 的 `render` 跟着改名，原用例拆成两条。
+
+### 用例
+
+- `PlayerOrientationTest`：判据表 4 条（竖屏 / 点下去到窗口转过来那一帧 / 按钮请来的横屏 / 用户
+  转的横屏）。
+- `PlayerChromeTest`：两条横屏各钉一侧——用户转的（顶栏 返回、侧栏无开关、点下去离开房间）与按钮
+  请来的（两个出口都在、点下去不许离开房间、必须传 `false` 释放锁）。
+- 新增 `PlayerLandscapeTest`：真的 `-land` 配置 + `LiveHubRoot`（返回键归 `PlayerScreen` 一层，
+  `PlayerContent` 拿不到它）。三条：抽屉开着时返回只关抽屉、不离开房间；抽屉关着时返回照旧缩小；
+  绕一次小窗回来抽屉不会自己弹开。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| 判据表（4 条） | ✅ |
+| 横屏 chrome（改写 1 条、新增 1 条） | ✅ |
+| 横屏返回键（3 条，新文件） | ✅ |
+| `lintDebug`（全模块） | ✅ 0 error |
+| JVM 单元测试 | ✅ |
+| 仪器测试 | ✅ |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `b039c51` 全绿 |
+
+### 截图
+
+69 张全部下载、哈希逐行比过。变化 3 张：`15b-settings-about`、`15c-settings-cache`、
+`16-settings-logged-in`。**这三张不是本轮改的**：本轮只碰了 `PlayerScreen` / `PlayerOrientation`
+与三个测试文件，而 `SettingsScreen` 在 r131 到 HEAD 之间只有一个提交动过（`4adbe4f`，第一百三十二轮
+新加的两张播放卡片），页面因此变高、同一个滚动锚点落到更低的位置——`15c` 的 r133 版开头是「后台
+刷新」，r131 版开头是屏蔽词的最后三行，内容一致、偏移不同。本轮在 320×640 的竖屏渲染里**不可见**，
+与预期一致：它只改横屏窗口与返回键。
+
+### 记在案上的
+
+- **同一个布尔描述两件事，是这一轮的全部根因。** `landscapeWindow` 在只有一个生产者时是对的；第二个
+  生产者（转屏请求）出现后，它变成「两个状态共用一个名字」，而代码里没有任何地方会因此报错——只有
+  用户会。
+- **测试覆盖的不是「功能」，是「我写得出来的那个调用」。** 手写 `landscapeWindow = true` 的用例看
+  起来很针对，它证明的却是布局在那个入参下的行为，而不是哪个状态会产出那个入参。能钉住后者的只有
+  「按钮点下去之后窗口真的转了」，那需要 `-land` 配置，不是一个参数。
+- 第一百零四轮记下这条时给的修法比需要的重。**记录里的「代价」值得下一轮再算一遍**：29 轮之后真正
+  需要的只是一个 `BackHandler`。
+
+### 没做的（下一轮候选，按价值排）
+
+审计里还有这些，都核过代码：
+
+1. **暂停被自动重试解开**：`LivePlayer.kt:173-179` 的重试分支无条件 `prepare() + play()`，而同文件
+   `:114-120` 的注释写着「换 URL 必须尊重 paused」。暂停中遇到一次断流就自己播起来，徽标还写
+   「已暂停 · 双击继续」。
+2. **`switchingQuality` 卡死**：`MainViewModel.kt:1225` 置真，只有成功（1239）与失败（1250）复位；
+   切清晰度途中 `openRoom` / `closePlayer` 取消 `playbackJob`，`catch (cancelled) { throw }` 直接抛，
+   之后每个房间的设置页都挂一个「正在切换清晰度…」。
+3. **进全屏吐一批旧弹幕**：`DanmakuOverlay.kt:141`（`previous.isEmpty()` 直接返回整个缓冲区），而
+   overlay 只在全屏 / 竖屏满屏时组合，于是第一次进场拿最旧的一批占掉车道、把新弹幕挤掉。
+4. **弹幕压住顶栏**：`PlayerScreen.kt:527` 从 56dp 起排，而全屏栏 = 状态栏内边距 + 6 + 48 + 6 ≈ 84dp。
+5. **2.0× 下网格卡片的主播名被压成一个字**：`StreamerCard.kt:249-279` 是 `Row` + `weight`，
+   `33-home-huge-font` / `34-follow-special-huge-font` 上是「—…」「旭旭…」；搜索行（`:380-411`）
+   早已用 `FlowRow` 修过同一个问题，网格没跟上。
+6. **缓存没清掉也报「已清除图片缓存」**：`SettingsScreen.kt:465-472` + `:560-569`。
+7. **「解除关联」一键删除不可撤销**（`SyncScreen.kt:585`），而可恢复的「取消关注」要两步确认。
+8. 同步页四个「刷新」（刷新 / 刷新匹配码 / 重新生成 / 重新扫描），同一句操作说明写了四遍。
+9. 设备名是 `vivo V2309A` 这类型号串、不能改，同一概念三种兜底文案（LiveHub 设备 / 未知设备 /
+   未命名设备）。
+10. 屏蔽词满 50 条后再添加静默丢弃（`MainViewModel.kt:1466-1471` + `SettingsScreen.kt:211-218`）。
+11. 主题 chip 的 `FlowRow` 没有 `verticalArrangement`（`SettingsScreen.kt:132`），换行后两行贴住；
+    设置页也是唯一没有 2.0× 渲染的页面。
+
+功能缺口（是需求，不是缺陷）：**开播提醒**（设置页写着「每 30 分钟检查一次…谁开播了」，而全仓
+`grep Notification` 零命中）、**输入即搜**（参考项目带 220ms 防抖）、**关注网格长按拖动排序**、
+**首页「当前分区」文字**、**分享出去的链接收不回来**（无 VIEW intent-filter）。
