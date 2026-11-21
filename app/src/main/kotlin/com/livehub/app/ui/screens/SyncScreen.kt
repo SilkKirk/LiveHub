@@ -235,11 +235,19 @@ private fun SyncActionsRow(
       // leftover. A `Row` is safe now — the two items above it are weighted and full-width, so
       // nothing can be squeezed to zero the way three fixed-size buttons were. It stays enabled
       // when the permission is missing: reading the stored peer list touches no network.
+      //
+      // It says so now. The description used to be a bare 刷新 — the second of three controls on
+      // this page whose name began with that word — and the tap changed nothing a person could see:
+      // this list only moves when this page itself pairs or unpairs. 刷新设备与同步记录 names what is
+      // re-read, and the snackbar confirms it happened.
       IconButton(
-        onClick = { onAction(UiAction.RefreshPeers) },
+        onClick = {
+          onAction(UiAction.RefreshPeers)
+          onAction(UiAction.ShowMessage("已刷新设备与同步记录"))
+        },
         modifier = Modifier.size(48.dp),
       ) {
-        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+        Icon(Icons.Filled.Refresh, contentDescription = "刷新设备与同步记录")
       }
     }
   }
@@ -265,18 +273,16 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
+        // 生成, not 刷新: this button does not re-read the code, it replaces it. The page used to
+        // carry three controls whose names all began with 刷新 — this one, the bare 刷新 icon below
+        // and 重新扫描 in the discovery card — so which one re-read what could only be told by
+        // position. See `DiscoveryCard` and the action row for the other two.
         TextButton(onClick = { onAction(UiAction.RefreshPairingCode) }) {
-          Text("刷新匹配码")
+          Text("生成匹配码")
         }
       }
 
-      if (state.pairingCode.isBlank()) {
-        Text(
-          text = "点「刷新匹配码」生成一个六位匹配码。",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      } else {
+      if (state.pairingCode.isNotBlank()) {
         Text(
           text = formatCode(state.pairingCode),
           style = MaterialTheme.typography.displaySmall,
@@ -290,7 +296,7 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
             "在另一台设备的「关联设备」里输入这串数字，${state.pairingCodeSecondsLeft / 60} 分 " +
               "${state.pairingCodeSecondsLeft % 60} 秒内有效"
           } else {
-            "匹配码已过期，请点「刷新匹配码」重新生成"
+            "匹配码已过期，重新生成一个。"
           },
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -306,11 +312,10 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
-      Text(
-        text = "关注列表与登录状态会在同一 Wi-Fi 下增量同步；删除也会同步，不会把旧数据带回来。",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+      // What syncs, what stays local and what happens to deletions used to be two sentences on two
+      // cards — one here and one in 同步内容, saying the same things in different words. 同步内容 is
+      // the card that exists for it, so this card stopped repeating it.
+      //
       // The system's local-network prompt ("LiveHub 想要连接到本地网络中的设备") is raised by the OS
       // the first time anything here touches the LAN — not by this screen — so the page has to say
       // what it is *before* the sheet appears over it. Android 16+ only; on older versions nothing
@@ -477,7 +482,14 @@ private fun ScopeCard() {
       )
       Text(
         text = "关注列表与 B 站/抖音登录状态会同步到已配对的设备；播放设置与搜索历史留在本机。" +
-          "登录状态只在局域网内、只发给已配对的设备（明文传输，解除关联后不再发送）。",
+          "删除也会同步，不会把旧数据带回来。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      // Second paragraph rather than a third sentence in the one above: the first is what travels,
+      // this is the boundary it travels inside, and they were being read as one wall of text.
+      Text(
+        text = "登录状态只在局域网内、只发给已配对的设备（明文传输，解除关联后不再发送）。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
@@ -777,12 +789,10 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
             colors = listRowColors(),
           )
         }
-        Text(
-          text = "在对方设备上打开本页读出六位匹配码，点「关联设备」输入即可。",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.padding(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 16.dp),
-        )
+        // The pairing instruction used to be repeated here as well — the third copy on one page,
+        // after the peer list's empty state and the 关联设备 dialog. This card is informational (the
+        // address is not something the user is meant to type), so the copy that tells them how to
+        // pair belongs where they press it, not under a list they cannot act on.
       }
     }
   }

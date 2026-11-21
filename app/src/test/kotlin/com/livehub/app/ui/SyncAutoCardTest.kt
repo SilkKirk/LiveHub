@@ -204,7 +204,7 @@ class SyncAutoCardTest {
       pairLabel <= syncLabel + 1,
     )
 
-    val icon = composeRule.onNodeWithContentDescription("刷新").fetchSemanticsNode().size
+    val icon = composeRule.onNodeWithContentDescription("刷新设备与同步记录").fetchSemanticsNode().size
     val floor = with(composeRule.density) { 40.dp.roundToPx() }
     assertTrue(
       "刷新图标的按钮只有 ${icon.width}×${icon.height}px，低于它自己的 ${floor}px（40dp）",
@@ -228,12 +228,14 @@ class SyncAutoCardTest {
     scrollToActions()
     assertActionRowUsable()
 
-    composeRule.onNodeWithContentDescription("刷新").performClick()
+    composeRule.onNodeWithContentDescription("刷新设备与同步记录").performClick()
     composeRule.waitForIdle()
 
+    // Two actions, in this order: the re-read, then the confirmation that it happened. The second
+    // one is the fix — the tap changed nothing visible before, and the description said only 刷新.
     assertEquals(
-      "点刷新图标必须发出重新扫描的指令",
-      listOf<UiAction>(UiAction.RefreshPeers),
+      "点刷新图标必须重新读一遍，并说明已经刷新",
+      listOf<UiAction>(UiAction.RefreshPeers, UiAction.ShowMessage("已刷新设备与同步记录")),
       actions,
     )
   }

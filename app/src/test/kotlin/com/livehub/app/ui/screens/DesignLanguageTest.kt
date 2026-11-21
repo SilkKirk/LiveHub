@@ -106,12 +106,13 @@ class DesignLanguageTest {
     composeInWindow { SyncScreen(state = state, onAction = {}) }
 
     composeRule.onNodeWithText("同步").assertIsDisplayed()
-    // 刷新匹配码, not 本机: 本机 is both this card's title and the supporting line of the 我的设备
+    // 生成匹配码, not 本机: 本机 is both this card's title and the supporting line of the 我的设备
     // row further down, so a text query on it is ambiguous as soon as the page is tall enough to
-    // compose both.
+    // compose both. (This anchor was 刷新匹配码 until round 139 renamed the button: it replaces the
+    // code rather than re-reading it, and 刷新 was the word three controls here shared.)
     assertTrue(
       "同步 has to be above the first card's own action, not somewhere below it",
-      topOf("同步") < topOf("刷新匹配码"),
+      topOf("同步") < topOf("生成匹配码"),
     )
   }
 

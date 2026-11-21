@@ -296,7 +296,32 @@ class SyncRowsTest {
   fun `the peer refresh stays enabled while the permission is missing`() {
     render(state().copy(localNetworkBlocked = true))
 
-    composeRule.onNodeWithContentDescription("刷新").assertIsEnabled()
+    composeRule.onNodeWithContentDescription("刷新设备与同步记录").assertIsEnabled()
+  }
+
+  /**
+   * The page no longer has a bare 刷新.
+   *
+   * Three controls here used to share that verb — 刷新匹配码 (the code), a bare 刷新 (this page's
+   * own state) and 重新扫描 (nearby devices) — so which one did what could only be told by where it
+   * sat. The code one is 生成匹配码 now (it replaces the code rather than re-reading it) and the bare
+   * one is 刷新设备与同步记录. 重新扫描 kept its name: it sits inside the card it rescans, and it was
+   * never the ambiguous one.
+   */
+  @Test
+  fun `the page no longer has a bare refresh`() {
+    render(state())
+
+    // The first card is on screen without scrolling; the action row is not.
+    composeRule.onNodeWithText("生成匹配码").assertIsDisplayed()
+
+    scrollTo("立即同步")
+    assertEquals(
+      "a bare 刷新 must not come back: it named nothing on a page with three re-reads",
+      0,
+      composeRule.onAllNodesWithContentDescription("刷新").fetchSemanticsNodes().size,
+    )
+    composeRule.onNodeWithContentDescription("刷新设备与同步记录").assertIsDisplayed()
   }
 
   private companion object {
