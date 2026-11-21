@@ -154,6 +154,19 @@ data class UserSettings(
    * setting. Off means the stream pauses when the app goes away, like any other app.
    */
   val pictureInPicture: Boolean = true,
+  /**
+   * The name this device shows to the other one, or blank for "whatever the hardware calls itself".
+   *
+   * The default was the model string (`vivo V2309A`, `Xiaomi 23127PN0CC`), which is what a user sees
+   * on both devices when they own two of the same phone — and could not be changed, because the name
+   * was derived from `Build` on every read. Blank keeps that derivation as the *default* (nobody has
+   * to name their tablet before pairing), and a rename overrides it.
+   *
+   * Local only, and deliberately: the name is sent with pairing and with each exchange, so the other
+   * device learns it — but it is not part of the synced record set. Two devices renaming each other
+   * back and forth is not a thing anyone wants.
+   */
+  val deviceName: String = "",
 )
 
 /**
@@ -514,9 +527,33 @@ class UserPreferences(private val context: Context) {
       }
     }
 
+  /**
+   * The human-readable name this device presents, never blank.
+   *
+   * Three layers, in order: what the user typed, then what the hardware calls itself, then
+   * [UNNAMED_DEVICE]. It used to be the hardware layer only, computed on every call — which made it
+   * unrenameable and made two identical phones indistinguishable in each other's peer list.
+   *
+   * Read from the cache rather than from disk: `SyncController` asks for it while building every
+   * exchange envelope, and `MainViewModel` asks during `init`, so a DataStore read here would be the
+   * blocking-the-first-frame defect round 60 fixed for the other settings.
+   */
   val deviceName: String
-    get() = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
-      .ifBlank { "LiveHub 设备" }
+    get() = settings.deviceName.ifBlank { hardwareDeviceName() }.ifBlank { UNNAMED_DEVICE }
+
+  /** What `Build` says this device is; blank on builds that report neither field. */
+  private fun hardwareDeviceName(): String =
+    "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
+
+  /**
+   * Stores a user-chosen device name, normalised; an effectively empty one clears the override.
+   *
+   * Blank means "go back to the model string" — which is what the dialog's cleared field expresses,
+   * and what every installation that never touches this feature keeps.
+   */
+  fun setDeviceName(raw: String) {
+    update { it.copy(deviceName = normaliseDeviceName(raw)) }
+  }
 
   private fun generateDeviceId(): Long {
     val random = UUID.randomUUID().mostSignificantBits ushr 1
@@ -610,4 +647,34 @@ class UserPreferences(private val context: Context) {
      */
     const val MAX_RECENT_ROOMS = 12
   }
+}
+
+/** Placeholder for a device that neither has a name nor reports a model. */
+internal const val UNNAMED_DEVICE = "未命名设备"
+
+/**
+ * Longest device name kept, in code points.
+ *
+ * 24 is four times the longest name in the fixtures ("小米平板 6" is six) and comfortably inside the
+ * 255 bytes a DNS-SD TXT record allows after a 24-character CJK name is UTF-8 encoded. Counted in
+ * code points rather than `String.length` so a truncation cannot cut a surrogate pair in half and
+ * leave an unencodable string behind.
+ */
+internal const val MAX_DEVICE_NAME_LENGTH = 24
+
+private val WHITESPACE_RUN = Regex("\\s+")
+
+/**
+ * What [UserPreferences.setDeviceName] actually stores.
+ *
+ * Trimmed and collapsed, because the name is concatenated into sentences ("解除关联后，X 需要…") and
+ * shown in a `ListItem` next to a 48dp button — a name of forty spaces there looks like a bug. Blank
+ * means "no override": the caller stores it, and [UserPreferences.deviceName] falls back to the model
+ * string. Capped, because this string travels in every sync envelope.
+ */
+internal fun normaliseDeviceName(raw: String): String {
+  val collapsed = raw.replace(WHITESPACE_RUN, " ").trim()
+  if (collapsed.codePointCount(0, collapsed.length) <= MAX_DEVICE_NAME_LENGTH) return collapsed
+  val end = collapsed.offsetByCodePoints(0, MAX_DEVICE_NAME_LENGTH)
+  return collapsed.substring(0, end).trim()
 }

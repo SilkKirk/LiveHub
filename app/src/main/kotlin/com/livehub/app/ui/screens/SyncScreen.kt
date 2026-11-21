@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Sync
@@ -58,9 +59,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
+import com.livehub.app.di.UNNAMED_DEVICE
 import com.livehub.app.ui.components.PageHeader
 import com.livehub.app.ui.components.SectionHeader
 import com.livehub.app.ui.components.listRowColors
@@ -262,16 +265,38 @@ private fun SyncActionsRow(
  */
 @Composable
 private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
+  // The rename dialog is page state, not ViewModel state: it holds nothing but a draft string, and a
+  // rotation that dropped it is the safe direction (the name is only written on 保存).
+  var renaming by remember { mutableStateOf(false) }
+
   Card(modifier = Modifier.fillMaxWidth()) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Row(verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
           Text("本机", style = MaterialTheme.typography.titleMedium)
-          Text(
-            text = state.deviceName.ifBlank { "LiveHub 设备" },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+              text = state.deviceName.ifBlank { UNNAMED_DEVICE },
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              // `fill = false` so a short name does not push the pencil to the far edge: the two are
+              // one unit ("this is what I am called, and I can change it").
+              modifier = Modifier.weight(1f, fill = false),
+            )
+            // The name used to be `Build.MANUFACTURER + MODEL`, computed on every read, so two of the
+            // same phone were indistinguishable in each other's 我的设备 — and there was nowhere to
+            // fix it. The pencil is that place.
+            IconButton(onClick = { renaming = true }, modifier = Modifier.size(48.dp)) {
+              Icon(
+                imageVector = Icons.Outlined.Edit,
+                contentDescription = "修改设备名",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
         }
         // 生成, not 刷新: this button does not re-read the code, it replaces it. The page used to
         // carry three controls whose names all began with 刷新 — this one, the bare 刷新 icon below
@@ -338,6 +363,73 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
           MaterialTheme.colorScheme.onSurfaceVariant
         },
       )
+    }
+  }
+
+  if (renaming) {
+    DeviceNameDialog(
+      current = state.deviceName,
+      onSave = { onAction(UiAction.RenameDevice(it)) },
+      onDismiss = { renaming = false },
+    )
+  }
+}
+
+/**
+ * The rename dialog for this device.
+ *
+ * Prefilled with the name on screen rather than with the stored override: the override is usually
+ * blank (the model string is the default), and prefilling blank would look like "you have no name"
+ * to someone who is looking at one. Clearing the field is therefore meaningful — it drops the
+ * override and goes back to the model string, which the hint says out loud.
+ *
+ * A `Dialog` + `Surface` rather than an `AlertDialog`, for the reason `MatchingCodeDialog` documents:
+ * the app's dialogs are hand-built so their insets and shape match the rest of the page.
+ */
+@Composable
+private fun DeviceNameDialog(
+  current: String,
+  onSave: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  var draft by remember { mutableStateOf(current) }
+
+  Dialog(onDismissRequest = onDismiss) {
+    Surface(shape = RoundedCornerShape(20.dp), tonalElevation = 6.dp) {
+      Column(
+        modifier = Modifier.padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Text("设备名称", style = MaterialTheme.typography.titleLarge)
+        Text(
+          text = "另一台设备在「我的设备」里看到的就是这个名字。留空则用系统型号。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+          value = draft,
+          onValueChange = { draft = it },
+          label = { Text("设备名称") },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          TextButton(onClick = onDismiss) { Text("取消") }
+          TextButton(
+            onClick = {
+              onSave(draft)
+              onDismiss()
+            },
+            // Saving the name that is already there would write a pointless override; a *cleared*
+            // field is a real change (it drops the override), so it stays enabled.
+            enabled = draft.trim() != current.trim(),
+          ) { Text("保存") }
+        }
+      }
     }
   }
 }
@@ -570,7 +662,7 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
       // This device is listed first, the way WeChat's page shows 本机 above the others.
       ListItem(
         leadingContent = { RowIcon(Icons.Outlined.Smartphone) },
-        headlineContent = { Text(state.deviceName.ifBlank { "LiveHub 设备" }) },
+        headlineContent = { Text(state.deviceName.ifBlank { UNNAMED_DEVICE }) },
         supportingContent = { Text("本机", style = MaterialTheme.typography.labelSmall) },
         colors = listRowColors(),
       )
@@ -589,7 +681,7 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
           HorizontalDivider()
           ListItem(
             leadingContent = { RowIcon(Icons.Outlined.Devices) },
-            headlineContent = { Text(peer.deviceName.ifBlank { "未知设备" }) },
+            headlineContent = { Text(peer.deviceName.ifBlank { UNNAMED_DEVICE }) },
             supportingContent = {
               Text(
                 text = "关联于 ${timeFormatOrDash(peer.pairedAt)}" +
@@ -611,7 +703,7 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
           )
           if (confirmingUnpair == peer.deviceId) {
             UnpairConfirmation(
-              name = peer.deviceName.ifBlank { "未知设备" },
+              name = peer.deviceName.ifBlank { UNNAMED_DEVICE },
               onConfirm = {
                 confirmingUnpair = null
                 onAction(UiAction.UnpairPeer(peer.deviceId))
@@ -779,7 +871,7 @@ private fun DiscoveryCard(state: UiState, onAction: (UiAction) -> Unit) {
         candidates.forEach { peer ->
           ListItem(
             leadingContent = { RowIcon(Icons.Outlined.Sensors) },
-            headlineContent = { Text(peer.deviceName.ifBlank { "未命名设备" }) },
+            headlineContent = { Text(peer.deviceName.ifBlank { UNNAMED_DEVICE }) },
             supportingContent = {
               Text(
                 text = "${peer.host}:${peer.port}",

@@ -241,6 +241,7 @@ class MainViewModel(
       is UiAction.SetAutoSync -> sync.setAutoSync(action.enabled)
       is UiAction.SetThemeMode -> setThemeMode(action.mode)
       is UiAction.SetDynamicColor -> setDynamicColor(action.enabled)
+      is UiAction.RenameDevice -> renameDevice(action.name)
       UiAction.StartBilibiliLogin -> startBilibiliLogin()
       UiAction.CancelBilibiliLogin -> cancelBilibiliLogin()
       UiAction.LogoutBilibili -> logoutBilibili()
@@ -1445,6 +1446,18 @@ class MainViewModel(
   private fun setDynamicColor(enabled: Boolean) {
     container.preferences.setDynamicColor(enabled)
     _state.update { it.copy(dynamicColor = enabled) }
+  }
+
+  /**
+   * Stores a new device name and publishes the *effective* one.
+   *
+   * Read back from [UserPreferences] instead of echoing [name]: the store normalises it (trimmed,
+   * collapsed, capped) and resolves blank to the model string, so the card must show what the other
+   * device will actually receive — not what was typed.
+   */
+  private fun renameDevice(name: String) {
+    container.preferences.setDeviceName(name)
+    _state.update { it.copy(deviceName = container.preferences.deviceName) }
   }
 
   /** Danmaku area and font scale are persisted so the choice survives a restart. */

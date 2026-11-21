@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -18,6 +19,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
@@ -324,8 +327,40 @@ class SyncRowsTest {
     composeRule.onNodeWithContentDescription("刷新设备与同步记录").assertIsDisplayed()
   }
 
-  private companion object {
-    /** The page's own box, so "inside the window" means inside what the screen was given. */
+  /**
+   * This device can be renamed from the page, and only 保存 writes it.
+   *
+   * The name was `Build.MANUFACTURER + Build.MODEL` on every read, so two of the same phone were
+   * indistinguishable in each other's 我的设备 — next to the page's one irreversible action. The
+   * pencil is that missing control; this pins that opening it changes nothing and that the draft
+   * reaches the ViewModel as a `RenameDevice`.
+   */
+  @Test
+  fun `renaming the device sends one action when saved`() {
+    val actions = mutableListOf<UiAction>()
+    render(state(), onAction = { actions += it })
+
+    composeRule.onNodeWithContentDescription("修改设备名").assertIsDisplayed().performClick()
+    composeRule.waitForIdle()
+
+    val field = composeRule.onNode(hasSetTextAction())
+    field.performTextClearance()
+    field.performTextInput("我的平板")
+    composeRule.waitForIdle()
+
+    assertTrue("typing must not rename anything yet: $actions", actions.isEmpty())
+
+    composeRule.onNodeWithText("保存").performClick()
+    composeRule.waitForIdle()
+
+    assertEquals(
+      "保存 must hand the draft to the ViewModel",
+      listOf<UiAction>(UiAction.RenameDevice("我的平板")),
+      actions,
+    )
+  }
+
+  private companion object {    /** The page's own box, so "inside the window" means inside what the screen was given. */
     const val VIEWPORT_TAG = "syncRowsViewport"
 
     /** Ids are `Long` on the models; the literals are written as such to keep the calls typed. */

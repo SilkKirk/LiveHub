@@ -514,6 +514,18 @@ sealed interface UiAction {
    */
   data class SetDynamicColor(val enabled: Boolean) : UiAction
 
+  /**
+   * Renames this device, as the 同步 page's pencil does.
+   *
+   * Blank means "go back to the model string" — that is what the dialog's empty field expresses, and
+   * it is what every installation that never renames anything keeps.
+   *
+   * Published into [UiState.deviceName] as well as persisted, because that is what the card, the peer
+   * rows and (through `UserPreferences`) every outgoing pairing and sync envelope read: a rename that
+   * only reached the dialog would be invisible until the next launch.
+   */
+  data class RenameDevice(val name: String) : UiAction
+
   data object StartBilibiliLogin : UiAction
 
   data object CancelBilibiliLogin : UiAction
