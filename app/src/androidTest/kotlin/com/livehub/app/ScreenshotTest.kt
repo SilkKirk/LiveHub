@@ -1194,16 +1194,33 @@ class ScreenshotTest {
   /**
    * The settings page at 2.0×, which had never been rendered.
    *
-   * It was the only screen left without one, and it was the screen where the gap mattered: the three
-   * theme chips are the app's tightest wrapping `FlowRow` (跟随系统 / 深色 / 浅色 need about 300dp on a
-   * 288dp line), and a `FlowRow` spaces its *lines* by nothing by default — so the second line of
-   * chips sat flush against the first. Round 142 added the spacing and this render is what shows it.
-   *
-   * The blocked-keyword card is in the same frame on purpose: its limit (50) is now stated under the
-   * field, and at this scale that supporting line is the tallest thing in the card.
+   * It was the only screen left without one, and the gap mattered here: the three theme chips are the
+   * app's tightest wrapping `FlowRow` (跟随系统 / 深色 / 浅色 need about 300dp on a 288dp line), and a
+   * `FlowRow` spaces its *lines* by nothing by default — so the second line of chips sat flush
+   * against the first. Round 142 added the spacing and this render is what shows it.
    */
   @Test
   fun settingsHugeFont() = capture("38-settings-huge-font", settingsState(), fontScale = 2.0f)
+
+  /**
+   * The blocked-keyword card at 2.0×.
+   *
+   * Its own render rather than a second thing in `38`: that one is framed on 外观 and never reaches
+   * this card (the version of this comment that claimed otherwise was written before the render
+   * existed, which is the same mistake as predicting a layout from arithmetic).
+   *
+   * What this asks is whether the row survives the scale: a text field whose supporting line now
+   * states the limit, plus the 添加 button beside it. The fixture has three keywords, so the line
+   * reads 「最多 50 个，当前 3 个。」 — and at the cap it is two characters longer
+   * (「已达上限 50 个，先移除一个才能再加。」), which is the version this scale has to cope with.
+   */
+  @Test
+  fun settingsBlockedKeywordsHugeFont() = capture(
+    "39-settings-blocked-huge-font",
+    settingsState(),
+    fontScale = 2.0f,
+    scrollToText = "添加屏蔽词",
+  )
 
   /**
    * The player at 1.5×: the action row (关注 / 分享 / 弹幕) and the danmaku list.
