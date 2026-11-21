@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -536,6 +537,13 @@ private fun AutoSyncCard(state: UiState, onAction: (UiAction) -> Unit) {
 
 @Composable
 private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
+  // Which peer's 解除关联 has been pressed once. One id rather than a boolean: a page with two peers
+  // must not arm both, and the confirmation band belongs to the row it was armed on.
+  //
+  // `remember` rather than `UiState`: arming deletes nothing, and a rotation that dropped the
+  // question is the safe direction — the answer has to be given again.
+  var confirmingUnpair by remember { mutableStateOf<Long?>(null) }
+
   Card(modifier = Modifier.fillMaxWidth()) {
     // The title keeps the card's own 16dp inset; the rows below are `ListItem`s, which bring that
     // inset with them. Padding the column instead would put the title at 16dp and the device names
@@ -578,8 +586,10 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
               )
             },
             trailingContent = {
+              // One tap asks, the band under the row answers. This used to unpair on the spot —
+              // see `UnpairConfirmation` for why that was the wrong side of the app's own rule.
               IconButton(
-                onClick = { onAction(UiAction.UnpairPeer(peer.deviceId)) },
+                onClick = { confirmingUnpair = peer.deviceId },
                 modifier = Modifier.size(48.dp),
               ) {
                 Icon(Icons.Filled.Delete, contentDescription = "解除关联")
@@ -587,8 +597,65 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
             },
             colors = listRowColors(),
           )
+          if (confirmingUnpair == peer.deviceId) {
+            UnpairConfirmation(
+              name = peer.deviceName.ifBlank { "未知设备" },
+              onConfirm = {
+                confirmingUnpair = null
+                onAction(UiAction.UnpairPeer(peer.deviceId))
+              },
+              onCancel = { confirmingUnpair = null },
+            )
+          }
         }
       }
+    }
+  }
+}
+
+/**
+ * The question a 解除关联 tap asks, drawn under the row it belongs to.
+ *
+ * 解除关联 is the one action on this page that cannot be undone from this page: the peer is dropped
+ * from the store, and getting it back means the other device shows a fresh six-digit code. The card
+ * used to do that on a single tap of a 48dp bin at the right edge of a scrolling list — the corner a
+ * thumb passes through while scrolling.
+ *
+ * Two buttons rather than "tap it again": `FollowScreen` settled the same question for 取消关注, and
+ * the reason is that a confirm which *is* the control that armed it is one more tap in the same place,
+ * not a decision. 保留 comes first so the escape is where the eye lands first.
+ *
+ * Inline rather than a dialog on purpose: this app's dialogs are for input (the matching code), a
+ * dialog is a separate window the screenshot harness cannot see, and this question is about the row
+ * directly above it — which stays on screen while it is answered.
+ */
+@Composable
+private fun UnpairConfirmation(
+  name: String,
+  onConfirm: () -> Unit,
+  onCancel: () -> Unit,
+) {
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(start = 16.dp, top = 2.dp, end = 16.dp, bottom = 12.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Text(
+      text = "解除关联后，$name 需要重新输入匹配码才能同步。",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      TextButton(onClick = onCancel) { Text("保留") }
+      Button(
+        onClick = onConfirm,
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+      ) { Text("确认解除") }
     }
   }
 }

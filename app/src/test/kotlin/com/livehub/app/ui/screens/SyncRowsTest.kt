@@ -164,9 +164,18 @@ class SyncRowsTest {
     )
   }
 
-  /** A peer row still says who it is and still carries its 解除关联 button. */
+  /**
+   * A peer row still says who it is, and its 解除关联 now asks before it acts.
+   *
+   * This test used to assert that one tap emitted `UnpairPeer` — that was the defect, not the
+   * contract. 解除关联 is the only action on this page that cannot be undone from this page: the
+   * record is deleted, and the peer only comes back by showing a fresh six-digit code on the other
+   * device. `FollowScreen` already requires two taps for 取消关注, which *can* be redone by finding
+   * the room again; the stricter action was the one with a single tap, on a 48dp bin at the right
+   * edge of a scrolling list.
+   */
   @Test
-  fun `a paired peer keeps its name and its unpair button`() {
+  fun `unpairing a peer asks first`() {
     val actions = mutableListOf<UiAction>()
     render(state(), onAction = { actions += it })
     scrollTo(PEER_NAME)
@@ -175,11 +184,40 @@ class SyncRowsTest {
     composeRule.onNodeWithContentDescription("解除关联").assertIsDisplayed().performClick()
     composeRule.waitForIdle()
 
+    assertTrue("one tap must not unpair anything: $actions", actions.isEmpty())
     assertEquals(
-      "点解除关联必须把该设备的 id 交给 UnpairPeer",
+      "the peer has to stay listed while the question is open",
+      1,
+      composeRule.onAllNodesWithText(PEER_NAME).fetchSemanticsNodes().size,
+    )
+
+    scrollTo("确认解除")
+    composeRule.onNodeWithText("确认解除").assertIsDisplayed().performClick()
+    composeRule.waitForIdle()
+
+    assertEquals(
+      "确认之后必须把该设备的 id 交给 UnpairPeer",
       listOf<UiAction>(UiAction.UnpairPeer(PEER_ID)),
       actions,
     )
+  }
+
+  /** 保留 is the way back out, and it has to leave both the list and the action alone. */
+  @Test
+  fun `keeping the peer after arming sends nothing`() {
+    val actions = mutableListOf<UiAction>()
+    render(state(), onAction = { actions += it })
+    scrollTo(PEER_NAME)
+
+    composeRule.onNodeWithContentDescription("解除关联").performClick()
+    composeRule.waitForIdle()
+
+    scrollTo("保留")
+    composeRule.onNodeWithText("保留").performClick()
+    composeRule.waitForIdle()
+
+    assertTrue("保留 must not emit anything: $actions", actions.isEmpty())
+    composeRule.onNodeWithText("确认解除").assertDoesNotExist()
   }
 
   /**
