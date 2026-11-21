@@ -167,8 +167,10 @@ CI 步骤：
 5. `./gradlew :app:assembleDebug` 与 `:app:assembleRelease`
 6. 上传测试报告与 debug APK
 7. 在 API 34 模拟器上运行 `connectedDebugAndroidTest`
+8. 把这一轮渲染出来的截图与 `.github/screenshot-baseline/` 比对（容差 ≤64 像素且单通道 ≤2），
+   超出即判失败——更新基线的流程见 [该目录的 README](.github/screenshot-baseline/README.md)
 
-产物在 Actions 的 **Artifacts → livehub-debug-apk** 下载。
+产物在 Actions 的 **Artifacts → livehub-debug-apk** 下载，截图在 **ui-screenshots**。
 
 ### 发布正式版（Release）
 

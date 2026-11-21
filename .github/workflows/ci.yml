@@ -279,6 +279,23 @@ jobs:
           script: |
             bash .github/scripts/emulator_suite.sh
 
+      # The gate itself. `--self-test` above proves the judgement (thresholds, both directions); this
+      # is the comparison it was written for: the renders just captured against the baseline that
+      # lives in the repo.
+      #
+      # Placed after the emulator step and before the upload: a failing comparison turns this job red,
+      # and the upload below still runs (`if: always()`) so whoever looks at the red has the pictures.
+      #
+      # Why a baseline and not the previous run's artifact: an artifact expires, needs a token to
+      # fetch from another run, and is not reviewed by anyone. A directory in the repo is diffable in
+      # the pull request that changes it, and `.github/screenshot-baseline/README.md` is where the
+      # update procedure lives.
+      - name: Compare renders against the baseline
+        run: |
+          set -o pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pillow
+          python3 .github/scripts/compare_screenshots.py .github/screenshot-baseline ui-screenshots
+
       - name: Upload UI screenshots
         if: always()
         uses: actions/upload-artifact@v4
