@@ -128,7 +128,7 @@ class PlayerChromeTest {
   private fun count(description: String): Int =
     composeRule.onAllNodesWithContentDescription(description).fetchSemanticsNodes().size
 
-  private fun chromeVisible(): Boolean = count("清晰度") > 0
+  private fun chromeVisible(): Boolean = count("刷新") > 0
 
   /** Lets the auto-hide timer (3 s) expire on the frozen clock. */
   private fun hideChrome() {
@@ -163,11 +163,11 @@ class PlayerChromeTest {
     render(fullscreen = true)
 
     hideChrome()
-    assertEquals("the strip must be gone with the chrome", 0, count("清晰度"))
+    assertEquals("the strip must be gone with the chrome", 0, count("刷新"))
 
     tapPicture(y = 300f)
 
-    assertEquals("the strip comes back with the tap", 1, count("清晰度"))
+    assertEquals("the strip comes back with the tap", 1, count("刷新"))
     assertTrue(
       "the exit control comes back too, got ${count("退出全屏")}",
       count("退出全屏") >= 1,
@@ -186,10 +186,10 @@ class PlayerChromeTest {
 
     // Inside the 16:9 picture, which sits at the top of the window in portrait.
     tapPicture(y = 80f)
-    assertEquals("a tap hides it", 0, count("清晰度"))
+    assertEquals("a tap hides it", 0, count("刷新"))
 
     tapPicture(y = 80f)
-    assertEquals("a second tap shows it again", 1, count("清晰度"))
+    assertEquals("a second tap shows it again", 1, count("刷新"))
   }
 
   /**
@@ -273,7 +273,7 @@ class PlayerChromeTest {
   fun `the compact composition renders the picture only`() {
     render(fullscreen = false, compact = true)
 
-    assertEquals("the strip must be gone", 0, count("清晰度"))
+    assertEquals("the strip must be gone", 0, count("刷新"))
     assertEquals(
       "the action row must be gone, found ${composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size}",
       0,
@@ -427,11 +427,10 @@ class PlayerChromeTest {
     render(videoAspect = 9f / 16f, onAction = { actions += it })
 
     assertEquals(
-      "the action row is not drawn for a full-bleed picture",
-      0,
-      composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size - 1,
+      "exactly one 关注 — the strip pill, since a full-bleed picture has no action row",
+      1,
+      composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size,
     )
-    assertEquals("exactly one 关注, in the strip", 1, count("关注"))
     composeRule.onNodeWithText("一条小团团").assertIsDisplayed()
 
     composeRule.onNodeWithText("关注").performClick()
