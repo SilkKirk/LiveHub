@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.Screen
@@ -87,7 +88,8 @@ class PlayerLandscapeTest {
     composeRule.onAllNodesWithText("显示弹幕").fetchSemanticsNodes().size
 
   private fun openSettings() {
-    composeRule.onNodeWithContentDescription("播放设置").performClick()
+    // The strip's 清晰度 chip is the way into the settings panel now; the gear is gone (round 144).
+    composeRule.onNodeWithText("清晰度").performClick()
     composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
     assertEquals("the drawer did not open", 1, settingsPanelNodes())

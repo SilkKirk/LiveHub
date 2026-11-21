@@ -36,13 +36,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Visibility
@@ -53,7 +50,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -469,12 +465,12 @@ internal fun PlayerContent(
         //
         // This layer has to come *before* the controls, not after. In a Box the last child is
         // drawn on top and receives pointer events first, so declaring it last made it swallow
-        // every tap meant for the gear, reload and fullscreen buttons — they looked live but
+        // every tap meant for the strip's buttons — they looked live but
         // did nothing. Declared here, it sits under them and only sees taps that miss a
         // control.
         //
-        // Full screen needs it just as much as portrait does: its bar hides itself after
-        // [FULLSCREEN_HIDE_DELAY_MILLIS] and nothing else brought it back, so 设置, 重载 and
+        // Full screen needs it just as much as portrait does: the strip hides itself after
+        // [FULLSCREEN_HIDE_DELAY_MILLIS] and nothing else brought it back, so 清晰度, 刷新 and
         // 退出全屏 stayed unreachable for the rest of the session. The picture still starts
         // clean — the chrome is visible on entry and only comes back when tapped.
         //
@@ -498,45 +494,15 @@ internal fun PlayerContent(
           )
         }
 
-        // The way out of the player, and — over a vertical stream — the only follow control
-        // there is. Declared after the gesture layer so a tap on it is not swallowed (in a Box
-        // the last child wins the pointer events).
-        //
-        // Only over the picture and its two spinners: the offline and error states carry their
-        // own 返回 pill in the middle of the screen, and a second one in the corner would offer
-        // the same action twice on one screen — which is the reason the old pill header was
-        // removed in the first place.
+        // Only over the picture and its two spinners: the offline and error states carry their own
+        // 重试 and 返回 pills in the middle of the screen, and a strip of player controls over them
+        // would offer a second way to do nothing.
         val showsPicture = state.playerError == null &&
           (
             effectiveVariant != null ||
               state.loading ||
               (state.error == null && state.room?.isLive != false)
             )
-        if (!compact && !fullscreen && showsPicture) {
-          PortraitTopBar(
-            state = state,
-            onAction = onAction,
-            fullBleed = verticalFullBleed,
-            modifier = Modifier.align(Alignment.TopCenter),
-          )
-        }
-
-        // In full screen the bar floats over the picture instead of sitting above it.
-        if (!compact && fullscreen && controlsVisible) {
-          FullscreenBar(
-            state = state,
-            // A landscape window the *user* turned has no portrait layout to go back to: leaving
-            // full screen there would restore exactly the arrangement [playerFullscreen] exists to
-            // avoid, so the leading button does what back does and steps off the player. A window
-            // the 全屏 button turned is the opposite case — see [exitReturnsToPortrait].
-            exitDescription = if (exitReturnsToPortrait) "退出全屏" else "返回",
-            onExit = {
-              if (exitReturnsToPortrait) onFullscreenChange(false) else onAction(UiAction.MinimizePlayer)
-            },
-            onAction = onAction,
-            modifier = Modifier.align(Alignment.TopCenter),
-          )
-        }
 
         // Overlay danmaku in full screen and over a full-bleed vertical picture; the
         // portrait layout uses the list below the video instead.
@@ -553,14 +519,12 @@ internal fun PlayerContent(
               state.danmakuFontScale
             },
             areaFraction = state.danmakuAreaFraction,
-            // Below the bar, and below the status bar it insets itself by. This used to be a bare
-            // 56dp — four short of a 60dp bar even with no status bar at all, and about 28dp short
-            // on a phone — so the first lane drew itself across the exit and follow buttons.
-            // See [FULLSCREEN_BAR_HEIGHT].
+            // Under the status bar and nothing else. It used to be inset by the full-screen bar's
+            // height as well; with the bar gone (round 144) that inset would leave an empty band.
             modifier = Modifier
               .fillMaxSize()
               .windowInsetsPadding(WindowInsets.statusBars)
-              .padding(top = FULLSCREEN_BAR_HEIGHT, bottom = 16.dp),
+              .padding(top = 4.dp, bottom = 16.dp),
           )
         }
 
@@ -593,13 +557,16 @@ internal fun PlayerContent(
           }
         }
 
-        // Round controls down the right edge, as in the reference player.
-        if (!compact && controlsVisible) {
-          SideControls(
+        // The strip is the last child so it sits above the danmaku overlay and receives taps before
+        // the tap-to-toggle-chrome layer underneath it.
+        if (!compact && controlsVisible && showsPicture) {
+          PlayerOverlayStrip(
+            state = state,
             fullscreen = fullscreen,
-            // The same question the bar's leading button answers: nowhere to land means no button.
-            // A control that changes nothing is worse than no control — and while the window is
-            // sideways because the button asked, this is the only 退出全屏 left once the bar hides.
+            verticalFullBleed = verticalFullBleed,
+            // A landscape window the *user* turned has no portrait arrangement to go back to, so
+            // 退出全屏 is not offered there — the way out is the back gesture, as in portrait. A
+            // window the 全屏 button turned is the opposite case; see [exitReturnsToPortrait].
             showFullscreenToggle = exitReturnsToPortrait,
             onToggleFullscreen = {
               onFullscreenChange(!fullscreen)
@@ -607,7 +574,8 @@ internal fun PlayerContent(
             },
             onOpenSettings = onOpenSettings,
             onReload = { state.room?.let { onAction(UiAction.OpenRoom(it)) } },
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
+            onAction = onAction,
+            modifier = Modifier.align(Alignment.BottomCenter),
           )
         }
       }
@@ -631,28 +599,24 @@ internal fun PlayerContent(
   }
 }
 
-// ------------------------------------------------------------------- header ---
+// ------------------------------------------------------------------- chrome ---
 
-// The portrait header used to be a floating pill holding a back arrow, the streamer, a star and
-// a close button. The pill is still gone, and for the reasons it went:
+// The picture carries no top bar and no right-edge column any more (round 144); one strip along the
+// bottom does everything they did. What changed, and why:
 //
-//  * back and close both called `ClosePlayer`, so the screen carried two ways to do one thing
-//    while a third — the system back gesture, and the left-edge swipe in `LiveHubRoot` —
-//    already worked everywhere;
-//  * the star duplicated the 关注 button in `RoomActionRow`, which is larger, labelled and
-//    therefore the one a user can actually find.
-//
-// Two of those conclusions had a hole in them, closed by `PortraitTopBar`:
-//
-//  * "the gestures already work everywhere" is not an argument for having *no* control. The
-//    mini window got its × for exactly that reason, and the player had none, which is how a
-//    user ends up stuck on a screen whose only exit is a swipe they have never tried;
-//  * the star is only a duplicate when `RoomActionRow` is on screen. Over a vertical stream the
-//    row is not composed at all, so the star came back in that branch — for the case where it
-//    is the only follow control, not as a second one next to it.
-//
-// What the pill also showed (streamer, live dot, viewer count) was not decoration, so it moved
-// into `RoomActionRow`, and into `PortraitTopBar`'s bar for the vertical layout that has no row.
+//  * **The follow star is gone.** Over a 16:9 picture the labelled 关注 pill in `RoomActionRow` sits
+//    two lines below and is permanent, so the star was a second control for one action — and
+//    取消关注 is the direction a viewer never needs mid-stream. Over a *vertical* picture, where no
+//    action row exists, the strip offers 关注: once, and only while the room is not followed.
+//  * **The back arrow is gone.** Every phone this app installs on has a back gesture, and
+//    `LiveHubRoot` already turns it into 缩小; a 48dp arrow in the corner competed with the platform
+//    instead of helping it. The error and offline states keep their own 返回 pill, because there the
+//    gesture is the only other way out.
+//  * **播放设置 / 刷新 / 全屏 moved from the right edge to the bottom.** A vertical column of discs
+//    covered the middle of the picture — where the action is — and is not what any live app does:
+//    斗鱼, 虎牙 and 哔哩哔哩 all put 弹幕 · 清晰度 · 全屏 in one bottom strip. 清晰度 is labelled with the
+//    quality that is playing and opens the sheet the gear used to open, so four discs became four
+//    controls that say what they do.
 
 /**
  * Streamer name plus live dot and viewer count.
@@ -700,150 +664,172 @@ private fun StreamerLine(
 }
 
 /**
- * The way out of the player in portrait, and — over a vertical stream — the only follow
- * control there is.
+ * The player's only chrome: one strip along the bottom of the picture.
  *
- * Portrait has no header bar; the exit used to be the left-edge swipe or the system back
- * gesture, and the comment that removed the old pill said so on purpose. That is the same
- * "a gesture nobody has discovered is not a control" this codebase refuses to accept for the
- * mini window's ×, and a screen whose only way out is an undiscoverable gesture is a screen
- * people get stuck on. Drawn over the picture, so it costs no layout height and cannot be
- * scrolled out of reach.
+ * Right-aligned controls with an identity block at the leading edge — the arrangement 斗鱼, 虎牙 and
+ * 哔哩哔哩 use, and the reason the three round buttons no longer float down the right edge over the
+ * middle of the picture.
  *
- * The star appears only while the picture fills the window: there `RoomActionRow` underneath is
- * not composed at all, so its 关注 pill does not exist and this star is the only follow control
- * left. Over an ordinary 16:9 picture that pill is two lines below and permanent, and a second
- * identical button in the corner would be a duplicate rather than an addition.
+ * The identity block is drawn only where nothing else names the room: full screen, and a vertical
+ * picture (neither composes `RoomActionRow`). Over a 16:9 portrait picture that row is two lines
+ * below and already says all of it.
  */
 @Composable
-private fun PortraitTopBar(
+private fun PlayerOverlayStrip(
   state: UiState,
+  fullscreen: Boolean,
+  verticalFullBleed: Boolean,
+  showFullscreenToggle: Boolean,
+  onToggleFullscreen: () -> Unit,
+  onOpenSettings: () -> Unit,
+  onReload: () -> Unit,
   onAction: (UiAction) -> Unit,
-  fullBleed: Boolean,
   modifier: Modifier = Modifier,
 ) {
-  if (!fullBleed) {
-    Box(modifier = modifier.fillMaxWidth().padding(8.dp)) {
-      PictureButton(
-        icon = Icons.AutoMirrored.Filled.ArrowBack,
-        description = "返回",
-        onClick = { onAction(UiAction.MinimizePlayer) },
-      )
-    }
-    return
-  }
-
   val followed = state.room?.let { room -> state.followed.any { it.key == room.key } } == true
+  val quality = state.selectedVariant?.qualityLabel
+
   Row(
     modifier = modifier
       .fillMaxWidth()
+      // A scrim so white text stays readable over a bright picture, and the navigation-bar inset so
+      // the strip is not drawn under the gesture bar in full screen.
       .background(
-        Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent)),
+        Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.62f))),
       )
-      // The picture runs under the status bar here (that is what "fills the window" means), but
-      // the controls must not: without this the bar sits under the clock and the cutout. The
-      // scrim stays above the inset so the top of the picture still has one.
-      .windowInsetsPadding(WindowInsets.statusBars)
-      .padding(horizontal = 6.dp, vertical = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
+      .windowInsetsPadding(WindowInsets.navigationBars)
+      .padding(start = 12.dp, end = 6.dp, top = 12.dp, bottom = 6.dp),
+    verticalAlignment = Alignment.Bottom,
   ) {
-    PictureButton(
-      icon = Icons.AutoMirrored.Filled.ArrowBack,
-      description = "返回",
-      onClick = { onAction(UiAction.MinimizePlayer) },
-    )
-    StreamerLine(state = state, onSurface = Color.White, modifier = Modifier.weight(1f))
-    PictureButton(
-      icon = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
-      description = if (followed) "取消关注" else "关注",
-      onClick = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
-    )
+    if (fullscreen || verticalFullBleed) {
+      Column(
+        modifier = Modifier.weight(1f).padding(bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        StreamerLine(
+          state = state,
+          onSurface = Color.White,
+          secondary = Color.White.copy(alpha = 0.72f),
+        )
+        if (verticalFullBleed && !followed) {
+          FollowPill { state.room?.let { onAction(UiAction.ToggleFollow(it)) } }
+        }
+      }
+    } else {
+      Spacer(Modifier.weight(1f))
+    }
+
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      StripIcon(
+        icon = if (state.danmakuEnabled) Icons.Filled.Subtitles else Icons.Filled.SubtitlesOff,
+        description = if (state.danmakuEnabled) "关闭弹幕" else "显示弹幕",
+        selected = state.danmakuEnabled,
+        onClick = { onAction(UiAction.ToggleDanmaku(!state.danmakuEnabled)) },
+      )
+      StripQualityChip(label = quality ?: "清晰度", onClick = onOpenSettings)
+      StripIcon(icon = Icons.Filled.Refresh, description = "刷新", onClick = onReload)
+      if (showFullscreenToggle) {
+        StripIcon(
+          icon = if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+          description = if (fullscreen) "退出全屏" else "全屏",
+          onClick = onToggleFullscreen,
+        )
+      }
+    }
   }
 }
 
 /**
- * An icon floating over the picture: an official `IconButton` wrapping an 18dp glyph on a dark disc.
+ * One icon in the strip: an official 48dp `IconButton` around a 38dp translucent disc.
  *
- * The disc is the difference between readable and invisible over a bright cover — the side
- * column's translucent-white circles work because they sit on a scrimmed edge, and a bare white
- * arrow on a white thumbnail is nothing at all. The description stays on the glyph but merges into
- * the button, so TalkBack and a test both reach the 48dp target `IconButton` guarantees rather than
- * the 34dp disc inside it.
+ * The disc keeps the glyph readable over a bright picture; the button is what makes the target big
+ * enough for a thumb. A miss here does not merely fail to act — it falls through to the
+ * tap-to-show-controls layer underneath, so the strip disappears, which reads as a broken control.
  */
 @Composable
-private fun PictureButton(
+private fun StripIcon(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   description: String,
   onClick: () -> Unit,
+  selected: Boolean = false,
 ) {
   IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-    Icon(
-      imageVector = icon,
-      contentDescription = description,
-      tint = Color.White,
-      modifier = Modifier
-        .size(34.dp)
-        .background(Color.Black.copy(alpha = 0.38f), CircleShape)
-        .padding(8.dp),
-    )
+    Surface(
+      modifier = Modifier.size(38.dp),
+      shape = CircleShape,
+      color = Color.White.copy(alpha = if (selected) 0.16f else 0.10f),
+      border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(
+          imageVector = icon,
+          contentDescription = description,
+          tint = Color.White.copy(alpha = 0.92f),
+          modifier = Modifier.size(20.dp),
+        )
+      }
+    }
   }
 }
 
+/**
+ * 清晰度, as a pill that shows the quality that is playing.
+ *
+ * A `Surface(onClick)` rather than an `IconButton`: the label is the point — 原画 is the value a
+ * viewer looks for, and an icon for it would be one more thing to learn. `heightIn(min = 48.dp)`
+ * keeps the touch target at Material's minimum while the pill itself stays 38dp like its neighbours.
+ */
 @Composable
-private fun FullscreenBar(
-  state: UiState,
-  exitDescription: String,
-  onExit: () -> Unit,
-  onAction: (UiAction) -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val followed = state.room?.let { room -> state.followed.any { it.key == room.key } } == true
-
-  Row(
-    modifier = modifier
-      .fillMaxWidth()
-      .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent)))
-      // Same reason as `PortraitTopBar`: the picture is edge to edge in full screen, so without
-      // this inset the bar and its two 48dp targets sit under the status bar.
-      .windowInsetsPadding(WindowInsets.statusBars)
-      // 6 + 48 + 6 = [FULLSCREEN_BAR_HEIGHT]. The danmaku layer starts below that number, so
-      // changing this padding without changing it moves the labels onto the buttons.
-      .padding(horizontal = 6.dp, vertical = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
+private fun StripQualityChip(label: String, onClick: () -> Unit) {
+  Surface(
+    onClick = onClick,
+    shape = RoundedCornerShape(19.dp),
+    color = Color.White.copy(alpha = 0.10f),
+    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+    modifier = Modifier.heightIn(min = 48.dp),
   ) {
-    // Both are official `IconButton`s, which is where the 48dp target comes from: drawn straight
-    // on the picture with no disc behind them, a miss does not look like a miss — it looks like the
-    // button was never there.
-    IconButton(onClick = onExit, modifier = Modifier.size(48.dp)) {
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-        contentDescription = exitDescription,
-        tint = Color.White,
-        modifier = Modifier.size(24.dp),
+    Box(
+      modifier = Modifier.padding(horizontal = 14.dp).heightIn(min = 38.dp),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(
+        text = label,
+        color = Color.White.copy(alpha = 0.92f),
+        style = MaterialTheme.typography.labelMedium,
+        maxLines = 1,
       )
     }
-    Text(
-      text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
-      color = Color.White,
-      style = MaterialTheme.typography.titleSmall,
-      fontWeight = FontWeight.SemiBold,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.weight(1f),
-    )
-    // A toggle, not a button that happens to redraw a filled star. The description tells the
-    // action from the state — it used to say 关注 in both, so TalkBack offered to follow a room
-    // the user had already followed. `PortraitTopBar` has always got this right.
-    IconToggleButton(
-      checked = followed,
-      onCheckedChange = { state.room?.let { onAction(UiAction.ToggleFollow(it)) } },
-      modifier = Modifier.size(48.dp),
+  }
+}
+
+/** 关注, for the vertical layout that has no action row. It only ever offers to follow. */
+@Composable
+private fun FollowPill(onClick: () -> Unit) {
+  Surface(
+    onClick = onClick,
+    shape = RoundedCornerShape(16.dp),
+    color = MaterialTheme.colorScheme.primary,
+    modifier = Modifier.heightIn(min = 48.dp),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 14.dp).heightIn(min = 32.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
       Icon(
-        imageVector = if (followed) Icons.Filled.Star else Icons.Filled.StarBorder,
-        contentDescription = if (followed) "取消关注" else "关注",
+        imageVector = Icons.Filled.StarBorder,
+        contentDescription = null,
         tint = Color.White,
-        modifier = Modifier.size(24.dp),
+        modifier = Modifier.size(16.dp),
+      )
+      Text(
+        text = "关注",
+        color = Color.White,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
       )
     }
   }
@@ -966,62 +952,6 @@ private fun VideoSurface(
           )
           PillButton(label = "返回", filled = false) { onAction(UiAction.ClosePlayer) }
         }
-      }
-    }
-  }
-}
-
-@Composable
-private fun SideControls(
-  fullscreen: Boolean,
-  showFullscreenToggle: Boolean,
-  onToggleFullscreen: () -> Unit,
-  onOpenSettings: () -> Unit,
-  onReload: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Column(
-    modifier = modifier,
-    verticalArrangement = Arrangement.spacedBy(14.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-  ) {
-    ControlFab(icon = Icons.Filled.Settings, description = "播放设置", onClick = onOpenSettings)
-    ControlFab(icon = Icons.Filled.Refresh, description = "刷新", onClick = onReload)
-    if (showFullscreenToggle) {
-      ControlFab(
-        icon = if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-        description = if (fullscreen) "退出全屏" else "全屏",
-        onClick = onToggleFullscreen,
-      )
-    }
-  }
-}
-
-@Composable
-private fun ControlFab(
-  icon: androidx.compose.ui.graphics.vector.ImageVector,
-  description: String,
-  onClick: () -> Unit,
-) {
-  // An official 48dp `IconButton` holding a 38dp disc: the disc is what keeps the glyph readable
-  // over a bright cover, and the button is what makes the target big enough for a thumb. These
-  // float over the video, so a miss does not just fail to open the sheet — it toggles the chrome
-  // (the tap-to-show-controls layer underneath) and the buttons disappear, which reads as a
-  // broken control rather than as a missed tap.
-  IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-    Surface(
-      modifier = Modifier.size(38.dp),
-      shape = CircleShape,
-      color = Color.White.copy(alpha = 0.10f),
-      border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Icon(
-          imageVector = icon,
-          contentDescription = description,
-          tint = Color.White.copy(alpha = 0.92f),
-          modifier = Modifier.size(20.dp),
-        )
       }
     }
   }
@@ -1592,17 +1522,6 @@ private val LANDSCAPE_DANMAKU_FONT_SCALES = listOf(
 
 private const val PORTRAIT_HIDE_DELAY_MILLIS = 4_000L
 private const val FULLSCREEN_HIDE_DELAY_MILLIS = 3_000L
-
-/**
- * What the full-screen bar occupies vertically, before the status-bar inset it pads itself by:
- * 6dp of padding, a 48dp target, 6dp again (see `FullscreenBar`).
- *
- * The danmaku overlay starts below this number rather than at a literal of its own, because the two
- * do not exist independently — a label flying across the exit and follow buttons is what the old
- * hardcoded 56dp bought. `PlayerChromeTest` pins the relationship by comparing the first label's top
- * edge with the bar's bottom edge, so a change to either number fails there.
- */
-private val FULLSCREEN_BAR_HEIGHT = 60.dp
 
 /**
  * Tag for the 显示弹幕 switch, for `PlayerControlsTest`.

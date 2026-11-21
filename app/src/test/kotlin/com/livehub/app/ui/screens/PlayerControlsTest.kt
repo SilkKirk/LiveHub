@@ -13,7 +13,6 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -37,15 +36,15 @@ import org.robolectric.annotation.Config
  * The player's chrome is built from the official Material 3 components, and says so to accessibility.
  *
  * Round 103 replaced four hand-rolled controls with the components that already were them: the pills
- * (`Surface` inside a `Box` with `Modifier.clickable`) became `Button`, the round side buttons and
- * the floating arrow became `IconButton`, and the full-screen star became `IconToggleButton`. What
- * was written by hand for them is what these assertions pin: the 48dp target (drawn as a ring around
- * a ~34dp pill), the `Role.Button` a `Modifier.clickable` does not report at all, and the fact that
- * the node carrying the content description is the node a finger hits.
+ * (`Surface` inside a `Box` with `Modifier.clickable`) became `Button` and the round side buttons
+ * became `IconButton`. What was written by hand for them is what these assertions pin: the 48dp
+ * target (drawn as a ring around a ~34dp pill), the `Role.Button` a `Modifier.clickable` does not
+ * report at all, and the fact that the node carrying the content description is the node a finger
+ * hits.
  *
- * The star carried a second, worse defect: it described itself as 关注 whether the room was followed
- * or not, so TalkBack offered to follow a room the user had already followed. As a toggle it now has
- * a state (`assertIsOff` / `assertIsOn`) as well as an action, and the two can be checked apart.
+ * Round 144 then removed the star and the back arrow from the picture entirely and turned the
+ * right-edge column into a bottom strip (弹幕 · 清晰度 · 刷新 · 全屏), so the tests here now describe
+ * the strip: the same 48dp and `Role.Button` questions, asked of the controls that exist.
  *
  * The danmaku switch is the same story one step further: two chips labelled 开 and 关 held a setting
  * that the 设置 page already exposed as a `Switch`, so one stored value had two different controls
@@ -104,6 +103,7 @@ class PlayerControlsTest {
   private fun renderPlayer(
     state: UiState = uiState(),
     fullscreen: Boolean = false,
+    videoAspect: Float? = null,
     onAction: (UiAction) -> Unit = {},
   ) {
     composeRule.mainClock.autoAdvance = false
@@ -116,6 +116,7 @@ class PlayerControlsTest {
           onFullscreenChange = {},
           onOpenSettings = {},
           videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
+          videoAspectHint = videoAspect,
         )
       }
     }
@@ -162,50 +163,105 @@ class PlayerControlsTest {
     }
   }
 
+  /**
+   * The strip's controls are official buttons with 48dp targets, and the picture has no back arrow.
+   *
+   * Round 144 replaced the top bar + right-edge column with one bottom strip: 弹幕 · 清晰度 · 刷新 ·
+   * 全屏. 清晰度 is a labelled `Surface(onClick)` rather than an `IconButton`, so it is asserted by
+   * size only — the other three are official icon buttons and are asserted as such.
+   */
   @Test
-  fun `the portrait chrome is official buttons with 48dp targets`() {
+  fun `the portrait strip is official buttons with 48dp targets`() {
     renderPlayer()
 
-    // The way out of the player, the three round controls down the right edge, and the pill in the
-    // action row underneath the picture.
-    assertOfficialButton("返回", hasContentDescription("返回"))
-    assertOfficialButton("播放设置", hasContentDescription("播放设置"))
+    assertOfficialButton("弹幕", hasContentDescription("关闭弹幕"))
     assertOfficialButton("刷新", hasContentDescription("刷新"))
     assertOfficialButton("全屏", hasContentDescription("全屏"))
     assertOfficialButton("关注", hasText("关注"))
+
+    val chip = composeRule.onNodeWithText("原画").fetchSemanticsNode().boundsInRoot
+    with(composeRule.density) {
+      assertTrue(
+        "清晰度 chip is only ${chip.height.toDp().value}dp tall",
+        chip.height.toDp().value >= 48f,
+      )
+    }
+
+    assertEquals(
+      "the picture must not draw a back arrow any more: the gesture is the way out",
+      0,
+      composeRule.onAllNodesWithContentDescription("返回").fetchSemanticsNodes().size,
+    )
   }
 
+  /**
+   * In full screen the strip is the only chrome, so its exit is the *only* 退出全屏 — there used to
+   * be two (the bar's arrow and the side column), and both were hand-rolled boxes at one point.
+   */
   @Test
-  fun `the full screen bar is official buttons with 48dp targets`() {
+  fun `the full screen strip is official buttons with 48dp targets`() {
     renderPlayer(fullscreen = true)
 
-    // 退出全屏 is both the bar's back arrow and the side column's exit button in this window. They
-    // were two separate hand-rolled boxes, so both are asserted rather than one of them.
     composeRule.onAllNodes(
       hasContentDescription("退出全屏") and
         SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button),
-    ).assertCountEquals(2)
+    ).assertCountEquals(1)
 
-    val exits = composeRule.onAllNodesWithContentDescription("退出全屏").fetchSemanticsNodes()
-    assertEquals("expected the bar arrow and the side button, found ${exits.size}", 2, exits.size)
-    exits.forEach { node ->
-      val bounds = with(composeRule.density) {
-        node.boundsInRoot.width.toDp().value to node.boundsInRoot.height.toDp().value
-      }
+    val exit = composeRule.onAllNodesWithContentDescription("退出全屏")[0]
+      .fetchSemanticsNode()
+      .boundsInRoot
+    with(composeRule.density) {
       assertTrue(
-        "an exit control is ${bounds.first}x${bounds.second}dp; the target is at least 48dp",
-        bounds.first >= 48f && bounds.second >= 48f,
+        "the exit control is ${exit.width.toDp().value}x${exit.height.toDp().value}dp",
+        exit.width.toDp().value >= 48f && exit.height.toDp().value >= 48f,
       )
     }
+    assertEquals(
+      "full screen has no back arrow either",
+      0,
+      composeRule.onAllNodesWithContentDescription("返回").fetchSemanticsNodes().size,
+    )
   }
 
+  /**
+   * A 16:9 picture in full screen draws no follow control at all.
+   *
+   * The star used to sit in the top-right corner here. Over a 16:9 picture the labelled 关注 pill in
+   * `RoomActionRow` is two lines below in portrait, so in full screen the star was the only follow
+   * control — and 取消关注 is the direction a viewer never needs mid-stream, which is what the user
+   * said when they asked for it to go ("这个完全用不上"). Following happens on the grid, or from the
+   * action row.
+   */
   @Test
-  fun `the follow star is a toggle that offers 关注 on an unfollowed room`() {
-    val actions = mutableListOf<UiAction>()
-    renderPlayer(fullscreen = true, onAction = { actions += it })
+  fun `a full screen picture offers no follow control`() {
+    renderPlayer(fullscreen = true)
 
-    composeRule.onNodeWithContentDescription("关注").assertIsOff()
-    composeRule.onNodeWithContentDescription("关注").performClick()
+    assertEquals(
+      "the player must not carry a follow star any more",
+      0,
+      composeRule.onAllNodesWithContentDescription("关注").fetchSemanticsNodes().size +
+        composeRule.onAllNodesWithContentDescription("取消关注").fetchSemanticsNodes().size,
+    )
+    assertEquals(
+      "and no 关注 label either",
+      0,
+      composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size,
+    )
+  }
+
+  /**
+   * A vertical picture does have one, because nothing else is on screen to name or follow the room.
+   *
+   * 抖音-style rooms compose no action row, so the strip's leading block carries the name and — while
+   * the room is *not* followed — one 关注 pill. It only ever offers to follow: unfollowing mid-stream
+   * is the direction the star was complained about.
+   */
+  @Test
+  fun `a vertical picture offers 关注 while the room is unfollowed`() {
+    val actions = mutableListOf<UiAction>()
+    renderPlayer(videoAspect = 9f / 16f, onAction = { actions += it })
+
+    composeRule.onNodeWithText("关注").performClick()
     composeRule.waitForIdle()
 
     assertEquals(
@@ -213,32 +269,10 @@ class PlayerControlsTest {
       listOf<UiAction>(UiAction.ToggleFollow(room)),
       actions,
     )
-  }
-
-  /**
-   * The accessibility lie this replaces: the bar described itself as 关注 in both states.
-   *
-   * A followed room therefore offered to follow itself, and the only hint that it was already
-   * followed was the filled glyph — which TalkBack cannot read.
-   */
-  @Test
-  fun `the follow star says 取消关注 once the room is followed`() {
-    val actions = mutableListOf<UiAction>()
-    renderPlayer(fullscreen = true, state = uiState(followed = true), onAction = { actions += it })
-
     assertEquals(
-      "a followed room must not be described as something to follow",
+      "the player never offers to unfollow",
       0,
-      composeRule.onAllNodesWithContentDescription("关注").fetchSemanticsNodes().size,
-    )
-    composeRule.onNodeWithContentDescription("取消关注").assertIsOn()
-    composeRule.onNodeWithContentDescription("取消关注").performClick()
-    composeRule.waitForIdle()
-
-    assertEquals(
-      "unfollowing is the same toggle, got $actions",
-      listOf<UiAction>(UiAction.ToggleFollow(room)),
-      actions,
+      composeRule.onAllNodesWithContentDescription("取消关注").fetchSemanticsNodes().size,
     )
   }
 

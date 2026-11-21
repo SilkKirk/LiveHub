@@ -128,7 +128,7 @@ class PlayerChromeTest {
   private fun count(description: String): Int =
     composeRule.onAllNodesWithContentDescription(description).fetchSemanticsNodes().size
 
-  private fun chromeVisible(): Boolean = count("播放设置") > 0
+  private fun chromeVisible(): Boolean = count("清晰度") > 0
 
   /** Lets the auto-hide timer (3 s) expire on the frozen clock. */
   private fun hideChrome() {
@@ -163,11 +163,11 @@ class PlayerChromeTest {
     render(fullscreen = true)
 
     hideChrome()
-    assertEquals("播放设置 must be gone with the chrome", 0, count("播放设置"))
+    assertEquals("the strip must be gone with the chrome", 0, count("清晰度"))
 
     tapPicture(y = 300f)
 
-    assertEquals("the side controls come back with the tap", 1, count("播放设置"))
+    assertEquals("the strip comes back with the tap", 1, count("清晰度"))
     assertTrue(
       "the exit control comes back too, got ${count("退出全屏")}",
       count("退出全屏") >= 1,
@@ -186,10 +186,10 @@ class PlayerChromeTest {
 
     // Inside the 16:9 picture, which sits at the top of the window in portrait.
     tapPicture(y = 80f)
-    assertEquals("a tap hides it", 0, count("播放设置"))
+    assertEquals("a tap hides it", 0, count("清晰度"))
 
     tapPicture(y = 80f)
-    assertEquals("a second tap shows it again", 1, count("播放设置"))
+    assertEquals("a second tap shows it again", 1, count("清晰度"))
   }
 
   /**
@@ -232,25 +232,33 @@ class PlayerChromeTest {
   }
 
   /**
-   * Both controls in the full-screen bar are 48dp targets.
+   * Every control in the full-screen strip is a 48dp target.
    *
-   * They float over the picture with no disc behind them and only 34dp of hit area, so a miss read
-   * as "the button is not there" rather than as a miss. The side buttons were fixed the same way in
-   * round 64; these two are the ones it left behind.
+   * They float over the picture with no label behind them, so a miss read as "the button is not
+   * there" rather than as a miss. The side column was fixed this way in round 64; round 144 moved
+   * the same controls to the bottom of the picture and this keeps them honest there.
    */
   @Test
-  fun `the full screen bar controls are 48dp targets`() {
+  fun `the full screen strip controls are 48dp targets`() {
     render(fullscreen = true)
 
     val heights = composeRule.onAllNodesWithContentDescription("退出全屏")
       .fetchSemanticsNodes()
       .map { node -> with(composeRule.density) { node.boundsInRoot.height.toDp().value } }
 
-    // The bar's back arrow and the side column's exit-fullscreen button.
-    assertTrue("expected two exit controls, got ${heights.size}", heights.size >= 2)
+    assertTrue("expected the strip's exit control, got ${heights.size}", heights.size >= 1)
     heights.forEach { height ->
       assertTrue("an exit control is only ${height}dp tall", height >= 48f)
     }
+    // And the strip is at the bottom, not a second top bar.
+    val exit = composeRule.onAllNodesWithContentDescription("退出全屏")[0]
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val window = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "the exit control sits at ${exit.bottom} of ${window.bottom}: the strip belongs at the bottom",
+      exit.bottom > window.bottom * 0.6f,
+    )
   }
 
   /**
@@ -265,7 +273,7 @@ class PlayerChromeTest {
   fun `the compact composition renders the picture only`() {
     render(fullscreen = false, compact = true)
 
-    assertEquals("the side column must be gone", 0, count("播放设置"))
+    assertEquals("the strip must be gone", 0, count("清晰度"))
     assertEquals(
       "the action row must be gone, found ${composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size}",
       0,
@@ -298,46 +306,39 @@ class PlayerChromeTest {
   // it — the same "gesture nobody has discovered" the mini window's × was added to avoid.
 
   /**
-   * The portrait player carries a visible way out, over the picture, above the action row.
+   * The picture draws no way-out control any more: leaving is the gesture.
    *
-   * Asserting existence alone would pass for a button parked under the picture or behind the
-   * danmaku list, so the position is checked against the action row: the picture is the 16:9
-   * band at the top, and the row starts underneath it.
+   * Portrait used to carry a 返回 arrow in the corner, added in round 88 because "a gesture nobody
+   * has discovered is not a control". Round 144 removed it again on the user's request: every phone
+   * this app installs on has a back gesture, `LiveHubRoot` turns that gesture into 缩小, and the
+   * left-edge swipe does the same — so the arrow was a third way to do it, drawn over the picture.
+   *
+   * The error and offline states are the exception and keep their own 返回 pill (asserted by their
+   * own tests): there is no picture to swipe and no chrome to reveal, so the pill is the only control.
    */
   @Test
-  fun `the portrait player shows a way out over the picture`() {
+  fun `the portrait picture draws no way-out control`() {
     val actions = mutableListOf<UiAction>()
     render(onAction = { actions += it })
 
-    val back = composeRule.onNodeWithContentDescription("返回").fetchSemanticsNode().boundsInRoot
-    val follow = composeRule.onNodeWithText("关注").fetchSemanticsNode().boundsInRoot
-    assertTrue(
-      "the back control ends at ${back.bottom} but the action row starts at ${follow.top}",
-      back.bottom <= follow.top,
+    assertEquals(
+      "a back arrow over the picture is what round 144 removed",
+      0,
+      count("返回"),
     )
-    assertTrue("the back control is not in the corner: ${back.left}", back.left < 120f)
-
-    composeRule.onNodeWithContentDescription("返回").performClick()
-    composeRule.waitForIdle()
-
-    assertEquals(1, actions.size)
-    assertTrue(
-      "leaving the player is 缩小 into the mini window, got ${actions.first()}",
-      actions.first() is UiAction.MinimizePlayer,
-    )
+    assertTrue("the strip is still the chrome", chromeVisible())
+    assertTrue("and it is not a control that leaves the room: $actions", actions.isEmpty())
   }
 
   /**
-   * The danmaku layer starts below the bar, not across it.
+   * The danmaku layer stays above the strip, not across it.
    *
-   * The overlay's top inset was a bare 56dp while the bar is 60dp *before* its status-bar inset, so
-   * the first lane drew itself through the exit arrow and the follow star — over a screen whose
-   * controls are unlabelled and rely on being visible. The two numbers live apart (the bar's padding
-   * and `FULLSCREEN_BAR_HEIGHT`), which is exactly why this compares their laid-out edges instead of
-   * asserting either constant.
+   * It used to be inset by a *top* bar's height (56dp against a 60dp bar); with the chrome at the
+   * bottom now, the thing a label can collide with is the strip. Same assertion shape as before —
+   * compare laid-out edges rather than the constants, so a change to either side fails here.
    */
   @Test
-  fun `the first danmaku label starts below the full screen bar`() {
+  fun `the first danmaku label stays above the strip`() {
     render(
       state = uiState().copy(
         danmaku = listOf(
@@ -351,30 +352,26 @@ class PlayerChromeTest {
     composeRule.mainClock.advanceTimeBy(500L)
     composeRule.waitForIdle()
 
-    val bar = composeRule.onAllNodesWithContentDescription("退出全屏")[0]
+    val exit = composeRule.onAllNodesWithContentDescription("退出全屏")[0]
       .fetchSemanticsNode()
       .boundsInRoot
     val label = composeRule.onNodeWithText("别压着按钮").fetchSemanticsNode().boundsInRoot
 
     assertTrue(
-      "the label starts at ${label.top}, but the bar ends at ${bar.bottom}",
-      label.top >= bar.bottom,
+      "the label ends at ${label.bottom}, the strip starts at ${exit.top}",
+      label.bottom <= exit.top,
     )
   }
 
   /**
-   * A landscape window the *user* turned puts the same way out on the full-screen bar.
+   * A landscape window the *user* turned offers no exit control at all.
    *
-   * Nothing about the landscape player could be asserted before: its layout is derived from the
-   * window, and the only renderer runs at 320x640. Here the decision is passed in, which is also
-   * how `PlayerScreen` answers it — see `fullscreenExitReturnsToPortrait`.
-   *
-   * The side column must lose its fullscreen toggle in the same breath: in a window the user turned
-   * there is no portrait arrangement to land in, so that button could only be a control that does
-   * nothing.
+   * Leaving full screen there would restore exactly the arrangement `playerFullscreen` exists to
+   * avoid, so 退出全屏 is not drawn — and with the back arrow gone (round 144) neither is a 返回. The
+   * way out is the back gesture, which `LiveHubRoot` turns into 缩小.
    */
   @Test
-  fun `a landscape window the user turned puts the way out on the bar`() {
+  fun `a landscape window the user turned offers no exit control`() {
     val actions = mutableListOf<UiAction>()
     render(
       fullscreen = true,
@@ -382,29 +379,22 @@ class PlayerChromeTest {
       onAction = { actions += it },
     )
 
-    assertEquals("the bar keeps one back control", 1, count("返回"))
-    assertEquals("the fullscreen toggle has nowhere to go", 0, count("退出全屏"))
-
-    composeRule.onNodeWithContentDescription("返回").performClick()
-    composeRule.waitForIdle()
-
-    assertEquals(1, actions.size)
-    assertTrue(
-      "back leaves the room in landscape, got ${actions.first()}",
-      actions.first() is UiAction.MinimizePlayer,
-    )
+    assertEquals("no 返回 arrow is drawn any more", 0, count("返回"))
+    assertEquals("and 退出全屏 has nowhere to land", 0, count("退出全屏"))
+    assertTrue("the strip is still there", chromeVisible())
+    assertTrue("nothing was asked of the ViewModel: $actions", actions.isEmpty())
   }
 
   /**
-   * A landscape window the 全屏 *button* asked for keeps both exits, and both leave full screen.
+   * A landscape window the 全屏 *button* asked for keeps exactly one exit, and it releases the lock.
    *
-   * This is the state the two controls disappeared from: the window really was sideways, so the
-   * `landscapeWindow`-keyed branch treated it as "the user rotated" and hid 退出全屏 in favour of
-   * 返回 — which minimises the room instead of releasing the orientation lock the button holds. With
-   * no control left that released it, the button was a one-way door out of the portrait player.
+   * This is the state the two controls once disappeared from: the window really was sideways, so the
+   * `landscapeWindow`-keyed branch treated it as "the user rotated" and hid 退出全屏 — with no arrow
+   * left either, the only way back would have been the thumbnail. Round 133 keyed the decision on the
+   * button's own flag; round 144 left one exit in the strip.
    */
   @Test
-  fun `a landscape window the button asked for keeps both exits`() {
+  fun `a landscape window the button asked for keeps one exit`() {
     val actions = mutableListOf<UiAction>()
     val fullscreenChanges = mutableListOf<Boolean>()
     render(
@@ -414,11 +404,8 @@ class PlayerChromeTest {
       onFullscreenChange = { fullscreenChanges += it },
     )
 
-    assertEquals("the bar offers 退出全屏", 0, count("返回"))
-    assertTrue(
-      "the bar and the side column both exit full screen, got ${count("退出全屏")}",
-      count("退出全屏") >= 2,
-    )
+    assertEquals("no 返回 arrow", 0, count("返回"))
+    assertEquals("the strip offers exactly one 退出全屏", 1, count("退出全屏"))
 
     composeRule.onAllNodesWithContentDescription("退出全屏")[0].performClick()
     composeRule.waitForIdle()
@@ -428,27 +415,26 @@ class PlayerChromeTest {
   }
 
   /**
-   * A vertical stream fills the window, so the action row is not composed — and the star on the
-   * bar is the only follow control left.
+   * A vertical stream keeps 关注 in the strip, because nothing else on screen can follow it.
    *
-   * This branch had no test and no render at all: `videoAspect` is learned from the real
-   * decoder, and every harness replaces the surface. Before this it also had no follow control,
-   * which made a vertical room (every 抖音 room) impossible to follow without leaving it.
+   * The old top bar carried a star here — and in a 16:9 picture too, where it duplicated the action
+   * row. The strip carries the name plus, while the room is unfollowed, one 关注 pill; unfollowing
+   * from the player is not offered.
    */
   @Test
-  fun `a vertical stream keeps follow on the bar`() {
+  fun `a vertical stream offers 关注 in the strip`() {
     val actions = mutableListOf<UiAction>()
     render(videoAspect = 9f / 16f, onAction = { actions += it })
 
     assertEquals(
       "the action row is not drawn for a full-bleed picture",
       0,
-      composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size,
+      composeRule.onAllNodesWithText("关注").fetchSemanticsNodes().size - 1,
     )
-    assertEquals("the bar offers the follow action", 1, count("关注"))
+    assertEquals("exactly one 关注, in the strip", 1, count("关注"))
     composeRule.onNodeWithText("一条小团团").assertIsDisplayed()
 
-    composeRule.onNodeWithContentDescription("关注").performClick()
+    composeRule.onNodeWithText("关注").performClick()
     composeRule.waitForIdle()
 
     assertEquals(1, actions.size)
