@@ -16,7 +16,10 @@ rather than being told "no changes".
     python3 .github/scripts/compare_screenshots.py --self-test
 
 Exit status is 0 when nothing changed beyond the tolerance and no baseline file disappeared, 1
-otherwise. New files are reported but do not fail: adding a render is an intended change.
+otherwise. New files are reported but do not fail: adding a render is an intended change. Both sides
+are searched recursively and matched by file name, because the emulator step pulls the device's
+`livehub-shots/` directory into `ui-screenshots/` rather than flattening it; an empty directory is an
+error (exit 2), not "seventy-one missing renders".
 
 The thresholds themselves are the part that must not drift, so [stats] and [classify] are pure and
 `--self-test` exercises them with synthetic pixels. That is what CI runs (`--self-test`), which is
@@ -51,6 +54,17 @@ def decode(path):
     from PIL import Image
 
     return Image.open(path).convert("RGB")
+
+
+def png_files(directory):
+    """Every PNG under [directory], keyed by file name.
+
+    Recursive on purpose. The emulator step pulls the device's `livehub-shots/` directory *into*
+    `ui-screenshots/`, so the renders sit one level down — and the first version of this comparison
+    therefore reported all 71 baselines as MISSING on its first CI run (round 143). The layout is the
+    emulator suite's business, not this tool's; what the tool needs is "the set of renders".
+    """
+    return {path.name: path for path in sorted(directory.rglob("*.png"))}
 
 
 def measure(base_path, current_path):
@@ -137,15 +151,23 @@ def main():
         print("Pillow is required to compare directories: pip install pillow", file=sys.stderr)
         return 2
 
-    base_names = sorted(p.name for p in args.base.glob("*.png"))
-    current_names = {p.name for p in args.current.glob("*.png")}
+    base = png_files(args.base)
+    current = png_files(args.current)
+    if not base:
+        print(f"no baseline PNGs under {args.base}", file=sys.stderr)
+        return 2
+    # "Nothing to compare" is not "nothing changed": an empty current directory is a broken pull, and
+    # reporting it as 71 missing renders buries the real cause under seventy lines.
+    if not current:
+        print(f"no PNGs under {args.current} — nothing was captured or pulled", file=sys.stderr)
+        return 2
 
     changed, noisy, missing = [], [], []
-    for name in base_names:
-        if name not in current_names:
+    for name, base_path in base.items():
+        if name not in current:
             missing.append(name)
             continue
-        result = measure(args.base / name, args.current / name)
+        result = measure(base_path, current[name])
         if result is None:
             changed.append((name, "size differs"))
             continue
@@ -158,7 +180,7 @@ def main():
             why += f", bbox {bbox}"
         (changed if is_change else noisy).append((name, why))
 
-    new = sorted(current_names - set(base_names))
+    new = sorted(set(current) - set(base))
 
     for name, why in noisy:
         print(f"noise    {name}: {why}")
@@ -170,7 +192,7 @@ def main():
         print(f"new      {name}")
 
     print(
-        f"\n{len(base_names)} baseline renders; "
+        f"\n{len(base)} baseline renders (from {args.base}); "
         f"{len(changed)} changed, {len(missing)} missing, {len(noisy)} within noise, {len(new)} new"
     )
     print(f"tolerance: <= {args.max_pixels}px and channel delta <= {args.max_delta}")
