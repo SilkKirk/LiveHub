@@ -273,18 +273,14 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Row(verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
-          Text("本机", style = MaterialTheme.typography.titleMedium)
+          // The pencil sits on the title line, not next to the name.
+          //
+          // It was next to the name first, and `35-sync-huge-font` showed what that costs: at 2.0×
+          // the name is the longest text in this column, and 48dp of pencil turned 「Pixel 7」 into
+          // 「Pix…」 — the same "secondary control eats the identifier" shape as `33-home-huge-font`
+          // had in round 136. The title is two characters and can afford the button.
           Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-              text = state.deviceName.ifBlank { UNNAMED_DEVICE },
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              // `fill = false` so a short name does not push the pencil to the far edge: the two are
-              // one unit ("this is what I am called, and I can change it").
-              modifier = Modifier.weight(1f, fill = false),
-            )
+            Text("本机", style = MaterialTheme.typography.titleMedium)
             // The name used to be `Build.MANUFACTURER + MODEL`, computed on every read, so two of the
             // same phone were indistinguishable in each other's 我的设备 — and there was nowhere to
             // fix it. The pencil is that place.
@@ -297,6 +293,13 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
               )
             }
           }
+          Text(
+            text = state.deviceName.ifBlank { UNNAMED_DEVICE },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
         // 生成, not 刷新: this button does not re-read the code, it replaces it. The page used to
         // carry three controls whose names all began with 刷新 — this one, the bare 刷新 icon below
