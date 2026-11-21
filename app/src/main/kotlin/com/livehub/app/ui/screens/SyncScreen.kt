@@ -253,6 +253,23 @@ private fun SyncActionsRow(
         Icon(Icons.Filled.Refresh, contentDescription = "刷新设备与同步记录")
       }
     }
+    // Why the button above is grey, in the place a user looks when it is.
+    //
+    // The three reasons it can be disabled were handled unevenly: `localNetworkBlocked` has a red
+    // sentence in the card above, `syncing` renames the button to 同步中…, and "you have not paired
+    // anything yet" — the state every fresh install is in — said nothing at all. The one sentence
+    // that explained it lived in 我的设备, two cards below, which is where a user who is *already*
+    // looking at their device list would read it.
+    //
+    // Not shown while the permission is missing: that reason is more urgent, it already has copy,
+    // and two explanations for one grey button is the duplication round 139 removed everywhere else.
+    if (state.peers.isEmpty() && !state.localNetworkBlocked) {
+      Text(
+        text = "还没有关联设备。点「关联设备」输入对方屏幕上的六位匹配码即可。",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
   }
 }
 
@@ -671,8 +688,11 @@ private fun DeviceListCard(state: UiState, onAction: (UiAction) -> Unit) {
       )
 
       if (state.peers.isEmpty()) {
+        // Just the state of this list. The instruction that used to follow it ("点「关联设备」输入…")
+        // moved up to the action row in round 141: that is where someone whose 立即同步 is grey is
+        // looking, and one instruction in one place is the rule round 139 settled.
         Text(
-          text = "还没有关联设备。点「关联设备」输入对方屏幕上的六位匹配码即可。",
+          text = "还没有关联设备。",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 16.dp),

@@ -360,9 +360,40 @@ class SyncRowsTest {
     )
   }
 
-  private companion object {    /** The page's own box, so "inside the window" means inside what the screen was given. */
-    const val VIEWPORT_TAG = "syncRowsViewport"
+  /**
+   * A grey 立即同步 explains itself, next to itself.
+   *
+   * The button is disabled for three reasons and only one of them had copy: `localNetworkBlocked`
+   * owns a red sentence in the card above, `syncing` renames the button to 同步中…, and "nothing is
+   * paired yet" — the state every fresh install starts in — said nothing where the button is. Its one
+   * explanation sat in 我的设备, two cards below, which is where someone who already found their
+   * device list is looking.
+   */
+  @Test
+  fun `the disabled sync button explains itself`() {
+    render(state().copy(peers = emptyList()))
 
+    // Scrolled to the sentence itself: scrolling to the button would leave the line under it on the
+    // far side of the fold, and an `assertIsDisplayed` on a clipped node is a coin toss.
+    scrollTo(PAIR_FIRST)
+    composeRule.onNodeWithText(PAIR_FIRST).assertIsDisplayed()
+  }
+
+  /** And it goes away the moment there is something to sync with. */
+  @Test
+  fun `the explanation disappears once a device is paired`() {
+    render(state())
+
+    scrollTo("立即同步")
+    composeRule.onNodeWithText(PAIR_FIRST).assertDoesNotExist()
+  }
+
+  private companion object {
+    /** The sentence under a disabled 立即同步; see the two tests above. */
+    const val PAIR_FIRST = "还没有关联设备。点「关联设备」输入对方屏幕上的六位匹配码即可。"
+
+    /** The page's own box, so "inside the window" means inside what the screen was given. */
+    const val VIEWPORT_TAG = "syncRowsViewport"
     /** Ids are `Long` on the models; the literals are written as such to keep the calls typed. */
     const val PEER_ID = 2L
 
