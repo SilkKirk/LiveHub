@@ -1192,6 +1192,20 @@ class ScreenshotTest {
   fun settingsLargeFont() = capture("27-settings-large-font", settingsState(), fontScale = 1.5f)
 
   /**
+   * The settings page at 2.0×, which had never been rendered.
+   *
+   * It was the only screen left without one, and it was the screen where the gap mattered: the three
+   * theme chips are the app's tightest wrapping `FlowRow` (跟随系统 / 深色 / 浅色 need about 300dp on a
+   * 288dp line), and a `FlowRow` spaces its *lines* by nothing by default — so the second line of
+   * chips sat flush against the first. Round 142 added the spacing and this render is what shows it.
+   *
+   * The blocked-keyword card is in the same frame on purpose: its limit (50) is now stated under the
+   * field, and at this scale that supporting line is the tallest thing in the card.
+   */
+  @Test
+  fun settingsHugeFont() = capture("38-settings-huge-font", settingsState(), fontScale = 2.0f)
+
+  /**
    * The player at 1.5×: the action row (关注 / 分享 / 弹幕) and the danmaku list.
    *
    * The action row is the one `Row` in the app with three fixed-size children and no wrap, and the

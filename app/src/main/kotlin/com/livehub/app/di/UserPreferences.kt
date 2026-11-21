@@ -653,6 +653,15 @@ class UserPreferences(private val context: Context) {
 internal const val UNNAMED_DEVICE = "未命名设备"
 
 /**
+ * How many blocked danmaku keywords are kept.
+ *
+ * Lives here rather than in the ViewModel that enforces it, because the settings card has to *state*
+ * the limit: the fifty-first word used to clear the input, add nothing and say nothing, and a limit
+ * nobody can see is indistinguishable from a broken button. Both sides read this one number.
+ */
+internal const val MAX_BLOCKED_KEYWORDS = 50
+
+/**
  * Longest device name kept, in code points.
  *
  * 24 is four times the longest name in the fixtures ("小米平板 6" is six) and comfortably inside the

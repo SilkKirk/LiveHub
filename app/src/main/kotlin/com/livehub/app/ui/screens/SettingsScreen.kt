@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import coil3.SingletonImageLoader
 import com.livehub.app.BuildConfig
+import com.livehub.app.di.MAX_BLOCKED_KEYWORDS
 import com.livehub.app.sync.FollowRefreshWorker
 import com.livehub.app.ui.components.PageHeader
 import com.livehub.app.ui.components.SectionHeader
@@ -129,7 +130,14 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
           )
           // Three states, because "follow the system" is a real choice: a boolean switch
           // could only express two of them and made 浅色 unreachable.
-          FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          // `verticalArrangement` is not decoration: at 2.0x the three chips do not fit one line, and
+          // a `FlowRow` defaults to zero spacing between lines — so 浅色 sat flush against the pills
+          // above it, reading as one two-row control. Every other wrapping chip row in this project
+          // already spaces its lines.
+          FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
             THEME_OPTIONS.forEach { (label, mode) ->
               LiveHubFilterChip(
                 selected = state.themeMode == mode,
@@ -201,11 +209,26 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
             // Filled rather than outlined: the outline was the loudest element on the page, and a
             // filled field is Material's other official variant — the quiet one, which is what a
             // single optional input in a list of settings should be.
+            //
+            // The cap is stated here because this is the field it applies to — and it is the one place
+            // that can say why the 添加 button went grey. It used to be invisible: the fifty-first word
+            // cleared the field, added nothing, and said nothing.
+            val atCap = state.blockedKeywords.size >= MAX_BLOCKED_KEYWORDS
             TextField(
               value = keywordDraft,
               onValueChange = { keywordDraft = it },
               label = { Text("添加屏蔽词") },
               singleLine = true,
+              supportingText = {
+                Text(
+                  text = if (atCap) {
+                    "已达上限 $MAX_BLOCKED_KEYWORDS 个，先移除一个才能再加。"
+                  } else {
+                    "最多 $MAX_BLOCKED_KEYWORDS 个，当前 ${state.blockedKeywords.size} 个。"
+                  },
+                  style = MaterialTheme.typography.labelSmall,
+                )
+              },
               modifier = Modifier.weight(1f),
             )
             TextButton(
@@ -215,6 +238,7 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
                   keywordDraft = ""
                 }
               },
+              enabled = !atCap,
             ) { Text("添加") }
           }
           if (state.blockedKeywords.isEmpty()) {

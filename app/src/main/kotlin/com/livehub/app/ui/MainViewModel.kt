@@ -1491,7 +1491,7 @@ class MainViewModel(
       .map { it.trim() }
       .filter { it.isNotEmpty() }
       .distinctBy { it.lowercase() }
-      .take(50)
+      .take(com.livehub.app.di.MAX_BLOCKED_KEYWORDS)
     container.preferences.setBlockedKeywords(normalized)
     _state.update { it.copy(blockedKeywords = normalized) }
   }
