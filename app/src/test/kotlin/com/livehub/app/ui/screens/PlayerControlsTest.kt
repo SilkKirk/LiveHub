@@ -14,8 +14,10 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.dp
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
@@ -180,12 +182,11 @@ class PlayerControlsTest {
     assertOfficialButton("关注", hasText("关注"))
 
     val chip = composeRule.onNodeWithText("原画").fetchSemanticsNode().boundsInRoot
-    with(composeRule.density) {
-      assertTrue(
-        "清晰度 chip is only ${chip.height.toDp().value}dp tall",
-        chip.height.toDp().value >= 48f,
-      )
-    }
+    val minimum = with(composeRule.density) { 48.dp.roundToPx() }
+    assertTrue(
+      "清晰度 chip is only ${chip.height}px tall, below its ${minimum}px (48dp) minimum",
+      chip.height >= minimum,
+    )
 
     assertEquals(
       "the picture must not draw a back arrow any more: the gesture is the way out",
