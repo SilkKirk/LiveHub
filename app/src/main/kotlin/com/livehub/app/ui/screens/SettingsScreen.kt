@@ -221,15 +221,18 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
               label = { Text("添加屏蔽词") },
               singleLine = true,
               // A filled field's default container is `surfaceContainerHighest`, which this scheme maps
-              // to the card surface — so the input area was pure white on pure white and the only thing
-              // left of it was a 1dp underline. One step down puts the field on the card instead of in
-              // it, which is what "filled" is supposed to look like. `TextField` takes the container
-              // colour per state (unlike `ButtonDefaults.buttonColors`), so the same value is given to
-              // all three states this field can be in.
+              // to `surface` — so the input area was pure white on a pure white card and the only thing
+              // left of it was a 1dp underline. `surfaceContainer` is the one step below the card that
+              // this theme actually defines: `surfaceContainerLow` is also mapped to white here (it is
+              // what `ElevatedCard` and `ModalBottomSheet` read), so pointing the field at that token
+              // changed nothing at all — the first attempt, and the render is what caught it.
+              //
+              // `TextField` takes the container colour per state rather than one `containerColor` (unlike
+              // `Button`), so the same value goes to all three states this field can be in.
               colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
               ),
               supportingText = {
                 Text(
