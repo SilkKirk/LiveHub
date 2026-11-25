@@ -391,9 +391,11 @@ private fun ThisDeviceCard(
           state.localNetworkBlocked ->
             "没有本地网络权限，同步无法使用。请在系统设置里为 LiveHub 打开「附近的设备」后回到本页。"
           localNetworkPromptEnforced ->
-            "系统已允许 LiveHub 访问本地网络，同步只在本机与已配对设备之间进行。"
+            "系统已允许 LiveHub 访问本地网络。"
+          // The Wi-Fi requirement is the page's own subtitle ("同一 Wi-Fi 下与已配对设备增量同步");
+          // repeating it here is the same "one sentence on two cards" shape round 139 removed.
           else ->
-            "同步只在本机与已配对设备之间进行，不需要额外权限；两台设备接在同一个 Wi-Fi 里即可。"
+            "同步只在本机与已配对设备之间进行，不需要额外权限。"
         },
         style = MaterialTheme.typography.labelSmall,
         color = if (state.localNetworkBlocked) {

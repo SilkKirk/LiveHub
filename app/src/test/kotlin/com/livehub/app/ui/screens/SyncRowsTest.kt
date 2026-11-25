@@ -165,9 +165,8 @@ class SyncRowsTest {
   @Test
   fun `a system that asks reports the permission as granted`() {
     render(state(), localNetworkPromptEnforced = true)
-
     composeRule
-      .onNodeWithText("系统已允许 LiveHub 访问本地网络，同步只在本机与已配对设备之间进行。")
+      .onNodeWithText("系统已允许 LiveHub 访问本地网络。")
       .assertExists()
     assertTrue(
       "the other branch's sentence does not belong on this device",
