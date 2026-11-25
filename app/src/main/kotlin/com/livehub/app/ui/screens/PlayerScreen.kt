@@ -590,6 +590,62 @@ internal fun PlayerContent(
           }
         }
 
+        // The thumbnail has no double tap to explain, but it does show the same frozen frame: without a
+        // mark, "I paused this" and "this stream died" are the same picture — including in picture-in-
+        // picture, where the system draws no playback controls for us. Same surface, one word.
+        if (compact && paused && effectiveVariant != null) {
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = Color.Black.copy(alpha = 0.55f),
+            modifier = Modifier.align(Alignment.Center),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(12.dp),
+              )
+              Text(
+                text = "已暂停",
+                color = Color.White.copy(alpha = 0.9f),
+                style = MaterialTheme.typography.labelSmall,
+              )
+            }
+          }
+        }
+
+        // Full screen and a full-bleed vertical picture compose no danmaku panel, so the four states that
+        // panel renders — connecting, connected-but-empty, reconnecting, failed — had no rendering at all
+        // there: a stream whose socket had died and a stream where nobody was talking looked identical,
+        // and the reason the platform gave was available only after leaving full screen. Only the failure
+        // gets a line over the picture; the other three are the normal case, and a red handed to the
+        // overlay would be covering a picture that is working.
+        if (!compact && (fullscreen || verticalFullBleed) && state.danmakuEnabled) {
+          (state.danmakuStatus as? DanmakuStatus.Failed)?.let { failed ->
+            Text(
+              text = "弹幕连接失败：${failed.reason}",
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White.copy(alpha = 0.92f),
+              textAlign = TextAlign.Center,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier
+                .align(Alignment.TopCenter)
+                // Under the status bar, at the top of the picture: the danmaku lanes start there too, but
+                // a failed socket means there are no bubbles to collide with.
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(top = 10.dp, start = 12.dp, end = 12.dp)
+                .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+          }
+        }
+
         // The strip is the last child so it sits above the danmaku overlay and receives taps before
         // the tap-to-toggle-chrome layer underneath it.
         if (!compact && controlsVisible && showsPicture) {

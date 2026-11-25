@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import com.livehub.app.ui.DanmakuStatus
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.designsystem.LiveHubTheme
@@ -322,6 +323,50 @@ class PlayerChromeTest {
       "the name ends at ${name.bottom}, the figure starts at ${viewers.top}",
       viewers.top >= name.bottom,
     )
+  }
+
+  /**
+   * A dead danmaku socket says so over the picture.
+   *
+   * Full screen and the full-bleed vertical layout compose no danmaku panel, so all four states that
+   * panel renders — connecting, connected-but-empty, reconnecting, failed — had no rendering at all
+   * there: a stream whose socket had died and a stream where nobody was talking were the same picture,
+   * and the reason the platform gave was available only after leaving full screen.
+   */
+  @Test
+  fun `a failed danmaku socket says so in full screen`() {
+    render(
+      state = uiState().copy(danmakuStatus = DanmakuStatus.Failed("403 未授权")),
+      fullscreen = true,
+    )
+
+    composeRule.onNodeWithText("弹幕连接失败：403 未授权").assertIsDisplayed()
+  }
+
+  /** And it stays quiet while the socket is fine, so the line means something when it appears. */
+  @Test
+  fun `a working danmaku socket draws no notice`() {
+    render(fullscreen = true)
+
+    assertEquals(
+      "a notice over a working picture would be noise",
+      0,
+      composeRule.onAllNodesWithText("弹幕连接失败", substring = true).fetchSemanticsNodes().size,
+    )
+  }
+
+  /**
+   * The thumbnail says when the frozen frame is a pause.
+   *
+   * The full-size picture has had a badge since round 108; the thumbnail suppressed it with `!compact`,
+   * which left "I paused this" and "this stream died" as the same picture — in picture-in-picture as
+   * well, where the system draws no playback controls of its own.
+   */
+  @Test
+  fun `the thumbnail says when it is paused`() {
+    render(state = uiState().copy(playerPaused = true), compact = true)
+
+    composeRule.onNodeWithText("已暂停").assertIsDisplayed()
   }
 
   // ------------------------------------------ what hides the strip, and what must not hide it ---

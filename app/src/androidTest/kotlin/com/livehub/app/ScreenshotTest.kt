@@ -31,6 +31,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.livehub.app.ui.DanmakuStatus
 import com.livehub.app.ui.LiveHubRoot
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
@@ -940,6 +941,21 @@ class ScreenshotTest {
    */
   @Test
   fun playerVertical() = capture("17e-player-vertical", playerState(), videoAspect = 9f / 16f)
+
+  /**
+   * A dead danmaku socket in full screen.
+   *
+   * Full screen composes no danmaku panel, and that panel is the only place the socket's own state was
+   * rendered — so this state used to be an ordinary-looking picture: the platform's reason ("403 未授权")
+   * was reachable only by leaving full screen, and a stream with no chat looked exactly like a stream
+   * whose chat had died.
+   */
+  @Test
+  fun playerFullscreenDanmakuFailed() = capture(
+    "17f-player-fullscreen-danmaku-failed",
+    playerState().copy(danmaku = emptyList(), danmakuStatus = DanmakuStatus.Failed("403 未授权")),
+    fullscreen = true,
+  )
 
   /**
    * The loading, offline and error renders must differ from the playing one.
