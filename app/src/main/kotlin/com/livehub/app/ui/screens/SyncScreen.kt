@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
 import com.livehub.app.di.UNNAMED_DEVICE
+import com.livehub.app.sync.LocalNetworkAccess
 import com.livehub.app.ui.components.PageHeader
 import com.livehub.app.ui.components.SectionHeader
 import com.livehub.app.ui.components.listRowColors
@@ -87,7 +88,20 @@ import java.util.Date
  * readable at a glance instead of line by line.
  */
 @Composable
-fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
+fun SyncScreen(
+  state: UiState,
+  onAction: (UiAction) -> Unit,
+  /**
+   * Whether this OS asks for local-network access at all.
+   *
+   * A property of the *device*, not of the session: from `LocalNetworkAccess.REQUIRED_FROM_SDK` the
+   * system raises its own sheet the first time anything touches the LAN, and below that it never asks
+   * anything. Defaulted from the SDK so the app gets the device's real answer, and a parameter so both
+   * pieces of copy can be rendered — Robolectric here can only run one SDK level, and the sentence this
+   * decides is the one that used to be wrong on every device that does not ask.
+   */
+  localNetworkPromptEnforced: Boolean = LocalNetworkAccess.enforced(android.os.Build.VERSION.SDK_INT),
+) {
   val locale = LocalConfiguration.current.locales[0]
   val timeFormat = remember(locale) { SimpleDateFormat("MM-dd HH:mm", locale) }
   var showCodeDialog by remember { mutableStateOf(false) }
@@ -131,7 +145,7 @@ fun SyncScreen(state: UiState, onAction: (UiAction) -> Unit) {
       )
     }
 
-    item { ThisDeviceCard(shownState, onAction) }
+    item { ThisDeviceCard(shownState, onAction, localNetworkPromptEnforced) }
 
     item { SyncActionsRow(state, onAction, onOpenMatchingCode = { showCodeDialog = true }) }
 
@@ -281,7 +295,11 @@ private fun SyncActionsRow(
  * other device needs.
  */
 @Composable
-private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
+private fun ThisDeviceCard(
+  state: UiState,
+  onAction: (UiAction) -> Unit,
+  localNetworkPromptEnforced: Boolean,
+) {
   // The rename dialog is page state, not ViewModel state: it holds nothing but a draft string, and a
   // rotation that dropped it is the safe direction (the name is only written on 保存).
   var renaming by remember { mutableStateOf(false) }
@@ -361,20 +379,21 @@ private fun ThisDeviceCard(state: UiState, onAction: (UiAction) -> Unit) {
       // cards — one here and one in 同步内容, saying the same things in different words. 同步内容 is
       // the card that exists for it, so this card stopped repeating it.
       //
-      // The system's local-network prompt ("LiveHub 想要连接到本地网络中的设备") is raised by the OS
-      // the first time anything here touches the LAN — not by this screen — so the page has to say
-      // what it is *before* the sheet appears over it. Android 16+ only; on older versions nothing
-      // prompts and the line is simply a sentence about what the feature needs.
-      //
-      // Once the flag is set the prompt has already been answered (denied, or dismissed): saying
-      // "the system will ask you" at that point would be describing something that is not going to
-      // happen, while the sync that the rest of the page promises cannot run.
+      // The permission sentence has three shapes, not two. `localNetworkBlocked` covers "the OS enforces
+      // the permission and it was refused"; the case below it is "this OS never asks" — below
+      // `LocalNetworkAccess.REQUIRED_FROM_SDK` there is no local-network sheet at all, and the copy used
+      // to describe one on every device ("首次进入本页时，系统会询问… 选「不连接」后本页无法配对"), which
+      // is an instruction for a prompt that never appears next to a pairing button that then works.
+      // On the enforcing branch the sheet has already been answered by the time this is on screen, so
+      // the sentence states the outcome instead of predicting it.
       Text(
-        text = if (state.localNetworkBlocked) {
-          "没有本地网络权限，同步无法使用。请在系统设置里为 LiveHub 打开「附近的设备」后回到本页。"
-        } else {
-          "首次进入本页时，系统会询问是否允许 LiveHub 访问本地网络（标题类似「选择要连接的设备」）" +
-            "——那是局域网同步需要的权限。选「不连接」后本页无法配对。"
+        text = when {
+          state.localNetworkBlocked ->
+            "没有本地网络权限，同步无法使用。请在系统设置里为 LiveHub 打开「附近的设备」后回到本页。"
+          localNetworkPromptEnforced ->
+            "系统已允许 LiveHub 访问本地网络，同步只在本机与已配对设备之间进行。"
+          else ->
+            "同步只在本机与已配对设备之间进行，不需要额外权限；两台设备接在同一个 Wi-Fi 里即可。"
         },
         style = MaterialTheme.typography.labelSmall,
         color = if (state.localNetworkBlocked) {

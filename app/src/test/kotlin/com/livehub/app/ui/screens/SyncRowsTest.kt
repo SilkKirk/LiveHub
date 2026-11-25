@@ -116,15 +116,63 @@ class SyncRowsTest {
    * Composed inside [LiveHubTheme] because these rows are laid out by Material's type scale and
    * 56/72dp minimum heights, which the theme is what supplies.
    */
-  private fun render(state: UiState, onAction: (UiAction) -> Unit = {}) {
+  private fun render(
+    state: UiState,
+    onAction: (UiAction) -> Unit = {},
+    /**
+     * Defaulted to `false`: the emulator this suite runs on is API 34, where the OS never raises a
+     * local-network sheet. The other branch is rendered explicitly by its own test.
+     */
+    localNetworkPromptEnforced: Boolean = false,
+  ) {
     composeRule.setContent {
       LiveHubTheme {
         Box(modifier = Modifier.size(320.dp, 640.dp).testTag(VIEWPORT_TAG)) {
-          SyncScreen(state = state, onAction = onAction)
+          SyncScreen(
+            state = state,
+            onAction = onAction,
+            localNetworkPromptEnforced = localNetworkPromptEnforced,
+          )
         }
       }
     }
     composeRule.waitForIdle()
+  }
+
+  /**
+   * On a system that never asks, the page does not promise a prompt.
+   *
+   * Below `LocalNetworkAccess.REQUIRED_FROM_SDK` there is no local-network sheet at all, and the copy
+   * used to read「首次进入本页时，系统会询问是否允许 LiveHub 访问本地网络…选「不连接」后本页无法配对」
+   * on every device — an instruction for something that never happens, on the first screen a new user
+   * opens, next to a pairing button that then worked.
+   */
+  @Test
+  fun `a system that never asks is not told to expect a prompt`() {
+    render(state(), localNetworkPromptEnforced = false)
+
+    assertTrue(
+      "the page still promises a system prompt that this device will never show",
+      composeRule.onAllNodesWithText("系统会询问", substring = true).fetchSemanticsNodes().isEmpty(),
+    )
+    assertTrue(
+      "and it still warns about a refusal that cannot happen here",
+      composeRule.onAllNodesWithText("无法配对", substring = true).fetchSemanticsNodes().isEmpty(),
+    )
+  }
+
+  /** On a system that does enforce it, the page reports the answer instead of predicting the question. */
+  @Test
+  fun `a system that asks reports the permission as granted`() {
+    render(state(), localNetworkPromptEnforced = true)
+
+    composeRule
+      .onNodeWithText("系统已允许 LiveHub 访问本地网络，同步只在本机与已配对设备之间进行。")
+      .assertExists()
+    assertTrue(
+      "the other branch's sentence does not belong on this device",
+      composeRule.onAllNodesWithText("不需要额外权限", substring = true).fetchSemanticsNodes().isEmpty(),
+    )
   }
 
   /** The page is a `LazyColumn`: a row below the fold is not composed until it is scrolled to. */
