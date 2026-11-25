@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -70,11 +71,13 @@ class SearchPlatformSwitchTest {
    * assertion — a chip that exists but cannot be scrolled to fails here rather than passing on a
    * render where it happens to fit.
    *
-   * This screen has exactly one scrollable in these fixtures (no results, no history), so the
-   * bare `hasScrollAction()` is unambiguous.
+   * The row is identified by the 全部 chip it leads with rather than by `hasScrollAction()` alone:
+   * since round 148 the idle message is itself scrollable (that is what stopped a bigger text size
+   * from clipping it), so on these fixtures there are two scrollables and a bare matcher is ambiguous.
    */
   private fun scrollChipsTo(label: String) {
-    composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(label))
+    composeRule.onNode(hasScrollAction() and hasAnyDescendant(hasText("全部")))
+      .performScrollToNode(hasText(label))
     composeRule.waitForIdle()
   }
 
