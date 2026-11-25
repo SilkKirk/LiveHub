@@ -343,6 +343,19 @@ class PlayerChromeTest {
   }
 
   /**
+   * Lets a state write from the test land.
+   *
+   * 500ms rather than one frame: the recomposition a test-driven write schedules is what creates the
+   * new `remember` (or runs the `LaunchedEffect` that follows the change), and a single 16ms frame
+   * can still be showing the tree it replaced — both of these tests failed that way on their first
+   * CI run. 500ms stays well below the 3s deadline, so no timer in the player moves.
+   */
+  private fun settle() {
+    composeRule.mainClock.advanceTimeBy(500L)
+    composeRule.waitForIdle()
+  }
+
+  /**
    * A room the user just opened starts with its controls on screen.
    *
    * `controlsVisible` was a bare `remember` while this composable is one call site for every room, so
@@ -360,8 +373,7 @@ class PlayerChromeTest {
     state.value = state.value.copy(
       room = room.copy(roomId = "2", streamerName = "另一个主播"),
     )
-    composeRule.mainClock.advanceTimeByFrame()
-    composeRule.waitForIdle()
+    settle()
 
     assertTrue("a freshly opened room must show its controls", chromeVisible())
   }
@@ -384,8 +396,7 @@ class PlayerChromeTest {
     composeRule.waitForIdle()
 
     compact.value = false
-    composeRule.mainClock.advanceTimeByFrame()
-    composeRule.waitForIdle()
+    settle()
 
     assertTrue("expanding must not land on a picture with no controls", chromeVisible())
   }
@@ -410,8 +421,7 @@ class PlayerChromeTest {
     assertTrue("the countdown must not run under an open panel", chromeVisible())
 
     settingsOpen.value = false
-    composeRule.mainClock.advanceTimeByFrame()
-    composeRule.waitForIdle()
+    settle()
     assertTrue("closing the panel must leave the strip on screen", chromeVisible())
   }
 
