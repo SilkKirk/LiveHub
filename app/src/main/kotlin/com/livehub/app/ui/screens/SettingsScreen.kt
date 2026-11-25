@@ -223,9 +223,13 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
               // A filled field's default container is `surfaceContainerHighest`, which this scheme maps
               // to the card surface — so the input area was pure white on pure white and the only thing
               // left of it was a 1dp underline. One step down puts the field on the card instead of in
-              // it, which is what "filled" is supposed to look like.
+              // it, which is what "filled" is supposed to look like. `TextField` takes the container
+              // colour per state (unlike `ButtonDefaults.buttonColors`), so the same value is given to
+              // all three states this field can be in.
               colors = TextFieldDefaults.colors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
               ),
               supportingText = {
                 Text(
