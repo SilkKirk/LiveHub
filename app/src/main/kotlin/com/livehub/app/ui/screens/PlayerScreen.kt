@@ -245,6 +245,7 @@ internal fun PlayerScreen(
         onFullscreenChange = { manualFullscreen = it },
         onOpenSettings = { showSettings = true },
         compact = compact,
+        settingsOpen = showSettings,
         exitReturnsToPortrait = exitReturnsToPortrait,
         onVideoBounds = onVideoBounds,
       )
@@ -341,6 +342,14 @@ internal fun PlayerContent(
    */
   compact: Boolean = false,
   /**
+   * Whether the settings panel is open.
+   *
+   * The panel belongs to [PlayerScreen], one level up, while the strip that opens it lives in this
+   * body — so without this flag the strip's countdown cannot know that the panel it just opened is
+   * still on screen, and expires underneath it. See the `LaunchedEffect` below.
+   */
+  settingsOpen: Boolean = false,
+  /**
    * Whether 退出全屏 has a portrait player to land in.
    *
    * The window being sideways does not answer this on its own — *why* it is sideways does, and the
@@ -370,7 +379,13 @@ internal fun PlayerContent(
   onVideoBounds: (androidx.compose.ui.geometry.Rect?) -> Unit = {},
 ) {
   val variant: StreamVariant? = state.selectedVariant
-  var controlsVisible by remember { mutableStateOf(true) }
+  // Keyed on the room, because this composable is one call site for every room *and* for all three
+  // window sizes. A bare `remember` carried "the strip has timed out" out of the room the user left
+  // and into the room they just opened, so the second room of a session came up with no
+  // 弹幕/清晰度/刷新/全屏 on it until the picture was tapped — and the same value survived the trip
+  // through the thumbnail window, which is the path a user takes by pressing back and then tapping
+  // the corner.
+  var controlsVisible by remember(state.room?.key) { mutableStateOf(true) }
   // Pause lives in `UiState`, not in a `remember`.
   //
   // It used to be a local flag, which made it invisible to everything outside this composable —
@@ -396,11 +411,26 @@ internal fun PlayerContent(
   }
 
   val isPlaying = variant != null && !state.loading
-  LaunchedEffect(controlsVisible, variant?.url, isPlaying, fullscreen) {
-    if (controlsVisible && isPlaying) {
+  // Not while the panel the strip opened is on screen. The countdown knew nothing about that panel,
+  // so 清晰度 → pick a quality → the sheet closed on a picture whose strip had already expired: two
+  // extra taps for every second comparison. In full screen it was worse than annoying — the strip
+  // vanished from *behind* the open panel, which reads as the panel having eaten the controls.
+  LaunchedEffect(controlsVisible, variant?.url, isPlaying, fullscreen, settingsOpen) {
+    if (controlsVisible && isPlaying && !settingsOpen) {
       delay(if (fullscreen) FULLSCREEN_HIDE_DELAY_MILLIS else PORTRAIT_HIDE_DELAY_MILLIS)
       controlsVisible = false
     }
+  }
+  // Closing the panel starts the chrome over, with a fresh countdown: the control the user just used
+  // is the one they are most likely to reach for again.
+  LaunchedEffect(settingsOpen) {
+    if (!settingsOpen) controlsVisible = true
+  }
+  // A thumbnail draws no chrome at all, so "hidden" means nothing while the picture is in the corner
+  // — but the countdown ran there all the same, and expanding landed on a picture already past its
+  // deadline. Expanding starts the chrome over.
+  LaunchedEffect(compact) {
+    if (!compact) controlsVisible = true
   }
 
   val effectiveVariant = variant?.let { current ->

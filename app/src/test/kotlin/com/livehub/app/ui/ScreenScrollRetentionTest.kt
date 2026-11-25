@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
+import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Rule
@@ -104,5 +105,55 @@ class ScreenScrollRetentionTest {
     // Back on the grid, at the position it was left at — not at the top.
     composeRule.onNodeWithText("主播21").assertIsDisplayed()
     composeRule.onNodeWithText("主播1").assertDoesNotExist()
+  }
+
+  /**
+   * Picking another partition puts the grid back at the top of the new list.
+   *
+   * `gridState` survives the list it was scrolling: the ViewModel empties `rooms` and refetches, the
+   * grid is composed again at the index it had reached, and so a partition picked after scrolling a
+   * screen and a half opened on the new list's row sixteen — with nothing above it and no hint that
+   * anything was. Round 145 resets on the selection only; the round trip above is the case that must
+   * keep *not* resetting, and it runs in the same class so the two rules are read together.
+   */
+  @Test
+  fun `another partition starts at the top of its list`() {
+    val categories = listOf(
+      Category(Platform.DOUYU, "1", "英雄联盟", "1", "网游"),
+      Category(Platform.DOUYU, "2", "绝地求生", "1", "网游"),
+    )
+    val state = mutableStateOf(
+      UiState(rooms = rooms, categories = categories, selectedCategory = categories[0]),
+    )
+    composeRule.setContent {
+      LiveHubRoot(state = state.value, onAction = { })
+    }
+    composeRule.waitForIdle()
+
+    val grid = composeRule.onNode(
+      SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange),
+    )
+    grid.performSemanticsAction(SemanticsActions.ScrollToIndex) { it(20) }
+    composeRule.waitForIdle()
+    composeRule.onNodeWithText("主播1").assertDoesNotExist()
+
+    // The ViewModel's own order: the selection changes and the list is emptied in the same state,
+    // the refetch lands after it.
+    state.value = state.value.copy(selectedCategory = categories[1], rooms = emptyList())
+    composeRule.waitForIdle()
+    state.value = state.value.copy(
+      rooms = (1..40).map { index ->
+        Streamer(
+          platform = Platform.DOUYU,
+          roomId = "2-$index",
+          streamerName = "新主播$index",
+          title = "新标题$index",
+          isLive = true,
+        )
+      },
+    )
+    composeRule.waitForIdle()
+
+    composeRule.onNodeWithText("新主播1").assertIsDisplayed()
   }
 }

@@ -398,8 +398,25 @@ private fun PlatformFilterRow(state: UiState, onAction: (UiAction) -> Unit) {
   LaunchedEffect(selectedIndex) {
     withFrameNanos { }
     val measured = listState.layoutInfo
-    if (measured.visibleItemsInfo.isNotEmpty() &&
-      measured.visibleItemsInfo.none { it.index == selectedIndex }
+    // Still nothing measured: kept as its own branch, because treating "not laid out" as "nothing is
+    // visible" is what once scrolled the default selection to the left edge and cut 全部 in half on
+    // the idle screen.
+    if (measured.visibleItemsInfo.isEmpty()) return@LaunchedEffect
+    val selected = measured.visibleItemsInfo.firstOrNull { it.index == selectedIndex }
+    // Asking for the chip at all was the whole test until round 145, and it passed for a chip that
+    // is 28dp on screen out of 62: `visibleItemsInfo` contains partially visible items, so selecting
+    // 哔哩哔哩 left it cut off at the right edge — pink, half a label, unreadable — in the one state
+    // that says which platform is being searched (`11c-search-bilibili`). "Wholly inside the
+    // viewport" is the property that makes the selected chip readable, so that is what is asked.
+    // `scrollToItem` clamps to the row's maximum scroll, so asking for the last chip lands it flush
+    // against the right edge rather than at the left one.
+    if (selected == null ||
+      !selectionIsFullyVisible(
+        offset = selected.offset,
+        size = selected.size,
+        viewportStart = measured.viewportStartOffset,
+        viewportEnd = measured.viewportEndOffset,
+      )
     ) {
       listState.scrollToItem(selectedIndex)
     }
@@ -558,3 +575,20 @@ private fun RecentRoomCard(streamer: Streamer, onClick: () -> Unit) {
  * does not.
  */
 private const val RECENT_ROOM_WIDTH_DP = 120
+
+/**
+ * Whether the chip at [offset] with [size] is wholly inside the viewport.
+ *
+ * Split out of the scroll effect because the numbers this decides on are not reproducible on the
+ * JVM: Robolectric measures 中文 at roughly a pixel per character, so all five chips fit 320dp there
+ * and the row never scrolls. The device render does not agree — the fifth chip starts at 292dp of a
+ * 320dp viewport and is 62dp wide, so a "the selected chip is on screen" assertion was green while
+ * the app drew it cut in half. The rule is a pure function of four integers so it can be pinned
+ * with the device's own numbers.
+ */
+internal fun selectionIsFullyVisible(
+  offset: Int,
+  size: Int,
+  viewportStart: Int,
+  viewportEnd: Int,
+): Boolean = offset >= viewportStart && offset + size <= viewportEnd

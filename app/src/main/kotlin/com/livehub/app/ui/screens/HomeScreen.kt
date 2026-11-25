@@ -259,8 +259,23 @@ private fun PlatformPage(
   //
   // Keyed on the selection, not on the tap: a selection restored from a saved session must not
   // collapse anything, and re-tapping the partition that is already selected must not either.
+  //
+  // The grid goes back to the top for the same reason, and `shownSelection` is what tells "the
+  // selection changed" apart from "this page was just composed again". `gridState` outlives the list
+  // it was scrolling — the ViewModel empties `rooms` and refetches, and the grid re-attached at the
+  // row it had reached — so a partition picked after scrolling a screen and a half opened on the new
+  // list's row sixteen with nothing above it and no hint that anything was above it. A plain
+  // `remember` (not `rememberSaveable`) starts at the *current* selection after a trip to the
+  // player, which is what keeps that trip from looking like a selection change and throwing away the
+  // position `SaveableStateHolder` just restored.
+  var shownSelection by remember { mutableStateOf(selectionToken(state)) }
   LaunchedEffect(state.selectedCategory?.key, state.selectedSubCategory?.key) {
     expanded = false
+    val selection = selectionToken(state)
+    if (selection != shownSelection) {
+      shownSelection = selection
+      gridState.scrollToItem(0)
+    }
   }
 
   // The category tree folds away while the user is reading the grid, and comes back the moment the
@@ -744,3 +759,17 @@ private fun ChevronButton(expanded: Boolean, onClick: () -> Unit) {
     )
   }
 }
+
+/**
+ * What the grid is currently a list *of*.
+ *
+ * Both halves of the selection, because 网游 → 英雄联盟 and 网游 → 绝地求生 are two different lists with
+ * the same group open, and a third level is a third list again. The platform is in here as well so a
+ * value that outlived its page cannot be mistaken for the new page's selection.
+ *
+ * Empty string rather than a placeholder for "no third level": a category id is never empty, so
+ * `null` and `""` cannot collide with a real selection.
+ */
+internal fun selectionToken(state: UiState): String =
+  "${state.platform.id}/${state.selectedCategory?.key.orEmpty()}/" +
+    state.selectedSubCategory?.key.orEmpty()

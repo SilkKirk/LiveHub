@@ -2,6 +2,8 @@ package com.livehub.app.ui.screens
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
@@ -297,6 +299,120 @@ class PlayerChromeTest {
     render(state = uiState().copy(playerPaused = true))
 
     composeRule.onNodeWithText("已暂停 · 双击继续").assertIsDisplayed()
+  }
+
+  // ------------------------------------------ what hides the strip, and what must not hide it ---
+  //
+  // Round 144 moved every control into a strip that hides itself, and the flag that says whether it
+  // is showing is the only state in `PlayerContent` that belongs to neither `UiState` nor layout.
+  // Three paths let that flag outlive the reason it was hidden; all three are "something the user did
+  // not change is being treated as 'the strip has timed out'".
+
+  /**
+   * Composes the player body around state the test can change afterwards.
+   *
+   * [render] hands `PlayerContent` fixed arguments, which answers "what does this arrangement look
+   * like" and cannot answer "what happens to the strip when the room changes": that change has to
+   * arrive as a recomposition of the *same* composable, which is what the device does — one call
+   * site serves every room and all three window sizes.
+   */
+  private fun renderBody(
+    state: MutableState<UiState>,
+    compact: MutableState<Boolean> = mutableStateOf(false),
+    settingsOpen: MutableState<Boolean> = mutableStateOf(false),
+  ) {
+    composeRule.mainClock.autoAdvance = false
+    composeRule.setContent {
+      LiveHubTheme {
+        PlayerContent(
+          state = state.value,
+          onAction = {},
+          // Full screen because that is where the countdown is shortest (3s), and because a bare
+          // picture there has nothing below it to fall back on.
+          fullscreen = true,
+          onFullscreenChange = {},
+          onOpenSettings = {},
+          videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
+          compact = compact.value,
+          settingsOpen = settingsOpen.value,
+        )
+      }
+    }
+    composeRule.mainClock.advanceTimeByFrame()
+    composeRule.waitForIdle()
+  }
+
+  /**
+   * A room the user just opened starts with its controls on screen.
+   *
+   * `controlsVisible` was a bare `remember` while this composable is one call site for every room, so
+   * "the strip timed out in the room I left" was still true in the room I opened: the second room of
+   * a session came up bare, and 清晰度/刷新/全屏 were reachable only by tapping a picture that gave no
+   * sign they existed.
+   */
+  @Test
+  fun `a room the user just opened starts with its strip`() {
+    val state = mutableStateOf(uiState())
+    renderBody(state = state)
+
+    hideChrome()
+
+    state.value = state.value.copy(
+      room = room.copy(roomId = "2", streamerName = "另一个主播"),
+    )
+    composeRule.mainClock.advanceTimeByFrame()
+    composeRule.waitForIdle()
+
+    assertTrue("a freshly opened room must show its controls", chromeVisible())
+  }
+
+  /**
+   * Expanding the thumbnail starts the chrome over, instead of inheriting its deadline.
+   *
+   * A thumbnail draws no chrome, so "hidden" means nothing there — but the countdown ran in the
+   * corner all the same, and the picture came back full size already past its deadline. Back, then
+   * tap the corner, is the ordinary way back into a stream.
+   */
+  @Test
+  fun `expanding the thumbnail starts the strip over`() {
+    val state = mutableStateOf(uiState())
+    val compact = mutableStateOf(true)
+    renderBody(state = state, compact = compact)
+
+    // Five seconds in the corner: twice the full-screen deadline.
+    composeRule.mainClock.advanceTimeBy(5_000L)
+    composeRule.waitForIdle()
+
+    compact.value = false
+    composeRule.mainClock.advanceTimeByFrame()
+    composeRule.waitForIdle()
+
+    assertTrue("expanding must not land on a picture with no controls", chromeVisible())
+  }
+
+  /**
+   * The panel the strip opened does not get to watch the strip expire underneath it.
+   *
+   * 清晰度 opens the settings sheet, and the countdown knew nothing about it: pick a quality, close
+   * the sheet, and the picture has no strip — two extra taps for every second comparison. In full
+   * screen the strip disappeared from behind the open panel, which reads as the panel having eaten
+   * the controls.
+   */
+  @Test
+  fun `the settings panel keeps the strip on screen`() {
+    val state = mutableStateOf(uiState())
+    val settingsOpen = mutableStateOf(true)
+    renderBody(state = state, settingsOpen = settingsOpen)
+
+    // Well past the deadline: the user is looking at the panel, not at the picture.
+    composeRule.mainClock.advanceTimeBy(6_000L)
+    composeRule.waitForIdle()
+    assertTrue("the countdown must not run under an open panel", chromeVisible())
+
+    settingsOpen.value = false
+    composeRule.mainClock.advanceTimeByFrame()
+    composeRule.waitForIdle()
+    assertTrue("closing the panel must leave the strip on screen", chromeVisible())
   }
 
   // ------------------------------------------------------------- the way out ---

@@ -17,6 +17,7 @@ import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Platform
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -120,6 +121,36 @@ class SearchPlatformSwitchTest {
     assertTrue(
       "B站 ends at ${bounds.right}px in a ${windowWidth}px window, so the row did not scroll",
       bounds.right <= windowWidth,
+    )
+  }
+
+  /**
+   * The rule the row scrolls by, pinned with the device's own numbers.
+   *
+   * The test above cannot fail on the JVM: Robolectric measures 中文 at roughly a pixel per
+   * character, so five chips fit 320dp there and the row never needs to scroll. On the device it
+   * does — each chip is 62dp, the gap is 8dp, the leading padding is 12dp, so the fifth chip starts
+   * at 292dp and runs to 354dp in a 320dp viewport. The render `11c-search-bilibili` shows what the
+   * old rule ("is the chip in `visibleItemsInfo` at all") accepted: the *selected* chip, pink and cut
+   * in half, its label unreadable. This is the same decision asked as a function of four integers.
+   */
+  @Test
+  fun `a chip that is only half inside the viewport is not visible enough`() {
+    assertFalse(
+      "the fifth chip runs from 292 to 354 in a 320px viewport",
+      selectionIsFullyVisible(offset = 292, size = 62, viewportStart = 0, viewportEnd = 320),
+    )
+    assertFalse(
+      "a chip whose left edge is behind the viewport is not wholly inside either",
+      selectionIsFullyVisible(offset = -8, size = 62, viewportStart = 0, viewportEnd = 320),
+    )
+    assertTrue(
+      "the first chip is wholly inside",
+      selectionIsFullyVisible(offset = 0, size = 62, viewportStart = 0, viewportEnd = 320),
+    )
+    assertTrue(
+      "and a scrolled row is the case the scroll exists for: 246 + 62 = 308",
+      selectionIsFullyVisible(offset = 246, size = 62, viewportStart = 0, viewportEnd = 320),
     )
   }
 
