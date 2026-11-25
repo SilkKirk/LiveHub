@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.printToString
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.designsystem.LiveHubTheme
@@ -320,6 +321,7 @@ class PlayerChromeTest {
     state: MutableState<UiState>,
     compact: MutableState<Boolean> = mutableStateOf(false),
     settingsOpen: MutableState<Boolean> = mutableStateOf(false),
+    fullscreen: Boolean = true,
   ) {
     composeRule.mainClock.autoAdvance = false
     composeRule.setContent {
@@ -327,9 +329,9 @@ class PlayerChromeTest {
         PlayerContent(
           state = state.value,
           onAction = {},
-          // Full screen because that is where the countdown is shortest (3s), and because a bare
-          // picture there has nothing below it to fall back on.
-          fullscreen = true,
+          // Full screen by default: that is where the countdown is shortest (3s), and a bare picture
+          // there has nothing below it to fall back on.
+          fullscreen = fullscreen,
           onFullscreenChange = {},
           onOpenSettings = {},
           videoSurface = { surfaceModifier -> Box(surfaceModifier.fillMaxSize()) },
@@ -342,18 +344,22 @@ class PlayerChromeTest {
     composeRule.waitForIdle()
   }
 
-  /**
-   * Lets a state write from the test land.
-   *
-   * 500ms rather than one frame: the recomposition a test-driven write schedules is what creates the
-   * new `remember` (or runs the `LaunchedEffect` that follows the change), and a single 16ms frame
-   * can still be showing the tree it replaced — both of these tests failed that way on their first
-   * CI run. 500ms stays well below the 3s deadline, so no timer in the player moves.
-   */
+  /** Many frames of virtual time, still short of the 3s the strip gives itself. */
   private fun settle() {
     composeRule.mainClock.advanceTimeBy(500L)
     composeRule.waitForIdle()
   }
+
+  /**
+   * What was on screen, for a failure message.
+   *
+   * "The control did not come back" cannot be told apart from the message alone between "the state
+   * never changed", "the change did not reach the composition" and "the strip is drawn but empty".
+   * Counting the controls plus dumping the tree answers which of the three it was.
+   */
+  private fun screenDump(): String =
+    "刷新=${count("刷新")} 退出全屏=${count("退出全屏")}\n" +
+      composeRule.onRoot().printToString(maxDepth = 30)
 
   /**
    * A room the user just opened starts with its controls on screen.
@@ -366,16 +372,29 @@ class PlayerChromeTest {
   @Test
   fun `a room the user just opened starts with its strip`() {
     val state = mutableStateOf(uiState())
-    renderBody(state = state)
+    // Portrait, so the action row below the picture can prove the room change reached the
+    // composition at all — the strip itself is what is in question.
+    renderBody(state = state, fullscreen = false)
 
-    hideChrome()
+    assertTrue("the strip is drawn when the player opens: ${screenDump()}", chromeVisible())
 
-    state.value = state.value.copy(
-      room = room.copy(roomId = "2", streamerName = "另一个主播"),
-    )
+    // Portrait hides it after 4s, not 3.
+    composeRule.mainClock.advanceTimeBy(4_500L)
+    composeRule.waitForIdle()
+    assertFalse("the strip times out on its own: ${screenDump()}", chromeVisible())
+
+    // `runOnIdle`, not a bare write: the clock is frozen, and a write from the test thread only
+    // reaches the composition when the snapshot is applied — which `runOnIdle` does and a plain
+    // assignment does not. Two rounds of "the strip did not come back" were this.
+    composeRule.runOnIdle {
+      state.value = state.value.copy(
+        room = room.copy(roomId = "2", streamerName = "另一个主播"),
+      )
+    }
     settle()
 
-    assertTrue("a freshly opened room must show its controls", chromeVisible())
+    composeRule.onNodeWithText("另一个主播").assertExists()
+    assertTrue("a freshly opened room must show its controls: ${screenDump()}", chromeVisible())
   }
 
   /**
@@ -388,17 +407,26 @@ class PlayerChromeTest {
   @Test
   fun `expanding the thumbnail starts the strip over`() {
     val state = mutableStateOf(uiState())
-    val compact = mutableStateOf(true)
+    val compact = mutableStateOf(false)
     renderBody(state = state, compact = compact)
 
-    // Five seconds in the corner: twice the full-screen deadline.
+    assertTrue("the strip is drawn when the player opens: ${screenDump()}", chromeVisible())
+
+    composeRule.runOnIdle { compact.value = true }
+    settle()
+    assertEquals("a thumbnail draws no chrome: ${screenDump()}", 0, count("刷新"))
+
+    // Five seconds in the corner: past the deadline the strip would have had.
     composeRule.mainClock.advanceTimeBy(5_000L)
     composeRule.waitForIdle()
 
-    compact.value = false
+    composeRule.runOnIdle { compact.value = false }
     settle()
 
-    assertTrue("expanding must not land on a picture with no controls", chromeVisible())
+    assertTrue(
+      "expanding must not land on a picture with no controls: ${screenDump()}",
+      chromeVisible(),
+    )
   }
 
   /**
@@ -420,7 +448,7 @@ class PlayerChromeTest {
     composeRule.waitForIdle()
     assertTrue("the countdown must not run under an open panel", chromeVisible())
 
-    settingsOpen.value = false
+    composeRule.runOnIdle { settingsOpen.value = false }
     settle()
     assertTrue("closing the panel must leave the strip on screen", chromeVisible())
   }
