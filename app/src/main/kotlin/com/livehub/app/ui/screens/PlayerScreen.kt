@@ -932,7 +932,12 @@ private fun StripQualityChip(label: String, onClick: () -> Unit) {
     shape = RoundedCornerShape(19.dp),
     color = Color.White.copy(alpha = 0.10f),
     border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
-    modifier = Modifier.heightIn(min = 48.dp),
+    // A ceiling on the label's width, because this pill sits in a `Row` with two 48dp buttons that have
+    // no weight: a long quality name (a platform that publishes "蓝光20M", or the "清晰度" fallback at a
+    // 2.0× text size) measured the *buttons* down to zero width instead of being clipped, so 刷新 and
+    // 全屏 disappeared rather than the label getting shorter. The ceiling makes the label the thing that
+    // gives way. Measured labels today are 81dp at 2.0×, so nothing on screen moves.
+    modifier = Modifier.heightIn(min = 48.dp).widthIn(max = 96.dp),
   ) {
     Box(
       modifier = Modifier.padding(horizontal = 14.dp).heightIn(min = 38.dp),
@@ -943,6 +948,7 @@ private fun StripQualityChip(label: String, onClick: () -> Unit) {
         color = Color.White.copy(alpha = 0.92f),
         style = MaterialTheme.typography.labelMedium,
         maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
       )
     }
   }

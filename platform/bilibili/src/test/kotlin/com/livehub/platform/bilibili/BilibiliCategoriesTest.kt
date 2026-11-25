@@ -86,8 +86,11 @@ class BilibiliCategoriesTest {
   }
   @Test
   fun `the hot tab is distinguishable from a real area`() {
-    assertEquals("0:0", BilibiliCategories.HOT_ID)
-    assertEquals(0 to 0, BilibiliCategories.idsOf(BilibiliCategories.HOT_ID))
+    // The literal, not a constant from the adapter: `0:0` is Bilibili's own id for the hot tab, and the
+    // app addresses that tab through `Category.ALL_ID` instead (see the note where `HOT_ID` used to be).
+    // What has to keep working is the parse — an id of that shape is what a saved selection and the
+    // reference client carry.
+    assertEquals(0 to 0, BilibiliCategories.idsOf("0:0"))
   }
 
   @Test

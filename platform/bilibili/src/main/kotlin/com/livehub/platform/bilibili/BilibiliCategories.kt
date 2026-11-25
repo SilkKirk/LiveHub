@@ -29,8 +29,13 @@ object BilibiliCategories {
 
   private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-  /** Hot tab: the only combination served by `index/getList` rather than `second/getList`. */
-  const val HOT_ID = "0:0"
+  // `HOT_ID = "0:0"` used to live here. It is Bilibili's own id for the hot tab, and this adapter no
+  // longer addresses the hot tab by id at all: the row's aggregate entry is `Category.ALL_ID` ("all"),
+  // and `BilibiliArea.decode` maps anything that is not a `parent:area` pair — including that marker —
+  // to `BilibiliArea.HOT`. The constant therefore had no reader left except its own test, and a
+  // documented-looking constant that nothing reads is worse than no constant: it reads like the id the
+  // UI produces. `BilibiliCategoriesTest` still pins that `0:0` parses to the hot area, because that is
+  // the id older selections and the reference client use.
 
   fun parse(raw: String?): List<Category> {
     if (raw.isNullOrBlank()) return emptyList()

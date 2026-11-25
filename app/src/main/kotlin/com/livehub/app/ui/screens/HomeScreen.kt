@@ -198,9 +198,11 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
       beyondViewportPageCount = 0,
       key = { index -> Platform.entries[index].name },
     ) { page ->
-      // Only the settled page renders real content. A page mid-swipe shows its skeleton, because
-      // its rooms belong to the platform that is about to become current and the ViewModel has
-      // not fetched them yet.
+      // Only the current page renders real content. A page mid-swipe shows its skeleton, because its
+      // rooms belong to the platform that is about to become current and the ViewModel has not fetched
+      // them yet — `state.rooms` still holds the platform being swiped away from. Without this the
+      // incoming half of the drag was a copy of the outgoing half's grid, while the tab indicator had
+      // already moved: "虎牙 is selected" over 斗鱼's tiles, until the finger lifted.
       val isCurrent = Platform.entries[page] == state.platform
       PlatformPage(
         state = state,
@@ -219,9 +221,13 @@ fun HomeScreen(state: UiState, onAction: (UiAction) -> Unit) {
  * a swipe. Everything it reads that is *per platform* — the tree, the group being browsed, the
  * grid — is either passed in through [state] (which the ViewModel swaps when the platform changes)
  * or remembered locally, keyed on the platform so a swipe back restores it.
+ *
+ * Internal rather than private so a test can compose the page it is *not* on: "the incoming half of a
+ * drag does not draw the outgoing platform's rooms" is a claim about [isCurrent], and the pager only
+ * produces that state mid-gesture.
  */
 @Composable
-private fun PlatformPage(
+internal fun PlatformPage(
   state: UiState,
   isCurrent: Boolean,
   onAction: (UiAction) -> Unit,
@@ -344,6 +350,11 @@ private fun PlatformPage(
         }
         Box(modifier = Modifier.weight(1f)) {
           when {
+            // A page the pager is dragging in. Its rooms belong to the platform that is about to become
+            // current and the ViewModel has not fetched them; `state.rooms` still holds the platform
+            // being swiped away, so drawing them here made the incoming half of the drag a copy of the
+            // outgoing half while the tab indicator had already moved.
+            !isCurrent -> StreamerGridSkeleton()
             state.rooms.isEmpty() && state.loading -> StreamerGridSkeleton()
             state.rooms.isEmpty() && state.error != null ->
               ErrorState(message = state.error, onRetry = { onAction(UiAction.Refresh) })
