@@ -23,9 +23,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,8 +72,12 @@ fun SpecialFollowRow(
 ) {
   val listState = rememberLazyListState()
   var draggingKey by remember { mutableStateOf<String?>(null) }
-  var dragOffset by remember { mutableFloatStateOf(0f) }
   val density = androidx.compose.ui.platform.LocalDensity.current.density
+  // The dragged avatar has to be re-measured against the *current* order, and the gesture handler below
+  // must not be re-created while the finger is down — so the handler reads the list through this
+  // instead of capturing the parameter. See `AvatarReorder`.
+  val latest by rememberUpdatedState(streamers)
+  val reorderDrag = remember(density) { AvatarReorder((AVATAR_SIZE_DP + AVATAR_GAP_DP) * density) }
 
   LazyRow(
     state = listState,
@@ -109,31 +113,21 @@ fun SpecialFollowRow(
             detectDragGesturesAfterLongPress(
               onDragStart = {
                 draggingKey = streamer.key
-                dragOffset = 0f
+                reorderDrag.start()
               },
               onDragEnd = {
                 draggingKey = null
-                dragOffset = 0f
+                reorderDrag.start()
               },
               onDragCancel = {
                 draggingKey = null
-                dragOffset = 0f
+                reorderDrag.start()
               },
               onDrag = { _, dragAmount ->
-                // The strip scrolls horizontally, so the delta that addresses a slot is x. One
-                // slot is the avatar plus the gap, read from the same constants the row uses.
-                dragOffset += dragAmount.x
-                val slotPx = (AVATAR_SIZE_DP + AVATAR_GAP_DP) * density
-                val steps = (dragOffset / slotPx).toInt()
-                if (steps != 0) {
-                  val current = streamers.indexOfFirst { it.key == streamer.key }
-                  if (current >= 0) {
-                    val target = (current + steps).coerceIn(0, streamers.lastIndex)
-                    if (target != current) {
-                      onReorder(streamer, target)
-                      dragOffset = 0f
-                    }
-                  }
+                // The strip scrolls horizontally, so the delta that addresses a slot is x. One slot is
+                // the avatar plus the gap, read from the same constants the row uses.
+                reorderDrag.nextTarget(dragAmount.x, latest, streamer.key)?.let { target ->
+                  onReorder(streamer, target)
                 }
               },
             )
