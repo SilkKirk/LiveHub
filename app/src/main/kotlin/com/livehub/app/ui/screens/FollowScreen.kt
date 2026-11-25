@@ -606,8 +606,9 @@ private fun FollowGrid(
     // Same reserve as the home grid: the floating player sits over this grid's bottom-right corner and
     // a last row underneath it could not be read or scrolled clear. See `MINI_PLAYER_CLEARANCE`.
     contentPadding = PaddingValues(
-      horizontal = 12.dp,
+      start = 12.dp,
       top = 10.dp,
+      end = 12.dp,
       bottom = if (miniPlayer) MINI_PLAYER_CLEARANCE else 10.dp,
     ),
     horizontalArrangement = Arrangement.spacedBy(10.dp),

@@ -380,8 +380,9 @@ private fun RoomGrid(
     // that ends under it cannot be read or scrolled out from under it — the grid stops at its content.
     // See `MINI_PLAYER_CLEARANCE`.
     contentPadding = PaddingValues(
-      horizontal = 12.dp,
+      start = 12.dp,
       top = 10.dp,
+      end = 12.dp,
       bottom = if (state.miniPlayer) MINI_PLAYER_CLEARANCE else 10.dp,
     ),
     horizontalArrangement = Arrangement.spacedBy(10.dp),
