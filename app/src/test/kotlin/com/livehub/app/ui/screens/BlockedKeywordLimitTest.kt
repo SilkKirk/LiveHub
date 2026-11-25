@@ -4,10 +4,12 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
 import com.livehub.app.di.MAX_BLOCKED_KEYWORDS
 import com.livehub.app.ui.Screen
 import com.livehub.app.ui.UiState
@@ -58,9 +60,11 @@ class BlockedKeywordLimitTest {
     render(listOf("广告", "刷屏", "666"))
 
     scrollTo("最多 $MAX_BLOCKED_KEYWORDS 个，当前 3 个。")
-
     composeRule.onNodeWithText("最多 $MAX_BLOCKED_KEYWORDS 个，当前 3 个。").assertIsDisplayed()
     scrollTo("添加")
+    // A word has to be in the field for 添加 to be live — see `the add button is off while the field is
+    // empty` below. What this test is about is that the cap is not what is holding it back.
+    typeDraft("剧组")
     composeRule.onNodeWithText("添加").assertIsEnabled()
   }
 
@@ -73,6 +77,8 @@ class BlockedKeywordLimitTest {
 
     composeRule.onNodeWithText(why).assertIsDisplayed()
     scrollTo("添加")
+    // A word in the field, so the cap is the only reason the button is off.
+    typeDraft("剧组")
     composeRule.onNodeWithText("添加").assertIsNotEnabled()
   }
 
@@ -82,7 +88,29 @@ class BlockedKeywordLimitTest {
     render(List(MAX_BLOCKED_KEYWORDS - 1) { "词$it" })
 
     scrollTo("添加")
+    typeDraft("剧组")
 
     composeRule.onNodeWithText("添加").assertIsEnabled()
+  }
+
+  /**
+   * With an empty field there is nothing to add, and the button says so.
+   *
+   * `enabled = !atCap` alone left 添加 looking live and doing nothing: the only thing stopping a tap was
+   * the `isNotBlank` guard inside the body. Round 141 removed the same shape from the sync page — a
+   * control that answers by not answering.
+   */
+  @Test
+  fun `the add button is off while the field is empty`() {
+    render(listOf("广告"))
+
+    scrollTo("添加屏蔽词")
+    composeRule.onNodeWithText("添加").assertIsNotEnabled()
+  }
+
+  /** Types into the one text field on this page and lets the recomposition land. */
+  private fun typeDraft(word: String) {
+    composeRule.onNode(hasSetTextAction()).performTextInput(word)
+    composeRule.waitForIdle()
   }
 }

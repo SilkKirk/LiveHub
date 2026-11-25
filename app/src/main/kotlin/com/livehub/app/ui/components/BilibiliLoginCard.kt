@@ -46,7 +46,9 @@ fun BilibiliLoginCard(
       Text("哔哩哔哩账号", style = MaterialTheme.typography.titleMedium)
       Text(
         text = if (state.loggedIn) {
-          "已登录。登录后可以获取原画清晰度，并在弹幕中显示你的身份。"
+          // "已登录。登录后可以…" said both things at once: the state, then the same promise the
+          // logged-out branch makes. Logged in, the promise is already kept.
+          "已登录。可获取原画清晰度，并在弹幕中显示你的身份。"
         } else {
           "扫码登录后可以观看原画清晰度。未登录时部分直播间只能观看低清晰度。"
         },

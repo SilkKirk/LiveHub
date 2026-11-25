@@ -33,6 +33,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -219,6 +220,13 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
               onValueChange = { keywordDraft = it },
               label = { Text("添加屏蔽词") },
               singleLine = true,
+              // A filled field's default container is `surfaceContainerHighest`, which this scheme maps
+              // to the card surface — so the input area was pure white on pure white and the only thing
+              // left of it was a 1dp underline. One step down puts the field on the card instead of in
+              // it, which is what "filled" is supposed to look like.
+              colors = TextFieldDefaults.colors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+              ),
               supportingText = {
                 Text(
                   text = if (atCap) {
@@ -238,7 +246,11 @@ fun SettingsScreen(state: UiState, onAction: (UiAction) -> Unit) {
                   keywordDraft = ""
                 }
               },
-              enabled = !atCap,
+              // Not just "not at the cap": with an empty field there is nothing to add, and the button
+              // used to look live and do nothing — the exact shape round 141 removed from the sync page
+              // (a control that responds by not responding). The body's `isNotBlank` guard stays as the
+              // authority; this only makes the state visible.
+              enabled = !atCap && keywordDraft.isNotBlank(),
             ) { Text("添加") }
           }
           if (state.blockedKeywords.isEmpty()) {
