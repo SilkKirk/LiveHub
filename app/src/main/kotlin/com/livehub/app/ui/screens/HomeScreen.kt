@@ -77,8 +77,21 @@ import com.livehub.app.ui.UiState
 import com.livehub.core.model.Category
 import com.livehub.core.model.Platform
 
-/** Below this count a single-page result gets an explicit end-of-list hint. */
-private const val NO_MORE_HINT_THRESHOLD = 21
+/**
+ * Whether the grid should end with「已经到底了」.
+ *
+ * The condition used to be `!hasNextPage && rooms.size < 21`, and that second half excluded exactly the
+ * case the comment beside it described: Bilibili's 热门 tab serves **110** rooms in one page
+ * (`has_more = 0`), so the platform the note named was the only one that never showed the line. The
+ * size gate was standing in for "this platform only has one page", which the platform itself already
+ * reports as `hasNextPage = false` — Douyu and Huya page properly, and a short list from them means the
+ * category is quiet, which is worth saying too: an endless empty scroll looks like a failed load.
+ *
+ * Pure so the rule can be pinned without composing a grid; 110 rooms with no next page is the case that
+ * used to be false.
+ */
+internal fun showsEndOfList(hasNextPage: Boolean, roomCount: Int): Boolean =
+  !hasNextPage && roomCount > 0
 
 /**
  * How tall the wrapped partition row may get before it scrolls instead of growing.
@@ -408,11 +421,7 @@ private fun RoomGrid(
       item(span = { GridItemSpan(maxLineSpan) }) {
         InlineLoader()
       }
-    } else if (!state.hasNextPage && state.rooms.size < NO_MORE_HINT_THRESHOLD) {
-      // Only platforms that genuinely serve a short, single-page list land here — Bilibili's hot
-      // tab (110 rooms, but no second page) and Douyin's feed (six). Douyu and Huya page properly,
-      // so a short list from them means the category really is quiet, which is still worth saying:
-      // an endless empty scroll looks like a failed load.
+    } else if (showsEndOfList(state.hasNextPage, state.rooms.size)) {
       item(span = { GridItemSpan(maxLineSpan) }) {
         EndOfListHint(platform = state.platform)
       }

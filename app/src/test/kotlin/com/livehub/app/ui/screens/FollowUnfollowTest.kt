@@ -113,6 +113,23 @@ class FollowUnfollowTest {
   private fun unfollows(): List<UiAction.ToggleFollow> =
     actions.filterIsInstance<UiAction.ToggleFollow>()
 
+  /**
+   * The last unfollow does not take the page's name with it.
+   *
+   * With nothing followed the page drew its empty state and *only* its empty state — no `PageHeader` —
+   * so「关注」disappeared along with the grid and the contents jumped up a masthead's height. A fresh
+   * install lands on exactly that screen.
+   */
+  @Test
+  fun `the empty follow page still says which page it is`() {
+    render()
+    state.value = state.value.copy(followed = emptyList(), followTags = emptyMap())
+    composeRule.waitForIdle()
+
+    composeRule.onNodeWithText("还没有关注的主播").assertIsDisplayed()
+    composeRule.onNodeWithText("关注").assertIsDisplayed()
+  }
+
   @Test
   fun `the long-press panel offers unfollow and says what it costs`() {
     render()

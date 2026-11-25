@@ -150,12 +150,20 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
 
   Box(modifier = Modifier.fillMaxSize()) {
     if (state.followed.isEmpty()) {
-      EmptyState(
-        icon = Icons.Outlined.StarOutline,
-        title = "还没有关注的主播",
-        description = "在首页点击卡片上的星标即可关注。关注列表会通过局域网同步到你的其他设备，" +
-          "关注之后可以在页顶点亮星标，把常看的主播放进特别关注。",
-      )
+      Column(modifier = Modifier.fillMaxSize()) {
+        // The page keeps its name. Every other page opens with a `PageHeader`, and this branch used to
+        // draw the empty state alone — so the first screen a fresh install lands on had no「关注」on it,
+        // and unfollowing the last room made the title vanish and everything jump up 60dp. No subtitle:
+        // "0/0 正在直播" is noise, and the empty state below already says why it is empty.
+        PageHeader(title = "关注", inset = 12.dp)
+        EmptyState(
+          icon = Icons.Outlined.StarOutline,
+          title = "还没有关注的主播",
+          description = "在首页点击卡片上的星标即可关注。关注列表会通过局域网同步到你的其他设备，" +
+            "关注之后可以在页顶点亮星标，把常看的主播放进特别关注。",
+          modifier = Modifier.weight(1f),
+        )
+      }
     } else {
       // Same fold as the home page, through the same component: this header is a lot of chrome
       // (title, the 特别关注 avatar row and two chip rows), and once the grid is being scrolled all
