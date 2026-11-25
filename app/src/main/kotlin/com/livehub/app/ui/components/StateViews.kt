@@ -2,15 +2,20 @@ package com.livehub.app.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -47,12 +52,21 @@ fun StateMessage(
   onAction: (() -> Unit)? = null,
   secondaryLabel: String? = null,
   onSecondary: (() -> Unit)? = null,
+  /**
+   * Whether the message scrolls when the space left for it is shorter than the message.
+   *
+   * Off by default, because most of these fill a whole screen and can never overflow. On the search
+   * screen the message shares the page with the platform row and the two "recent" strips above it, so
+   * at 1.5× and 2.0× text sizes it used to be measured against what was left, clipped by the parent,
+   * and — since nothing on that page scrolls — permanently unreadable (`30-search-idle-large-font`
+   * lost the last line of the hint).
+   *
+   * With it on, the column is at least as tall as the space it was given (`heightIn(min = maxHeight)`)
+   * so the centred look is unchanged when it fits, and grows — and scrolls — when it does not.
+   */
+  scrollable: Boolean = false,
 ) {
-  Column(
-    modifier = modifier.fillMaxSize().padding(32.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.Center,
-  ) {
+  val body: @Composable ColumnScope.() -> Unit = {
     Icon(
       imageVector = icon,
       contentDescription = null,
@@ -86,6 +100,31 @@ fun StateMessage(
       }
     }
   }
+
+  if (scrollable) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+      Column(
+        // `heightIn` before `verticalScroll`: the first gives the column a floor of the space available
+        // (so `Center` still centres), the second lets it exceed that floor instead of being clipped.
+        // Both are before the padding, which therefore still insets the text from the screen edges.
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(min = maxHeight)
+          .verticalScroll(rememberScrollState())
+          .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        content = body,
+      )
+    }
+  } else {
+    Column(
+      modifier = modifier.fillMaxSize().padding(32.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+      content = body,
+    )
+  }
 }
 
 /** The standard "network failed" state. */
@@ -110,6 +149,8 @@ fun EmptyState(
   actionLabel: String? = null,
   onAction: (() -> Unit)? = null,
   icon: ImageVector = Icons.Outlined.LiveTv,
+  /** See [StateMessage]: on for the search screen, which has other content above the message. */
+  scrollable: Boolean = false,
 ) {
   StateMessage(
     icon = icon,
@@ -118,6 +159,7 @@ fun EmptyState(
     actionLabel = actionLabel,
     onAction = onAction,
     modifier = modifier,
+    scrollable = scrollable,
   )
 }
 

@@ -6,6 +6,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -102,6 +105,24 @@ class SearchScreenTest {
 
     composeRule.onNodeWithText("搜索主播或直播间").assertIsDisplayed()
     composeRule.onNodeWithText("没有找到「英雄」").assertDoesNotExist()
+  }
+
+  /**
+   * The idle message sits in a scroll container, so a bigger text size cannot make it unreachable.
+   *
+   * `30-search-idle-large-font` showed the hint's last line cut in half: the message was measured
+   * against what the platform row and the two "recent" strips left it, and nothing on this page
+   * scrolled, so the rest of the sentence had no way of coming into view. The assertion is on the
+   * scroll action rather than on the rendered box, because Robolectric measures 中文 at about a pixel
+   * per character — the overflow never happens there, and only the render shows it.
+   */
+  @Test
+  fun `the idle message can be scrolled when the space is short`() {
+    render(searchState())
+
+    composeRule.onNode(
+      hasScrollAction() and hasAnyDescendant(hasText("搜索主播或直播间")),
+    ).assertExists()
   }
 
   @Test

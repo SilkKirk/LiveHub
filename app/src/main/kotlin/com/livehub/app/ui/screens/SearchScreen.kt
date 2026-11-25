@@ -143,6 +143,9 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
           description = state.error,
           actionLabel = "重试",
           onAction = { onAction(UiAction.SubmitSearch) },
+          // The message shares this page with the field, the platform row and the two strips above it,
+          // so at 1.5×/2.0× text sizes it needs more room than is left; see `StateMessage`.
+          scrollable = true,
         )
 
         state.searchResults.isNotEmpty() -> RefreshableBox(
@@ -216,6 +219,9 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
           },
           actionLabel = "清空",
           onAction = { onAction(UiAction.UpdateQuery("")) },
+          // Same reason as the two other messages on this screen: the join of four platforms' failure
+          // reasons is the case that grows past the space left at larger text sizes.
+          scrollable = true,
         )
 
         else -> EmptyState(
@@ -226,6 +232,9 @@ fun SearchScreen(state: UiState, onAction: (UiAction) -> Unit) {
           } else {
             SEARCH_HINTS[state.platform] ?: "输入关键词后按回车搜索。"
           },
+          // `30-search-idle-large-font` is where this showed: with a search history and a 最近看过
+          // strip above it, the hint's last line was clipped and the page could not be scrolled.
+          scrollable = true,
         )
       }
     }
