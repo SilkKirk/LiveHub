@@ -351,6 +351,26 @@ class PlayerChromeTest {
   }
 
   /**
+   * Applies a state write from the test, and lets the composition see it.
+   *
+   * A bare assignment is not enough here, and `runOnIdle` is not either: this class freezes the clock
+   * (`autoAdvance = false`) so the strip's own countdown can be stepped by hand, and **with the clock
+   * frozen `waitForIdle()` never produces the frame that carries a test-thread write into the
+   * composition**. The screen keeps drawing the state it had while the assertion below asks about the
+   * new one. Round 145's third red run dumped the tree and showed exactly that: `compact = true`
+   * written, strip still on screen at full width.
+   *
+   * Letting the clock run for one idle cycle is what applies it. The strip's own deadline is 3s away
+   * and a `delay` is not "pending work" to the idling resource, so nothing else moves.
+   */
+  private fun apply(write: () -> Unit) {
+    composeRule.runOnUiThread(write)
+    composeRule.mainClock.autoAdvance = true
+    composeRule.waitForIdle()
+    composeRule.mainClock.autoAdvance = false
+  }
+
+  /**
    * What was on screen, for a failure message.
    *
    * "The control did not come back" cannot be told apart from the message alone between "the state
@@ -383,10 +403,7 @@ class PlayerChromeTest {
     composeRule.waitForIdle()
     assertFalse("the strip times out on its own: ${screenDump()}", chromeVisible())
 
-    // `runOnIdle`, not a bare write: the clock is frozen, and a write from the test thread only
-    // reaches the composition when the snapshot is applied — which `runOnIdle` does and a plain
-    // assignment does not. Two rounds of "the strip did not come back" were this.
-    composeRule.runOnIdle {
+    apply {
       state.value = state.value.copy(
         room = room.copy(roomId = "2", streamerName = "另一个主播"),
       )
@@ -412,7 +429,7 @@ class PlayerChromeTest {
 
     assertTrue("the strip is drawn when the player opens: ${screenDump()}", chromeVisible())
 
-    composeRule.runOnIdle { compact.value = true }
+    apply { compact.value = true }
     settle()
     assertEquals("a thumbnail draws no chrome: ${screenDump()}", 0, count("刷新"))
 
@@ -420,7 +437,7 @@ class PlayerChromeTest {
     composeRule.mainClock.advanceTimeBy(5_000L)
     composeRule.waitForIdle()
 
-    composeRule.runOnIdle { compact.value = false }
+    apply { compact.value = false }
     settle()
 
     assertTrue(
@@ -448,7 +465,7 @@ class PlayerChromeTest {
     composeRule.waitForIdle()
     assertTrue("the countdown must not run under an open panel", chromeVisible())
 
-    composeRule.runOnIdle { settingsOpen.value = false }
+    apply { settingsOpen.value = false }
     settle()
     assertTrue("closing the panel must leave the strip on screen", chromeVisible())
   }
