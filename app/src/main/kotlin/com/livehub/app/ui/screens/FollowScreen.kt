@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.livehub.app.di.FollowOrdering
 import com.livehub.app.ui.FollowLiveFilter
+import com.livehub.app.ui.MINI_PLAYER_CLEARANCE
 import com.livehub.app.ui.components.LiveHubFilterChip
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
@@ -236,6 +237,7 @@ fun FollowScreen(state: UiState, onAction: (UiAction) -> Unit) {
               gridState = followGridState,
               streamers = visible,
               specialKeys = specialKeys.toSet(),
+              miniPlayer = state.miniPlayer,
               onClick = { streamer -> onAction(UiAction.OpenRoom(streamer)) },
               onToggleSpecial = { streamer -> onAction(UiAction.ToggleSpecialFollow(streamer)) },
               onLongPress = { streamer -> taggingRoom = streamer },
@@ -592,6 +594,7 @@ private fun FollowGrid(
   gridState: LazyGridState,
   streamers: List<Streamer>,
   specialKeys: Set<String>,
+  miniPlayer: Boolean,
   onClick: (Streamer) -> Unit,
   onToggleSpecial: (Streamer) -> Unit,
   onLongPress: (Streamer) -> Unit,
@@ -600,7 +603,13 @@ private fun FollowGrid(
     // Same adaptive rule as the home grid; see CardMinWidth.
     columns = GridCells.Adaptive(minSize = CardMinWidth),
     state = gridState,
-    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+    // Same reserve as the home grid: the floating player sits over this grid's bottom-right corner and
+    // a last row underneath it could not be read or scrolled clear. See `MINI_PLAYER_CLEARANCE`.
+    contentPadding = PaddingValues(
+      horizontal = 12.dp,
+      top = 10.dp,
+      bottom = if (miniPlayer) MINI_PLAYER_CLEARANCE else 10.dp,
+    ),
     horizontalArrangement = Arrangement.spacedBy(10.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
     modifier = Modifier.fillMaxSize(),

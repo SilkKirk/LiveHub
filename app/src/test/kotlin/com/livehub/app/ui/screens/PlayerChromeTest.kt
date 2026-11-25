@@ -302,6 +302,28 @@ class PlayerChromeTest {
     composeRule.onNodeWithText("已暂停 · 双击继续").assertIsDisplayed()
   }
 
+  /**
+   * The strip's identity block puts the audience figure on its own line.
+   *
+   * One line does not fit: the strip leaves the block about 100dp of a 320dp row, and the name (70dp)
+   * plus " · 12.9万人在看" (83dp) needs 153dp — the figure was measured against what was left and a
+   * one-line `Text` clips by default, so `17b` / `17c` / `17e` drew the name followed by a lone "·".
+   * The assertion is on laid-out edges, not on text width: Robolectric's font metrics are stubs, so a
+   * width comparison here would be measuring the stub rather than the layout.
+   */
+  @Test
+  fun `the strip stacks the audience figure under the name`() {
+    render(fullscreen = true)
+
+    val name = composeRule.onNodeWithText("一条小团团").fetchSemanticsNode().boundsInRoot
+    val viewers = composeRule.onNodeWithText("12.9万人在看").fetchSemanticsNode().boundsInRoot
+
+    assertTrue(
+      "the name ends at ${name.bottom}, the figure starts at ${viewers.top}",
+      viewers.top >= name.bottom,
+    )
+  }
+
   // ------------------------------------------ what hides the strip, and what must not hide it ---
   //
   // Round 144 moved every control into a strip that hides itself, and the flag that says whether it

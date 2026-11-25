@@ -663,37 +663,88 @@ private fun StreamerLine(
   modifier: Modifier = Modifier,
   onSurface: Color = MaterialTheme.colorScheme.onSurface,
   secondary: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+  /**
+   * Name on one line, the audience figure on the next.
+   *
+   * The strip's identity block is what four controls leave of a 320dp row — about 100dp — and that is
+   * less than one line needs: the name is 70dp, " · 12.9万人在看" is another 83dp, so the second `Text`
+   * was measured against the ~30dp that was left and, because a one-line `Text` clips by default, the
+   * full-screen and full-bleed renders drew the name followed by a lone "·" (`17b` / `17c` / `17e`).
+   * Stacked, each line gets the whole block. `RoomActionRow` keeps the inline form: it is full width,
+   * and the length of the room title above it is what sets the height there.
+   */
+  stacked: Boolean = false,
 ) {
   val viewers = state.room?.viewerCount ?: 0
-  Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-    if (state.room?.isLive == true) {
-      Box(
-        modifier = Modifier
-          .size(5.dp)
-          .clip(CircleShape)
-          .background(LiveBadgeColor),
-      )
-      Spacer(Modifier.width(4.dp))
-    }
-    Text(
-      text = state.room?.streamerName.orEmpty().ifBlank { "直播间" },
-      style = MaterialTheme.typography.labelLarge,
-      fontWeight = FontWeight.SemiBold,
-      color = onSurface,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-    Text(
-      text = if (viewers > 0) {
-        " · ${ViewerCountFormatter.format(viewers)}人在看"
-      } else {
-        state.room?.platform?.displayName?.let { " · $it" }.orEmpty()
-      },
-      style = MaterialTheme.typography.labelSmall,
-      color = secondary,
-      maxLines = 1,
-    )
+  val live = state.room?.isLive == true
+  val name = state.room?.streamerName.orEmpty().ifBlank { "直播间" }
+  // Inline keeps the " · " prefix because something precedes it on the line; the stacked form has no
+  // preceding text, so the same figure without the separator reads as the second line of the block.
+  val inlineMeta = if (viewers > 0) {
+    " · ${ViewerCountFormatter.format(viewers)}人在看"
+  } else {
+    state.room?.platform?.displayName?.let { " · $it" }.orEmpty()
   }
+  val stackedMeta = if (viewers > 0) {
+    "${ViewerCountFormatter.format(viewers)}人在看"
+  } else {
+    state.room?.platform?.displayName.orEmpty()
+  }
+
+  if (stacked) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        LiveDot(live = live)
+        StreamerName(name = name, color = onSurface)
+      }
+      if (stackedMeta.isNotBlank()) {
+        Text(
+          text = stackedMeta,
+          style = MaterialTheme.typography.labelSmall,
+          color = secondary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
+  } else {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+      LiveDot(live = live)
+      StreamerName(name = name, color = onSurface)
+      Text(
+        text = inlineMeta,
+        style = MaterialTheme.typography.labelSmall,
+        color = secondary,
+        maxLines = 1,
+      )
+    }
+  }
+}
+
+/** The 5dp "on air" dot that opens a name line. Renders nothing for an offline room. */
+@Composable
+private fun LiveDot(live: Boolean) {
+  if (!live) return
+  Box(
+    modifier = Modifier
+      .size(5.dp)
+      .clip(CircleShape)
+      .background(LiveBadgeColor),
+  )
+  Spacer(Modifier.width(4.dp))
+}
+
+/** The streamer's name: one line, ellipsised, and the boldest thing in the block. */
+@Composable
+private fun StreamerName(name: String, color: Color) {
+  Text(
+    text = name,
+    style = MaterialTheme.typography.labelLarge,
+    fontWeight = FontWeight.SemiBold,
+    color = color,
+    maxLines = 1,
+    overflow = TextOverflow.Ellipsis,
+  )
 }
 
 /**
@@ -741,6 +792,9 @@ private fun PlayerOverlayStrip(
       ) {
         StreamerLine(
           state = state,
+          // Two lines: the four controls on the right leave about 100dp, which fits the name but not
+          // the name and the audience figure; see the parameter's KDoc.
+          stacked = true,
           onSurface = Color.White,
           secondary = Color.White.copy(alpha = 0.72f),
         )

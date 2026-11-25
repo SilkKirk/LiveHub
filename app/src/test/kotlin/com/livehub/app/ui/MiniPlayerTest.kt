@@ -1,12 +1,18 @@
 package com.livehub.app.ui
 
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import com.livehub.core.model.Platform
 import com.livehub.core.model.Streamer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,6 +61,64 @@ class MiniPlayerTest {
     composeRule.setContent { LiveHubRoot(state = state, onAction = onAction) }
     composeRule.mainClock.advanceTimeByFrame()
     composeRule.waitForIdle()
+  }
+
+  /** Enough rooms to fill several screens, so "the last row" is a row the user had to scroll to. */
+  private val rooms = (1..40).map { index ->
+    Streamer(
+      platform = Platform.DOUYU,
+      roomId = "$index",
+      streamerName = "主播$index",
+      title = "标题$index",
+      isLive = true,
+    )
+  }
+
+  /** Scrolls the page's only vertical list to its last item and lets the layout settle. */
+  private fun scrollToLastCard() {
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange))
+      .performSemanticsAction(SemanticsActions.ScrollToIndex) { it(rooms.lastIndex) }
+    composeRule.mainClock.advanceTimeBy(500L)
+    composeRule.waitForIdle()
+  }
+
+  /**
+   * The floating window does not sit on top of the grid's last row.
+   *
+   * The window is 168×94.5dp in the bottom-right corner, and both grids used a flat 10dp of bottom
+   * padding — so the last row's title and streamer name were behind it, and `LazyVerticalGrid` stops at
+   * the end of its content, which meant no amount of scrolling could bring them out. The reserve is
+   * `MINI_PLAYER_CLEARANCE`.
+   */
+  @Test
+  fun `the home grid's last row stops above the floating window`() {
+    render(miniState().copy(rooms = rooms))
+    scrollToLastCard()
+
+    val window = composeRule.onNodeWithContentDescription("展开播放页")
+      .fetchSemanticsNode().boundsInRoot
+    val lastTitle = composeRule.onNodeWithText("标题40").fetchSemanticsNode().boundsInRoot
+
+    assertTrue(
+      "the last card ends at ${lastTitle.bottom}, the floating window starts at ${window.top}",
+      lastTitle.bottom <= window.top,
+    )
+  }
+
+  /** The same reserve, wired through the follow page's own grid. */
+  @Test
+  fun `the follow grid's last row stops above the floating window`() {
+    render(miniState(screen = Screen.Follow).copy(followed = rooms))
+    scrollToLastCard()
+
+    val window = composeRule.onNodeWithContentDescription("展开播放页")
+      .fetchSemanticsNode().boundsInRoot
+    val lastTitle = composeRule.onNodeWithText("标题40").fetchSemanticsNode().boundsInRoot
+
+    assertTrue(
+      "the last followed card ends at ${lastTitle.bottom}, the window starts at ${window.top}",
+      lastTitle.bottom <= window.top,
+    )
   }
 
   @Test

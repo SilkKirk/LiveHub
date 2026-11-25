@@ -71,6 +71,7 @@ import com.livehub.app.ui.components.RefreshableBox
 import com.livehub.app.ui.components.StreamerCard
 import com.livehub.app.ui.components.StreamerGridSkeleton
 import com.livehub.app.ui.components.LiveHubFilterChip
+import com.livehub.app.ui.MINI_PLAYER_CLEARANCE
 import com.livehub.app.ui.UiAction
 import com.livehub.app.ui.UiState
 import com.livehub.core.model.Category
@@ -375,7 +376,14 @@ private fun RoomGrid(
     // mid-flight.
     columns = GridCells.Adaptive(minSize = CardMinWidth),
     state = gridState,
-    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+    // The floating player covers this grid's bottom-right corner while it is on screen, and a last row
+    // that ends under it cannot be read or scrolled out from under it — the grid stops at its content.
+    // See `MINI_PLAYER_CLEARANCE`.
+    contentPadding = PaddingValues(
+      horizontal = 12.dp,
+      top = 10.dp,
+      bottom = if (state.miniPlayer) MINI_PLAYER_CLEARANCE else 10.dp,
+    ),
     horizontalArrangement = Arrangement.spacedBy(10.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
     modifier = Modifier.fillMaxSize(),

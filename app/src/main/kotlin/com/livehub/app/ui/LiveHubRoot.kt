@@ -249,6 +249,17 @@ fun LiveHubRoot(
 /** Width of the floating player. 16:9, so it is a thumbnail rather than a second window. */
 private val MINI_PLAYER_WIDTH = 168.dp
 
+/**
+ * How much bottom padding a scrolling grid needs while the floating player is up.
+ *
+ * The window is [MINI_PLAYER_WIDTH] wide and 16:9, and sits 12dp off the corner, so it covers the
+ * bottom ~107dp of the content area's right side. A grid's last row used to finish underneath it —
+ * the card's title and streamer name were behind the window with nowhere left to scroll, because
+ * `LazyVerticalGrid` stops at the end of its content. Derived from the window's own numbers so the
+ * two cannot drift apart, and rounded up by a row's worth of air.
+ */
+internal val MINI_PLAYER_CLEARANCE = MINI_PLAYER_WIDTH * (9f / 16f) + 12.dp + 10.dp
+
 private val MINI_PLAYER_CORNER = 12.dp
 
 private val MINI_PLAYER_ELEVATION = 8.dp
