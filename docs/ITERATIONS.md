@@ -6867,3 +6867,115 @@ Robolectric 的中文字宽约 1px/字，这个溢出在 JVM 上根本不会发�
   不是读 ViewModel，而是问「这个字段有哪些读者？它们在哪些布局里被组合？」
 - **新渲染不必和基线改动挤在一次推送里**：比较器对 `new` 文件的处理（只报不判）让「加一张图」可以
   先落地、再补基线，省掉一次空闲的等待。
+---
+
+## 第一百五十二轮迭代：三处「代码说的和做的不一致」
+
+清单第 21、22、26 条。
+
+### 缺陷一：滑动中的那一页画的是上一个平台的卡片
+
+`HomeScreen` 的 `HorizontalPager` 上方有一条从第四十四轮就写着的注释：「A page mid-swipe shows its
+skeleton.」——而 `isCurrent` 只被用在 `RefreshableBox.enabled` 与 `LoadMore` 的派发上。`state.rooms`
+在手指松开之前仍属于**正在被拖走**的那个平台，于是拖进来的半页是它的副本；而 `PrimaryTabRow` 用
+`pagerState.currentPage` 决定选中，过半时新平台的标签已经加粗变红了。几百毫秒的「虎牙被选中，
+画面是斗鱼」。
+
+改法：`when` 的第一个分支 `!isCurrent -> StreamerGridSkeleton()`。`PlatformPage` 从 `private` 改成
+`internal`，新增 `PlatformPageTest` 两条：当前页画出房间；**不是当前页时一个房间都不画**。后一条在
+改之前是红的——这是第一次让那段注释和代码对得上。
+
+### 缺陷二（防御性）：清晰度胶囊没有上限，会把旁边两个按钮挤成 0 宽
+
+`StripQualityChip` 的标签没有 `overflow`、胶囊没有 `widthIn`，而它在一个没有权重的 `Row` 里：一个长
+画质名（平台下发「蓝光20M」，或 2.0× 下的「清晰度」兜底）会让后面两个 48dp 按钮拿到 **0 宽约束**，
+于是消失的不是标签而是刷新/全屏。加 `widthIn(max = 96.dp)` + `Ellipsis`。
+
+**这条是防御，不是已验证的缺陷**：真实平台是否下发 6 字画质名从未核实，而 Robolectric 的字宽让它在
+JVM 上量不出来，所以没有测试。现有标签最宽 81dp（2.0× 的「原画」），基线逐字节未变——也就是「这条
+今天什么都不改」的证据。
+
+### 缺陷三：`BilibiliCategories.HOT_ID` 没有任何读者
+
+聚合入口走 `Category.ALL_ID`（"all"），`BilibiliArea.decode` 把「不是 `parent:area` 的东西」一律当
+`HOT`，所以 `HOT_ID = "0:0"` 在产品代码里零读者，只有它自己的测试在用。删掉，测试改用字面量继续钉
+解析规则（`0:0` 这种形状是参考项目与旧选择用的 id）。
+
+**顺带更正清单第 26 条**：它另外两处（`DouyinCategories` 零调用、`DanmakuMessage.userLevel/
+fansClubLevel` 无人读写）**在更早的轮次里已经不存在了**——`DouyinCategories` 现在叫
+`DouyinCategoryCatalog` 且被 `rooms` 用着，那两个字段在 `Models.kt#L191-L198` 的 KDoc 里记着「已删」。
+第一百四十五轮的清单是抄第四十八轮的，抄的时候没有复核；这类「继承来的待办」以后要 grep 一遍再排期。
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug`（全模块） | ✅ 0 error |
+| JVM 单元测试 | ✅ **1066** 个用例（+2），0 失败 |
+| 仪器测试 | ✅ 83 个用例 + 72 张截图（全部逐字节未变——本轮不动渲染） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `4cb4969` 三个 job 全绿（一次通过） |
+
+### 记在案上的
+
+- **一条注释可以在代码里活过一百轮**。「`isCurrent` 决定要不要画骨架」这句话从第四十四轮起就写在
+  那儿，中间被读过很多次，但没有人拿它跟代码比。这一轮的测试（「不是当前页时不画房间」）是那条注释
+  的第一个证据。
+- **删除一个常量的判断标准是「有没有产品读者」，不是「有没有引用」**。`HOT_ID` 有两个引用，全在测试
+  里；测试引用自己维护的常量，等于没有读者。
+
+---
+
+## 第一百五十三轮迭代：设置页三处小毛病（其中一处改了两次）
+
+清单第 17、18、19 条。
+
+### 1. 「添加」在输入框空着时仍可点
+
+`enabled = !atCap`，真正的拦截在 body 里的 `if (keywordDraft.isNotBlank())`：亮粉色、可点、点下去
+什么也不发生——正是第一百四十一轮在同步页消灭过的形状。改成 `!atCap && keywordDraft.isNotBlank()`。
+
+连带改了两条既有用例：`BlockedKeywordLimitTest` 里「未到上限 → 添加可点」的两条原本在**空输入框**上
+断言 `assertIsEnabled`，现在要先打一个词进去。它们本来要证明的是「上限不是拦它的原因」，这么改之后
+更纯了。另加一条「空输入时是灰的」——改之前是红的。
+
+### 2. 屏蔽词输入框与卡片同色（这条改了两次）
+
+第一次：`TextFieldDefaults.colors(containerColor = surfaceContainerLow)`。
+- **编译错**：filled `TextField` 没有 `containerColor` 这个参数，容器色是**分状态**给的（focused /
+  unfocused / disabled / error），同一个值要写三遍。
+- 编译通过之后渲染出来**什么都没变**：`Theme.kt` 里 `surfaceContainerLow` 也映射成 `SurfaceLight`
+  （它是 `ElevatedCard` 与 `ModalBottomSheet` 读的那个 token）。逐像素比对新旧两张 `39` 的字段区域
+  （30..210 × 400..470）完全相同，才确认这次改动是空转。
+
+第二次用 `surfaceContainer`（#F1F1F4）——这个主题里真正「比卡片暗一步」的那一档。新渲染里字段是一块
+浅灰底，卡片仍是白的，字段区域的主色从 `#FFFFFF` 变成 `#F1F1F4`。
+
+### 3. 「已登录。登录后可以获取原画清晰度…」
+
+前半句说已经登录，后半句还在承诺「登录后可以」。改成「已登录。可获取原画清晰度，并在弹幕中显示你的
+身份。」
+
+### 本轮验证
+
+| 检查项 | 结果 |
+| --- | --- |
+| `:app:lintDebug`（全模块） | ✅ 0 error |
+| JVM 单元测试 | ✅ **1067** 个用例（+1，另改两条既有用例的前提），0 失败 |
+| 仪器测试 | ✅ 83 个用例 + 72 张截图（门禁只判 16、39，基线更新后通过） |
+| Release assembly（R8） | ✅ |
+| CI | ✅ `fb76195` 三个 job 全绿（三次红灯后收敛） |
+
+### 截图
+
+看过 `16`（账号卡文案）与 `39`（2.0× 的屏蔽词卡：字段是一块 #F1F1F4 的底、「添加」是灰的）。其余 69
+张逐字节未变。
+
+### 记在案上的
+
+- **三个错误，三种发现方式**，值得按顺序记：`containerColor` 那个参数不存在 → **编译器**抓到；
+  `surfaceContainerLow` 是纯白 → **渲染 + 逐像素比对**抓到；「添加」的 enabled 与 body 的守卫不一致 →
+  **读代码**抓到。前两个是本机没有编译器时的典型代价。
+- **`Theme.kt` 的 token 映射不是 M3 的默认值**：`surfaceContainerLow` 与 `surfaceContainerHighest`
+  都指向白色卡片，因为「卡片是白的、页面是浅灰」是这个主题的决定。写「比卡片暗一步」这类代码时，
+  必须去 `Theme.kt` 确认那一档到底是什么色，不能按 M3 的语义猜。
